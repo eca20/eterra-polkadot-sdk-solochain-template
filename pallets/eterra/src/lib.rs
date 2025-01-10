@@ -110,7 +110,7 @@ pub mod pallet {
 			Ok(())
 		}
     
-    #[pallet::call_index(1)]
+#[pallet::call_index(1)]
 #[pallet::weight(10_000)]
 pub fn play_turn(
     origin: OriginFor<T>,
@@ -182,7 +182,7 @@ pub fn play_turn(
     log::debug!("Total moves played: {:?}", moves);
 
     // Check for end-of-game condition
-    if moves == 10 || board.iter().flat_map(|row| row.iter()).filter(|cell| cell.is_some()).count() == 16 {
+    if moves == 10 {
         let winner = if scores.0 > scores.1 {
             Some(creator.clone())
         } else if scores.1 > scores.0 {

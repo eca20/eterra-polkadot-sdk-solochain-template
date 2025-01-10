@@ -1,9 +1,45 @@
 use crate::{mock::*, Card};
 use frame_support::{assert_ok, assert_noop};
 use sp_runtime::traits::{BlakeTwo256, Hash};
+use std::sync::Once;
+use log::{Record, Level, Metadata};
+
+static INIT: Once = Once::new();
+
+pub struct SimpleLogger;
+
+impl log::Log for SimpleLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() <= Level::Debug
+    }
+
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            println!(
+                "[{}] {}: {}",
+                record.level(),
+                record.target(),
+                record.args()
+            );
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static LOGGER: SimpleLogger = SimpleLogger;
+
+pub fn init_logger() {
+    INIT.call_once(|| {
+        log::set_logger(&LOGGER).unwrap();
+        log::set_max_level(log::LevelFilter::Debug);
+    });
+}
+
 
 #[test]
 fn create_game_works() {
+      init_logger(); // Initialize custom logger
     new_test_ext().execute_with(|| {
         let creator = 1;
         let opponent = 2;
@@ -25,7 +61,7 @@ fn create_game_works() {
 
 #[test]
 fn play_turn_works() {
-    init_simple_logger().expect("Failed to initialize logger");
+    init_logger(); // Initialize custom logger
 
     new_test_ext().execute_with(|| {
         let creator = 1;
@@ -81,6 +117,8 @@ fn play_turn_works() {
 
 #[test]
 fn create_game_with_same_players_fails() {
+      init_logger(); // Initialize custom logger
+
     new_test_ext().execute_with(|| {
         let player = 1;
 
@@ -95,6 +133,8 @@ fn create_game_with_same_players_fails() {
 
 #[test]
 fn play_turn_out_of_bounds_fails() {
+      init_logger(); // Initialize custom logger
+
     new_test_ext().execute_with(|| {
         let creator = 1;
         let opponent = 2;
@@ -119,8 +159,11 @@ fn play_turn_out_of_bounds_fails() {
         assert_noop!(result, crate::Error::<Test>::InvalidMove);
     });
 }
+
 #[test]
 fn full_game_simulation() {
+      init_logger(); // Initialize custom logger
+
     new_test_ext().execute_with(|| {
         let creator = 1;
         let opponent = 2;
@@ -131,7 +174,7 @@ fn full_game_simulation() {
             opponent
         ));
 
-        // Play 10 moves alternately
+        // Play exactly 10 moves (5 for each player)
         let moves = vec![
             (creator, 0, 0, Card::new(5, 3, 2, 4)),
             (opponent, 0, 1, Card::new(2, 4, 5, 3)),
@@ -160,5 +203,4 @@ fn full_game_simulation() {
         assert!(Eterra::moves_played(game_id).is_none());
         log::debug!("Game simulation completed successfully.");
     });
-
 }
