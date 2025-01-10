@@ -4,7 +4,7 @@ use sp_runtime::traits::{BlakeTwo256, Hash};
 use std::sync::Once;
 use log::{Record, Level, Metadata};
 use sp_core::H256; // Fix: Import H256
-
+use crate::Color;
 
 static INIT: Once = Once::new();
 
@@ -117,7 +117,7 @@ fn play_turn_works() {
     new_test_ext().execute_with(|| {
         let (game_id, creator, opponent) = setup_new_game();
 
-        let card = Card::new(5, 3, 2, 4);
+        let card = Card::new(5, 3, 2, 4).with_color(Color::Blue); // Direct `Color`
         assert_ok!(Eterra::play_turn(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
@@ -126,15 +126,10 @@ fn play_turn_works() {
             card.clone()
         ));
 
-        log::debug!(
-            "After creator's turn, current turn: {:?}",
-            Eterra::current_turn(game_id).unwrap()
-        );
-
         let (board, _, _) = Eterra::game_board(game_id).unwrap();
         assert_eq!(board[1][1], Some(card));
 
-        let opponent_card = Card::new(2, 4, 5, 3);
+        let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red); // Direct `Color`
         assert_ok!(Eterra::play_turn(
             frame_system::RawOrigin::Signed(opponent).into(),
             game_id,
@@ -142,11 +137,6 @@ fn play_turn_works() {
             2,
             opponent_card.clone()
         ));
-
-        log::debug!(
-            "After opponent's turn, current turn: {:?}",
-            Eterra::current_turn(game_id).unwrap()
-        );
 
         let (updated_board, _, _) = Eterra::game_board(game_id).unwrap();
         assert_eq!(updated_board[1][2], Some(opponent_card));
@@ -160,39 +150,36 @@ fn card_capture_multiple_directions() {
         let (game_id, creator, opponent) = setup_new_game();
 
         // Creator's first move
-        let creator_card = Card::new(3, 5, 2, 1);
-        assert_ok!(Eterra::play_turn(
-            frame_system::RawOrigin::Signed(creator).into(),
-            game_id,
-            0,
-            0,
-            creator_card.clone()
-        ));
+        let creator_card = Card::new(3, 5, 2, 1).with_color(Color::Blue); // Direct `Color`
+assert_ok!(Eterra::play_turn(
+    frame_system::RawOrigin::Signed(creator).into(),
+    game_id,
+    0,
+    0,
+    creator_card.clone()
+));
 
-        // Opponent's first move
-        let opponent_card = Card::new(2, 4, 5, 3);
-        assert_ok!(Eterra::play_turn(
-            frame_system::RawOrigin::Signed(opponent).into(),
-            game_id,
-            0,
-            1,
-            opponent_card.clone()
-        ));
+let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red); // Direct `Color`
+assert_ok!(Eterra::play_turn(
+    frame_system::RawOrigin::Signed(opponent).into(),
+    game_id,
+    0,
+    1,
+    opponent_card.clone()
+));
 
-        // Creator's second move captures two cards
-        let capturing_card = Card::new(6, 6, 3, 3);
-        assert_ok!(Eterra::play_turn(
-            frame_system::RawOrigin::Signed(creator).into(),
-            game_id,
-            0,
-            2,
-            capturing_card.clone()
-        ));
+let capturing_card = Card::new(6, 6, 3, 3).with_color(Color::Blue); // Direct `Color`
+assert_ok!(Eterra::play_turn(
+    frame_system::RawOrigin::Signed(creator).into(),
+    game_id,
+    0,
+    2,
+    capturing_card.clone()
+));
 
-        // Validate board state
-        let (board, _, _) = Eterra::game_board(game_id).unwrap();
-        assert_eq!(board[0][1], Some(capturing_card.clone())); // Capturing card
-        assert_eq!(board[0][2], Some(capturing_card));         // Captured card
+let (board, _, _) = Eterra::game_board(game_id).unwrap();
+assert_eq!(board[0][1].as_ref().unwrap().get_color(), Some(&Color::Blue));
+assert_eq!(board[0][2].as_ref().unwrap().get_color(), Some(&Color::Blue));       // Captured card
     });
 }
 
@@ -308,5 +295,77 @@ fn play_out_of_turn_fails() {
         ));
 
         log::debug!("Test completed: A player cannot play out of turn.");
+    });
+}
+
+#[test]
+fn capture_cards_in_all_directions() {
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+
+        // Determine the first player based on the current turn from the pallet
+        let mut current_player = Eterra::current_turn(game_id).unwrap();
+        let mut other_player = if current_player == creator { opponent } else { creator };
+
+        // Place opponent cards in cardinal directions
+        let opponent_cards = vec![
+            (0, 1, Card::new(2, 4, 5, 3)), // Top
+            (1, 0, Card::new(3, 5, 2, 4)), // Left
+            (1, 2, Card::new(3, 5, 2, 4)), // Right
+            (2, 1, Card::new(2, 4, 5, 3)), // Bottom
+        ];
+
+        for (x, y, card) in opponent_cards {
+            // Ensure the current player matches the expected player
+            assert_eq!(Eterra::current_turn(game_id).unwrap(), current_player);
+
+            // Play the turn
+            assert_ok!(Eterra::play_turn(
+                frame_system::RawOrigin::Signed(current_player).into(),
+                game_id,
+                x,
+                y,
+                card.with_color(Color::Red)
+            ));
+
+            // Alternate the players for the next move
+            std::mem::swap(&mut current_player, &mut other_player);
+        }
+
+        // Place capturing card in the center
+        let capturing_card = Card::new(6, 6, 6, 6).with_color(Color::Blue);
+
+        // Ensure it's the creator's turn (or the current player determined by the pallet)
+        assert_eq!(Eterra::current_turn(game_id).unwrap(), creator);
+        assert_ok!(Eterra::play_turn(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            1,
+            1,
+            capturing_card
+        ));
+
+        // Validate board state
+        let (board, _, _) = Eterra::game_board(game_id).unwrap();
+        assert_eq!(
+            board[1][1].as_ref().unwrap().get_color(),
+            Some(&Color::Blue)
+        );
+        assert_eq!(
+            board[0][1].as_ref().unwrap().get_color(),
+            Some(&Color::Blue)
+        );
+        assert_eq!(
+            board[1][0].as_ref().unwrap().get_color(),
+            Some(&Color::Blue)
+        );
+        assert_eq!(
+            board[1][2].as_ref().unwrap().get_color(),
+            Some(&Color::Blue)
+        );
+        assert_eq!(
+            board[2][1].as_ref().unwrap().get_color(),
+            Some(&Color::Blue)
+        );
     });
 }

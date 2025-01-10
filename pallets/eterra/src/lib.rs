@@ -25,19 +25,38 @@ pub mod pallet {
 
 	pub type Board = [[Option<Card>; 4]; 4];
 
+  #[pallet::storage]
+  #[pallet::getter(fn player_colors)]
+  pub type PlayerColors<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, (Color, Color)>;
+
 	#[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone, PartialEq, Eq, Debug)]
 	pub struct Card {
 		top: u8,
 		right: u8,
 		bottom: u8,
 		left: u8,
+    color: Option<Color>, // None if not yet assigned
 	}
 
   impl Card {
-    pub fn new(top: u8, right: u8, bottom: u8, left: u8) -> Self {
-        Self { top, right, bottom, left }
+        pub fn new(top: u8, right: u8, bottom: u8, left: u8) -> Self {
+            Self { top, right, bottom, left, color: None }
+        }
+
+        pub fn with_color(mut self, color: Color) -> Self {
+            self.color = Some(color);
+            self
+        }
+        pub fn get_color(&self) -> Option<&Color> {
+            self.color.as_ref()
+        }
     }
-}
+
+    #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone, PartialEq, Eq, Debug)]
+    pub enum Color {
+        Blue,
+        Red,
+    }
 
 	#[pallet::storage]
 	#[pallet::getter(fn game_board)]
@@ -101,6 +120,11 @@ pub mod pallet {
 			} else {
 				opponent.clone()
 			};
+
+      // Assign colors
+      let player_colors = (Color::Blue, Color::Red);
+      PlayerColors::<T>::insert(&game_id, player_colors);
+        
 			CurrentTurn::<T>::insert(&game_id, first_turn);
 
 			Scores::<T>::insert(&game_id, (0, 0));
@@ -109,8 +133,7 @@ pub mod pallet {
 
 			Ok(())
 		}
-    
-#[pallet::call_index(1)]
+  #[pallet::call_index(1)]
 #[pallet::weight(10_000)]
 pub fn play_turn(
     origin: OriginFor<T>,
@@ -126,6 +149,7 @@ pub fn play_turn(
     ensure!(GameBoard::<T>::contains_key(&game_id), Error::<T>::GameNotFound);
     let (mut board, creator, opponent) = GameBoard::<T>::get(&game_id).unwrap();
     let current_turn = CurrentTurn::<T>::get(&game_id).unwrap();
+    let player_colors = PlayerColors::<T>::get(&game_id).unwrap();
 
     log::debug!("Current turn belongs to: {:?}", current_turn);
 
@@ -133,46 +157,49 @@ pub fn play_turn(
     ensure!(x < 4 && y < 4, Error::<T>::InvalidMove);
     ensure!(board[x as usize][y as usize].is_none(), Error::<T>::CellOccupied);
 
-    board[x as usize][y as usize] = Some(card.clone());
+    let current_color = if who == creator {
+        player_colors.0.clone()
+    } else {
+        player_colors.1.clone()
+    };
+
+    // Place the card with the current player's color
+    let placed_card = card.clone().with_color(current_color.clone());
+    board[x as usize][y as usize] = Some(placed_card.clone());
 
     log::debug!("Board updated before capture: {:?}", board);
 
-    // Capture logic
-    let mut scores = Scores::<T>::get(&game_id).unwrap_or((0, 0));
     for &(dx, dy, opposing_rank) in &[
-        (0, -1, card.top),    // Top
-        (1, 0, card.right),   // Right
-        (0, 1, card.bottom),  // Bottom
-        (-1, 0, card.left),   // Left
-    ] {
-        let nx = x as isize + dx;
-        let ny = y as isize + dy;
-        if nx >= 0 && nx < 4 && ny >= 0 && ny < 4 {
-            if let Some(opposing_card) = &board[nx as usize][ny as usize] {
-                let rank = match (dx, dy) {
-                    (0, -1) => opposing_card.bottom,
-                    (1, 0) => opposing_card.left,
-                    (0, 1) => opposing_card.top,
-                    (-1, 0) => opposing_card.right,
-                    _ => 0,
-                };
-                if opposing_rank > rank {
-                    // Capture card
-                    scores.0 += 1; // Increment current player's score
-                    scores.1 = scores.1.saturating_sub(1); // Ensure no underflow
-                    board[nx as usize][ny as usize] = Some(card.clone());
-                    log::debug!("Captured card at ({}, {})", nx, ny);
-                }
+    (0, -1, card.top),    // Top
+    (1, 0, card.right),   // Right
+    (0, 1, card.bottom),  // Bottom
+    (-1, 0, card.left),   // Left
+] {
+    let nx = x as isize + dx;
+    let ny = y as isize + dy;
+    if nx >= 0 && nx < 4 && ny >= 0 && ny < 4 {
+        if let Some(mut opposing_card) = board[nx as usize][ny as usize].clone() {
+            let rank = match (dx, dy) {
+                (0, -1) => opposing_card.bottom,
+                (1, 0) => opposing_card.left,
+                (0, 1) => opposing_card.top,
+                (-1, 0) => opposing_card.right,
+                _ => 0,
+            };
+            if opposing_rank > rank {
+                // Capture card
+                log::debug!("Captured card at ({}, {})", nx, ny);
+                opposing_card.color = Some(current_color.clone());
+                board[nx as usize][ny as usize] = Some(opposing_card);
             }
         }
     }
+}
 
     log::debug!("Board updated after capture: {:?}", board);
 
     // Save the updated board state
     GameBoard::<T>::insert(&game_id, (board.clone(), creator.clone(), opponent.clone()));
-
-    Scores::<T>::insert(&game_id, scores);
 
     // Update move counter
     let mut moves = MovesPlayed::<T>::get(&game_id).unwrap_or(0);
@@ -181,14 +208,31 @@ pub fn play_turn(
 
     log::debug!("Total moves played: {:?}", moves);
 
-    // Check for end-of-game condition
+    // Check for end-of-game condition (10 moves)
     if moves == 10 {
-        let winner = if scores.0 > scores.1 {
+        // Count cards of each color
+        let mut blue_count = 0;
+        let mut red_count = 0;
+
+        for row in &board {
+            for cell in row {
+                if let Some(card) = cell {
+                    match card.color {
+                        Some(Color::Blue) => blue_count += 1,
+                        Some(Color::Red) => red_count += 1,
+                        None => {}
+                    }
+                }
+            }
+        }
+
+        // Determine the winner
+        let winner = if blue_count > red_count {
             Some(creator.clone())
-        } else if scores.1 > scores.0 {
+        } else if red_count > blue_count {
             Some(opponent.clone())
         } else {
-            None
+            None // Draw
         };
 
         // Emit game finished event
@@ -199,12 +243,12 @@ pub fn play_turn(
 
         log::debug!("Game finished. Winner: {:?}", winner);
 
-        // Remove game from storage
+        // Remove game data
         GameBoard::<T>::remove(&game_id);
         CurrentTurn::<T>::remove(&game_id);
         Scores::<T>::remove(&game_id);
         MovesPlayed::<T>::remove(&game_id);
- 
+
         return Ok(()); // Return early since the game has ended
     }
 
