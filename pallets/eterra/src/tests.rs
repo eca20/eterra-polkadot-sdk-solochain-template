@@ -204,3 +204,39 @@ fn full_game_simulation() {
         log::debug!("Game simulation completed successfully.");
     });
 }
+
+#[test]
+fn invalid_move_on_occupied_cell() {
+    init_logger(); // Initialize custom logger
+
+    new_test_ext().execute_with(|| {
+        let creator = 1;
+        let opponent = 2;
+
+        let game_id = BlakeTwo256::hash_of(&(creator, opponent));
+        assert_ok!(Eterra::create_game(
+            frame_system::RawOrigin::Signed(creator).into(),
+            opponent
+        ));
+
+        let card = Card::new(5, 3, 2, 4);
+        assert_ok!(Eterra::play_turn(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            1,
+            1,
+            card.clone() // Clone the card for reuse
+        ));
+
+        // Attempt to play on the same cell
+        let result = Eterra::play_turn(
+            frame_system::RawOrigin::Signed(opponent).into(),
+            game_id,
+            1,
+            1,
+            card, // Use the original card here
+        );
+
+        assert_noop!(result, crate::Error::<Test>::CellOccupied);
+    });
+}
