@@ -1,10 +1,10 @@
+use crate::Color;
 use crate::{mock::*, Card};
-use frame_support::{assert_ok, assert_noop};
+use frame_support::{assert_noop, assert_ok};
+use log::{Level, Metadata, Record};
+use sp_core::H256; // Fix: Import H256
 use sp_runtime::traits::{BlakeTwo256, Hash};
 use std::sync::Once;
-use log::{Record, Level, Metadata};
-use sp_core::H256; // Fix: Import H256
-use crate::Color;
 
 static INIT: Once = Once::new();
 
@@ -48,7 +48,12 @@ fn setup_new_game() -> (H256, u64, u64) {
         opponent
     ));
 
-    log::debug!("Game created with ID: {:?}, Creator: {}, Opponent: {}", game_id, creator, opponent);
+    log::debug!(
+        "Game created with ID: {:?}, Creator: {}, Opponent: {}",
+        game_id,
+        creator,
+        opponent
+    );
     (game_id, creator, opponent)
 }
 
@@ -57,15 +62,11 @@ fn create_game_with_same_players_fails() {
     init_logger();
     new_test_ext().execute_with(|| {
         let player = 1; // Define `player` explicitly
-        let result = Eterra::create_game(
-            frame_system::RawOrigin::Signed(player).into(),
-            player,
-        );
+        let result = Eterra::create_game(frame_system::RawOrigin::Signed(player).into(), player);
 
         assert_noop!(result, crate::Error::<Test>::InvalidMove);
     });
 }
-
 
 #[test]
 fn invalid_move_on_occupied_cell() {
@@ -88,7 +89,7 @@ fn invalid_move_on_occupied_cell() {
             game_id,
             1,
             1,
-            card
+            card,
         );
 
         assert_noop!(result, crate::Error::<Test>::CellOccupied);
@@ -151,35 +152,41 @@ fn card_capture_multiple_directions() {
 
         // Creator's first move
         let creator_card = Card::new(3, 5, 2, 1).with_color(Color::Blue); // Direct `Color`
-assert_ok!(Eterra::play_turn(
-    frame_system::RawOrigin::Signed(creator).into(),
-    game_id,
-    0,
-    0,
-    creator_card.clone()
-));
+        assert_ok!(Eterra::play_turn(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            0,
+            0,
+            creator_card.clone()
+        ));
 
-let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red); // Direct `Color`
-assert_ok!(Eterra::play_turn(
-    frame_system::RawOrigin::Signed(opponent).into(),
-    game_id,
-    0,
-    1,
-    opponent_card.clone()
-));
+        let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red); // Direct `Color`
+        assert_ok!(Eterra::play_turn(
+            frame_system::RawOrigin::Signed(opponent).into(),
+            game_id,
+            0,
+            1,
+            opponent_card.clone()
+        ));
 
-let capturing_card = Card::new(6, 6, 3, 3).with_color(Color::Blue); // Direct `Color`
-assert_ok!(Eterra::play_turn(
-    frame_system::RawOrigin::Signed(creator).into(),
-    game_id,
-    0,
-    2,
-    capturing_card.clone()
-));
+        let capturing_card = Card::new(6, 6, 3, 3).with_color(Color::Blue); // Direct `Color`
+        assert_ok!(Eterra::play_turn(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            0,
+            2,
+            capturing_card.clone()
+        ));
 
-let (board, _, _) = Eterra::game_board(game_id).unwrap();
-assert_eq!(board[0][1].as_ref().unwrap().get_color(), Some(&Color::Blue));
-assert_eq!(board[0][2].as_ref().unwrap().get_color(), Some(&Color::Blue));       // Captured card
+        let (board, _, _) = Eterra::game_board(game_id).unwrap();
+        assert_eq!(
+            board[0][1].as_ref().unwrap().get_color(),
+            Some(&Color::Blue)
+        );
+        assert_eq!(
+            board[0][2].as_ref().unwrap().get_color(),
+            Some(&Color::Blue)
+        ); // Captured card
     });
 }
 
@@ -241,18 +248,27 @@ fn full_game_simulation() {
         // Assert that GameFinished event is emitted
         let events = frame_system::Pallet::<Test>::events();
         let game_finished_event_found = events.iter().any(|record| match record.event {
-            RuntimeEvent::Eterra(crate::Event::GameFinished { game_id: event_game_id, winner: event_winner }) => {
-                log::debug!("GameFinished event detected: {:?}, Winner: {:?}", event_game_id, event_winner);
+            RuntimeEvent::Eterra(crate::Event::GameFinished {
+                game_id: event_game_id,
+                winner: event_winner,
+            }) => {
+                log::debug!(
+                    "GameFinished event detected: {:?}, Winner: {:?}",
+                    event_game_id,
+                    event_winner
+                );
                 event_game_id == game_id
             }
             _ => false,
         });
-        assert!(game_finished_event_found, "Expected GameFinished event was not found");
+        assert!(
+            game_finished_event_found,
+            "Expected GameFinished event was not found"
+        );
 
         log::debug!("Full game simulation completed and GameFinished event detected.");
     });
 }
-
 
 #[test]
 fn play_out_of_turn_fails() {
@@ -278,7 +294,7 @@ fn play_out_of_turn_fails() {
             game_id,
             1,
             2,
-            another_card
+            another_card,
         );
 
         // Assert that the play fails with `NotYourTurn`
@@ -305,7 +321,11 @@ fn capture_cards_in_all_directions() {
 
         // Determine the first player based on the current turn from the pallet
         let mut current_player = Eterra::current_turn(game_id).unwrap();
-        let mut other_player = if current_player == creator { opponent } else { creator };
+        let mut other_player = if current_player == creator {
+            opponent
+        } else {
+            creator
+        };
 
         // Place opponent cards in cardinal directions
         let opponent_cards = vec![
