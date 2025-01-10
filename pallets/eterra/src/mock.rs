@@ -3,9 +3,9 @@ use frame_support::{
     parameter_types,
     traits::{ConstU16, ConstU32},
 };
-use sp_core::H256;
+use sp_core::H256; // Ensure H256 is imported
 use sp_runtime::{
-    traits::{BlakeTwo256, IdentityLookup, Hash},
+    traits::{BlakeTwo256, IdentityLookup},
     BuildStorage,
 };
 use frame_system as system;
@@ -19,30 +19,6 @@ frame_support::construct_runtime!(
         Eterra: pallet_eterra,
     }
 );
-
-use log::{Level, Metadata, Record, SetLoggerError};
-
-struct SimpleLogger;
-
-impl log::Log for SimpleLogger {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= Level::Debug
-    }
-
-    fn log(&self, record: &Record) {
-        if self.enabled(record.metadata()) {
-            println!("[{}] {}", record.level(), record.args());
-        }
-    }
-
-    fn flush(&self) {}
-}
-
-static LOGGER: SimpleLogger = SimpleLogger;
-
-pub fn init_simple_logger() -> Result<(), SetLoggerError> {
-    log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Debug))
-}
 
 parameter_types! {
     pub const BlockHashCount: u64 = 250;
@@ -77,6 +53,7 @@ impl system::Config for Test {
     type RuntimeOrigin = RuntimeOrigin;
     type RuntimeTask = ();
     type RuntimeEvent = RuntimeEvent;
+    // Add missing associated types
     type SingleBlockMigrations = ();
     type MultiBlockMigrator = ();
     type PreInherents = ();
@@ -89,6 +66,13 @@ impl pallet_eterra::Config for Test {
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
-    let storage = system::GenesisConfig::<Test>::default().build_storage().unwrap();
-    sp_io::TestExternalities::from(storage)
+    let t = frame_system::GenesisConfig::<Test>::default() // Explicit type annotation
+        .build_storage()
+        .unwrap();
+
+    let mut ext = sp_io::TestExternalities::from(t);
+    ext.execute_with(|| {
+        System::set_block_number(1); // Reset block number
+    });
+    ext
 }
