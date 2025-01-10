@@ -255,3 +255,47 @@ fn full_game_simulation() {
         log::debug!("Full game simulation completed with final board: {:?}", board);
     });
 }
+
+#[test]
+fn play_out_of_turn_fails() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        // Set up a new game
+        let (game_id, creator, opponent) = setup_new_game();
+
+        // First turn: the creator plays a card
+        let card = Card::new(5, 3, 2, 4);
+        assert_ok!(Eterra::play_turn(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            1,
+            1,
+            card.clone()
+        ));
+
+        // Second turn: the creator attempts to play again (out of turn)
+        let another_card = Card::new(3, 4, 1, 2);
+        let result = Eterra::play_turn(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            1,
+            2,
+            another_card
+        );
+
+        // Assert that the play fails with `NotYourTurn`
+        assert_noop!(result, crate::Error::<Test>::NotYourTurn);
+
+        // Confirm the opponent can play their turn
+        let opponent_card = Card::new(2, 4, 5, 3);
+        assert_ok!(Eterra::play_turn(
+            frame_system::RawOrigin::Signed(opponent).into(),
+            game_id,
+            1,
+            2,
+            opponent_card
+        ));
+
+        log::debug!("Test completed: A player cannot play out of turn.");
+    });
+}
