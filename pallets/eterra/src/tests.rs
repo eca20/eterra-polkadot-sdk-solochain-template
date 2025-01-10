@@ -228,9 +228,12 @@ fn full_game_simulation() {
             (opponent, 1, 1, Card::new(3, 5, 2, 4)),
             (creator, 2, 0, Card::new(5, 3, 2, 4)),
             (opponent, 2, 1, Card::new(2, 4, 5, 3)),
+            (creator, 3, 0, Card::new(4, 3, 1, 6)),
+            (opponent, 3, 1, Card::new(3, 5, 2, 4)),
+            (creator, 0, 2, Card::new(5, 3, 2, 4)),
+            (opponent, 1, 2, Card::new(2, 4, 5, 3)),
         ];
 
-        // Iterate over a reference to avoid moving `moves`
         for (player, x, y, card) in &moves {
             log::debug!(
                 "Player {} is attempting to play at ({}, {}) with card: {:?}",
@@ -248,13 +251,21 @@ fn full_game_simulation() {
             ));
         }
 
-        let (board, _, _) = Eterra::game_board(game_id).unwrap();
+        // Assert that GameFinished event is emitted
+        let events = frame_system::Pallet::<Test>::events();
+        let game_finished_event_found = events.iter().any(|record| match record.event {
+            RuntimeEvent::Eterra(crate::Event::GameFinished { game_id: event_game_id, winner: event_winner }) => {
+                log::debug!("GameFinished event detected: {:?}, Winner: {:?}", event_game_id, event_winner);
+                event_game_id == game_id
+            }
+            _ => false,
+        });
+        assert!(game_finished_event_found, "Expected GameFinished event was not found");
 
-        // `moves.len()` is now accessible
-        assert!(board.iter().flatten().filter(|cell| cell.is_some()).count() == moves.len());
-        log::debug!("Full game simulation completed with final board: {:?}", board);
+        log::debug!("Full game simulation completed and GameFinished event detected.");
     });
 }
+
 
 #[test]
 fn play_out_of_turn_fails() {

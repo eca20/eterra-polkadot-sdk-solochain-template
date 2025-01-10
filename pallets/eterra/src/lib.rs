@@ -191,16 +191,20 @@ pub fn play_turn(
             None
         };
 
+        // Emit game finished event
+        Self::deposit_event(Event::GameFinished { 
+            game_id, 
+            winner: winner.clone(), // Clone the winner to prevent move
+        });
+
+        log::debug!("Game finished. Winner: {:?}", winner);
+
         // Remove game from storage
         GameBoard::<T>::remove(&game_id);
         CurrentTurn::<T>::remove(&game_id);
         Scores::<T>::remove(&game_id);
         MovesPlayed::<T>::remove(&game_id);
-
-        log::debug!("Game finished. Winner: {:?}", winner);
-
-        // Emit game finished event
-        Self::deposit_event(Event::GameFinished { game_id, winner });
+ 
         return Ok(()); // Return early since the game has ended
     }
 
