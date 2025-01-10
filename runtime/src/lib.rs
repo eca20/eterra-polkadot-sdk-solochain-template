@@ -228,5 +228,5 @@ mod runtime {
 	pub type TemplateModule = pallet_template;
 
   #[runtime::pallet_index(8)]
-	pub type EterraModule = pallet_eterra;
+	pub type Eterra = pallet_eterra;
 }
