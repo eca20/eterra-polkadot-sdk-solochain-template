@@ -48,6 +48,10 @@ pub mod pallet {
       (Board, T::AccountId, T::AccountId) // Store the board and both players
   >;
 
+  #[pallet::storage]
+  #[pallet::getter(fn moves_played)]
+  pub type MovesPlayed<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, u8>;
+
 	#[pallet::storage]
 	#[pallet::getter(fn current_turn)]
 	pub type CurrentTurn<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, T::AccountId>;
@@ -82,9 +86,12 @@ pub mod pallet {
 		) -> DispatchResult {
 			let creator = ensure_signed(origin)?;
 
+      // Prevent creating a game with oneself
+      ensure!(creator != opponent, Error::<T>::InvalidMove);
+
 			let game_id = T::Hashing::hash_of(&(creator.clone(), opponent.clone()));
 			ensure!(!GameBoard::<T>::contains_key(&game_id), Error::<T>::GameNotFound);
-
+      
 			let initial_board: Board = Default::default();
       GameBoard::<T>::insert(&game_id, (initial_board, creator.clone(), opponent.clone()));
 
@@ -103,7 +110,7 @@ pub mod pallet {
 			Ok(())
 		}
     
-   #[pallet::call_index(1)]
+    #[pallet::call_index(1)]
 #[pallet::weight(10_000)]
 pub fn play_turn(
     origin: OriginFor<T>,
@@ -152,7 +159,7 @@ pub fn play_turn(
                 if opposing_rank > rank {
                     // Capture card
                     scores.0 += 1; // Increment current player's score
-                    scores.1 -= 1; // Decrement opponent's score
+                    scores.1 = scores.1.saturating_sub(1); // Ensure no underflow
                     board[nx as usize][ny as usize] = Some(card.clone());
                     log::debug!("Captured card at ({}, {})", nx, ny);
                 }
@@ -167,6 +174,36 @@ pub fn play_turn(
 
     Scores::<T>::insert(&game_id, scores);
 
+    // Update move counter
+    let mut moves = MovesPlayed::<T>::get(&game_id).unwrap_or(0);
+    moves += 1;
+    MovesPlayed::<T>::insert(&game_id, moves);
+
+    log::debug!("Total moves played: {:?}", moves);
+
+    // Check for end-of-game condition
+    if moves == 10 || board.iter().flat_map(|row| row.iter()).filter(|cell| cell.is_some()).count() == 16 {
+        let winner = if scores.0 > scores.1 {
+            Some(creator.clone())
+        } else if scores.1 > scores.0 {
+            Some(opponent.clone())
+        } else {
+            None
+        };
+
+        // Remove game from storage
+        GameBoard::<T>::remove(&game_id);
+        CurrentTurn::<T>::remove(&game_id);
+        Scores::<T>::remove(&game_id);
+        MovesPlayed::<T>::remove(&game_id);
+
+        log::debug!("Game finished. Winner: {:?}", winner);
+
+        // Emit game finished event
+        Self::deposit_event(Event::GameFinished { game_id, winner });
+        return Ok(()); // Return early since the game has ended
+    }
+
     // Update turn
     let next_turn = if current_turn == creator {
         opponent.clone()
@@ -174,37 +211,17 @@ pub fn play_turn(
         creator.clone()
     };
 
-    // Clone `next_turn` for insertion and logging
     CurrentTurn::<T>::insert(&game_id, next_turn.clone());
 
     log::debug!("Next turn belongs to: {:?}", next_turn);
 
-    // Emit event
+    // Emit event for the turn played
     Self::deposit_event(Event::TurnPlayed {
         game_id,
         player: who.clone(),
         x,
         y,
     });
-
-    // Check if game ends
-    let total_cells = board.iter().flat_map(|row| row.iter()).filter(|cell| cell.is_some()).count();
-    if total_cells == 16 {
-        let winner = if scores.0 > scores.1 {
-            Some(creator)
-        } else if scores.1 > scores.0 {
-            Some(opponent)
-        } else {
-            None
-        };
-        GameBoard::<T>::remove(&game_id);
-        CurrentTurn::<T>::remove(&game_id);
-        Scores::<T>::remove(&game_id);
-
-        log::debug!("Game finished. Winner: {:?}", winner);
-
-        Self::deposit_event(Event::GameFinished { game_id, winner });
-    }
 
     Ok(())
 }
