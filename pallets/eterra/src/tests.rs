@@ -389,3 +389,39 @@ fn capture_cards_in_all_directions() {
         );
     });
 }
+
+
+#[test]
+fn invalid_game_id_fails() {
+    new_test_ext().execute_with(|| {
+        // Generate a random game ID that does not exist
+        let invalid_game_id = H256::random();
+
+        // Attempt to play a turn with the invalid game ID
+        let card = Card::new(5, 3, 2, 4);
+        let result = Eterra::play_turn(
+            frame_system::RawOrigin::Signed(1).into(),
+            invalid_game_id,
+            0,
+            0,
+            card.clone(),
+        );
+
+        // Assert that the call fails with the `GameNotFound` error
+        assert_noop!(result, crate::Error::<Test>::GameNotFound);
+
+        // Attempt to retrieve the game board for the invalid game ID
+        let board_result = Eterra::game_board(invalid_game_id);
+        assert!(
+            board_result.is_none(),
+            "Expected None for non-existent game board"
+        );
+
+        // Log the test case for debugging purposes
+        log::debug!(
+            "Invalid Game ID test completed. Game ID: {:?}, Result: {:?}",
+            invalid_game_id,
+            result
+        );
+    });
+}
