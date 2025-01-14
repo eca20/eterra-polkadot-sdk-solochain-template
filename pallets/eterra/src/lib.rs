@@ -9,12 +9,21 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
+mod types;
+
+// Publicly re-export the Card and Color types for usage in other files
+pub use types::card::{Card, Color};
+
+
 #[frame_support::pallet]
 pub mod pallet {
     use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
     use frame_system::pallet_prelude::*;
     use sp_runtime::traits::Hash;
 
+    // Import Card and Color types from the crate
+    use crate::types::card::{Card, Color};
+    
     #[pallet::pallet]
     pub struct Pallet<T>(_);
 
@@ -26,51 +35,21 @@ pub mod pallet {
     pub type Board = [[Option<Card>; 4]; 4];
 
     #[pallet::storage]
-    #[pallet::getter(fn player_colors)]
-    pub type PlayerColors<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, (Color, Color)>;
-
-    #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone, PartialEq, Eq, Debug)]
-    pub struct Card {
-        top: u8,
-        right: u8,
-        bottom: u8,
-        left: u8,
-        color: Option<Color>, // None if not yet assigned
-    }
-
-    impl Card {
-        pub fn new(top: u8, right: u8, bottom: u8, left: u8) -> Self {
-            Self {
-                top,
-                right,
-                bottom,
-                left,
-                color: None,
-            }
-        }
-
-        pub fn with_color(mut self, color: Color) -> Self {
-            self.color = Some(color);
-            self
-        }
-        pub fn get_color(&self) -> Option<&Color> {
-            self.color.as_ref()
-        }
-    }
-
-    #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone, PartialEq, Eq, Debug)]
-    pub enum Color {
-        Blue,
-        Red,
-    }
-
-    #[pallet::storage]
     #[pallet::getter(fn game_board)]
     pub type GameBoard<T: Config> = StorageMap<
         _,
         Blake2_128Concat,
         T::Hash,
         (Board, T::AccountId, T::AccountId), // Store the board and both players
+    >;
+
+    #[pallet::storage]
+    #[pallet::getter(fn player_colors)]
+    pub type PlayerColors<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::Hash,
+        (Color, Color)
     >;
 
     #[pallet::storage]
