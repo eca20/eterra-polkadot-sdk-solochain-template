@@ -22,6 +22,12 @@ use sp_version::RuntimeVersion;
 pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_eterra;
+use scale_info::TypeInfo;
+use codec::{Decode, Encode, MaxEncodedLen};
+use frame_support::pallet_prelude::Get;
+
+use frame_support::parameter_types;
+
 pub use pallet_timestamp::Call as TimestampCall;
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
@@ -184,8 +190,23 @@ pub type Executive = frame_executive::Executive<
     Migrations,
 >;
 
+#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode, MaxEncodedLen, TypeInfo)]
+pub struct ParameterGet<const N: u32>;
+
+impl<const N: u32> Get<u32> for ParameterGet<N> {
+	fn get() -> u32 {
+		N
+	}
+}
+
+parameter_types! {
+  pub const EterraNumPlayers: u8 = 2;
+}
+
 impl pallet_eterra::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
+    type NumPlayers = EterraNumPlayers;
+
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.

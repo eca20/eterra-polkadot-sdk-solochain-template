@@ -1,5 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use sp_std::vec;
+
 pub use pallet::*;
 use sp_io::hashing;
 
@@ -14,16 +16,22 @@ mod types;
 // Publicly re-export the Card and Color types for usage in other files
 pub use types::card::{Card, Color};
 pub use types::board::{Board};
+pub use types::game::{Game, Move, GameState};
+pub use crate::{types::*};
 
 #[frame_support::pallet]
 pub mod pallet {
     use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
     use frame_system::pallet_prelude::*;
     use sp_runtime::traits::Hash;
+    use crate::vec::Vec;
 
     // Import Card and Color types from the crate
     use crate::types::card::{Card, Color};
     use crate::types::board::{Board};
+    use crate::types::game::{Game, Move, GameState};
+    use crate::types::*;
+    pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
 
     #[pallet::pallet]
     pub struct Pallet<T>(_);
@@ -31,6 +39,10 @@ pub mod pallet {
     #[pallet::config]
     pub trait Config: frame_system::Config {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+
+        // Exact umber of players that can join a single game
+        #[pallet::constant]
+        type NumPlayers: Get<u8>;
     }
 
     #[pallet::storage]
@@ -79,6 +91,12 @@ pub mod pallet {
             game_id: T::Hash,
             winner: Option<T::AccountId>,
         },
+        // Player played a move
+		    MovePlayed { game_id: GameId, player: AccountIdOf<T>, move_played: Move },
+        // Force player turn
+        TurnForceFinished { game_id: GameId, player: AccountIdOf<T> },
+		    // New turn
+		    NewTurn { game_id: GameId, next_player: AccountIdOf<T> },
     }
 
     #[pallet::error]
@@ -87,15 +105,30 @@ pub mod pallet {
         InvalidMove,
         NotYourTurn,
         CellOccupied,
+        NumberOfPlayersIsInvalid
     }
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         #[pallet::call_index(0)]
         #[pallet::weight(10_000)]
-        pub fn create_game(origin: OriginFor<T>, opponent: T::AccountId) -> DispatchResult {
-            let creator = ensure_signed(origin)?;
+        pub fn create_game(
+          origin: OriginFor<T>, 
+        	players: Vec<AccountIdOf<T>>,
+        ) -> DispatchResult {
+            let who: AccountIdOf<T> = ensure_signed(origin)?;
+            //let creator = ensure_signed(origin)?;
 
+            // If you want to play, you need to specify yourself in the Vec as well
+            let number_of_players = players.len();
+
+
+            ensure!(
+              number_of_players == T::NumPlayers::get() as usize,
+              Error::<T>::NumberOfPlayersIsInvalid
+            );
+            let creator = players[0].clone();
+            let opponent = players[1].clone();
             // Prevent creating a game with oneself
             ensure!(creator != opponent, Error::<T>::InvalidMove);
 

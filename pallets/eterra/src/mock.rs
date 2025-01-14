@@ -26,6 +26,7 @@ parameter_types! {
     pub const MaximumBlockLength: u32 = 2 * 1024;
     pub const AvailableBlockRatio: sp_runtime::Perbill = sp_runtime::Perbill::from_percent(75);
     pub const ExistentialDeposit: u64 = 1;
+    pub const EterraNumPlayers: u8 = 2;
 }
 
 impl system::Config for Test {
@@ -63,6 +64,7 @@ impl system::Config for Test {
 
 impl pallet_eterra::Config for Test {
     type RuntimeEvent = RuntimeEvent;
+    type NumPlayers = EterraNumPlayers;
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
