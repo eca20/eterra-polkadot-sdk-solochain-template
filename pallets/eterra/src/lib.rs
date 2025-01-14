@@ -13,7 +13,7 @@ mod types;
 
 // Publicly re-export the Card and Color types for usage in other files
 pub use types::card::{Card, Color};
-
+pub use types::board::{Board};
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -23,7 +23,8 @@ pub mod pallet {
 
     // Import Card and Color types from the crate
     use crate::types::card::{Card, Color};
-    
+    use crate::types::board::{Board};
+
     #[pallet::pallet]
     pub struct Pallet<T>(_);
 
@@ -32,12 +33,10 @@ pub mod pallet {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
     }
 
-    pub type Board = [[Option<Card>; 4]; 4];
-
     #[pallet::storage]
     #[pallet::getter(fn game_board)]
     pub type GameBoard<T: Config> = StorageMap<
-        _,
+        _,                          // Explicit prefix using the pallet type
         Blake2_128Concat,
         T::Hash,
         (Board, T::AccountId, T::AccountId), // Store the board and both players
