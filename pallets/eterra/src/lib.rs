@@ -37,6 +37,8 @@ pub mod pallet {
         // Maximum number of players that can join a single game
         #[pallet::constant]
         type NumPlayers: Get<u32>;
+        #[pallet::constant]
+        type MaxRounds: Get<u8>;
     }
 
     #[pallet::storage]
@@ -89,6 +91,7 @@ pub mod pallet {
         NotYourTurn,
         CellOccupied,
         InvalidNumberOfPlayers,
+        InternalError,
     }
 
     #[pallet::call]
@@ -111,8 +114,9 @@ pub mod pallet {
             let opponent = players[1].clone();
             // Prevent creating a game with oneself
             ensure!(creator != opponent, Error::<T>::InvalidMove);
+			      let current_block_number = <frame_system::Pallet<T>>::block_number();
 
-            let game_id = T::Hashing::hash_of(&(creator.clone(), opponent.clone()));
+            let game_id = T::Hashing::hash_of(&(creator.clone(), opponent.clone(), current_block_number));
             ensure!(
                 !GameStorage::<T>::contains_key(&game_id),
                 Error::<T>::GameNotFound
@@ -126,6 +130,15 @@ pub mod pallet {
                 creator.clone()
             } else {
                 opponent.clone()
+            };
+
+            // Default Game Config
+            let mut game: Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> = Game {
+                state: GameState::Playing,
+                last_played_block: current_block_number,
+                players: players.clone().try_into().map_err(|_| Error::<T>::InternalError)?,
+                round: 0,
+                max_rounds: T::MaxRounds::get(),
             };
 
             // Assign colors

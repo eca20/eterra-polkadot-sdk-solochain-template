@@ -42,18 +42,26 @@ fn setup_new_game() -> (H256, u64, u64) {
     let creator = 1;
     let opponent = 2;
 
-    let game_id = BlakeTwo256::hash_of(&(creator, opponent));
+    // Get the current block number
+    let current_block_number = <frame_system::Pallet<Test>>::block_number();
+
+    // Calculate game_id using the new logic
+    let game_id = BlakeTwo256::hash_of(&(creator, opponent, current_block_number));
+
+    // Create the game
     assert_ok!(Eterra::create_game(
         frame_system::RawOrigin::Signed(creator).into(),
-        vec![creator, opponent], // Pass creator and opponent as a Vec
+        vec![creator, opponent],
     ));
 
     log::debug!(
-        "Game created with ID: {:?}, Creator: {}, Opponent: {}",
+        "Game created with ID: {:?}, Creator: {}, Opponent: {}, Block: {}",
         game_id,
         creator,
-        opponent
+        opponent,
+        current_block_number,
     );
+
     (game_id, creator, opponent)
 }
 
