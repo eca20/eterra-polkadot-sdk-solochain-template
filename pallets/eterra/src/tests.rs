@@ -45,7 +45,7 @@ fn setup_new_game() -> (H256, u64, u64) {
     let game_id = BlakeTwo256::hash_of(&(creator, opponent));
     assert_ok!(Eterra::create_game(
         frame_system::RawOrigin::Signed(creator).into(),
-        opponent
+        vec![creator, opponent], // Pass creator and opponent as a Vec
     ));
 
     log::debug!(
@@ -62,8 +62,10 @@ fn create_game_with_same_players_fails() {
     init_logger();
     new_test_ext().execute_with(|| {
         let player = 1; // Define `player` explicitly
-        let result = Eterra::create_game(frame_system::RawOrigin::Signed(player).into(), player);
-
+        let result = Eterra::create_game(
+                    frame_system::RawOrigin::Signed(player).into(),
+                    vec![player, player], // Pass the same player twice
+                );
         assert_noop!(result, crate::Error::<Test>::InvalidMove);
     });
 }

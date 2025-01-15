@@ -23,6 +23,10 @@ pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_eterra;
 pub use pallet_timestamp::Call as TimestampCall;
+use frame_support::{parameter_types, traits::Get};
+use scale_info::TypeInfo;
+use codec::{Encode, Decode};
+
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
 
@@ -184,8 +188,18 @@ pub type Executive = frame_executive::Executive<
     Migrations,
 >;
 
+#[derive(Encode, Decode, TypeInfo, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EterraNumPlayers;
+impl Get<u32> for EterraNumPlayers {
+    fn get() -> u32 {
+        2 // The number of players in the game
+    }
+}
+
 impl pallet_eterra::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
+    type NumPlayers = EterraNumPlayers;
+
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.

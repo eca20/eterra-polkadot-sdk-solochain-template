@@ -1,14 +1,17 @@
 use crate as pallet_eterra;
 use frame_support::{
     parameter_types,
-    traits::{ConstU16, ConstU32},
+    traits::{ConstU16, ConstU32, Get},
 };
+use parity_scale_codec::{Decode, Encode}; // Ensure Encode and Decode are imported
 use frame_system as system;
 use sp_core::H256; // Ensure H256 is imported
 use sp_runtime::{
     traits::{BlakeTwo256, IdentityLookup},
     BuildStorage,
 };
+use scale_info::TypeInfo; // Import TypeInfo
+
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
@@ -61,8 +64,18 @@ impl system::Config for Test {
     type PostTransactions = ();
 }
 
+#[derive(Encode, Decode, TypeInfo, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MockNumPlayers;
+
+impl Get<u32> for MockNumPlayers {
+    fn get() -> u32 {
+        2 // The number of players in the mock setup
+    }
+}
+
 impl pallet_eterra::Config for Test {
     type RuntimeEvent = RuntimeEvent;
+    type NumPlayers = MockNumPlayers; // Specify the type for NumPlayers
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
