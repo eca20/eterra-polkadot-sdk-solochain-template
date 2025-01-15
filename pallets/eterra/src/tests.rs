@@ -63,9 +63,9 @@ fn create_game_with_same_players_fails() {
     new_test_ext().execute_with(|| {
         let player = 1; // Define `player` explicitly
         let result = Eterra::create_game(
-                    frame_system::RawOrigin::Signed(player).into(),
-                    vec![player, player], // Pass the same player twice
-                );
+            frame_system::RawOrigin::Signed(player).into(),
+            vec![player, player], // Pass the same player twice
+        );
         assert_noop!(result, crate::Error::<Test>::InvalidMove);
     });
 }
@@ -392,7 +392,6 @@ fn capture_cards_in_all_directions() {
     });
 }
 
-
 #[test]
 fn invalid_game_id_fails() {
     new_test_ext().execute_with(|| {
@@ -425,5 +424,52 @@ fn invalid_game_id_fails() {
             invalid_game_id,
             result
         );
+    });
+}
+
+#[test]
+fn create_game_invalid_number_of_players() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let creator = 1;
+        let opponent = 2;
+        let third_player = 3;
+
+        // Test with zero players
+        let result_zero_players = Eterra::create_game(
+            frame_system::RawOrigin::Signed(creator).into(),
+            vec![], // Empty player list
+        );
+        assert_noop!(
+            result_zero_players,
+            crate::Error::<Test>::InvalidNumberOfPlayers
+        );
+
+        // Test with one player
+        let result_one_player = Eterra::create_game(
+            frame_system::RawOrigin::Signed(creator).into(),
+            vec![creator], // Only one player
+        );
+        assert_noop!(
+            result_one_player,
+            crate::Error::<Test>::InvalidNumberOfPlayers
+        );
+
+        // Test with three players (more than allowed)
+        let result_three_players = Eterra::create_game(
+            frame_system::RawOrigin::Signed(creator).into(),
+            vec![creator, opponent, third_player], // More than allowed players
+        );
+        assert_noop!(
+            result_three_players,
+            crate::Error::<Test>::InvalidNumberOfPlayers
+        );
+
+        // Ensure that valid number of players works as expected
+        let result_two_players = Eterra::create_game(
+            frame_system::RawOrigin::Signed(creator).into(),
+            vec![creator, opponent], // Valid player count
+        );
+        assert_ok!(result_two_players);
     });
 }

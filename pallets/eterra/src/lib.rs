@@ -3,7 +3,6 @@
 pub use pallet::*;
 use sp_io::hashing;
 
-
 #[cfg(test)]
 mod mock;
 
@@ -13,8 +12,8 @@ mod tests;
 mod types;
 
 // Publicly re-export the Card and Color types for usage in other files
+pub use types::board::Board;
 pub use types::card::{Card, Color};
-pub use types::board::{Board};
 pub use types::game::*;
 
 #[frame_support::pallet]
@@ -26,10 +25,9 @@ pub mod pallet {
 
     pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
 
-
     // Import Card and Color types from the crate
+    use crate::types::board::Board;
     use crate::types::card::{Card, Color};
-    use crate::types::board::{Board};
     use crate::types::game::*;
     #[pallet::pallet]
     pub struct Pallet<T>(_);
@@ -37,7 +35,7 @@ pub mod pallet {
     #[pallet::config]
     pub trait Config: frame_system::Config {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
-        		// Maximum number of players that can join a single game
+        // Maximum number of players that can join a single game
         #[pallet::constant]
         type NumPlayers: Get<u32>;
     }
@@ -45,7 +43,7 @@ pub mod pallet {
     #[pallet::storage]
     #[pallet::getter(fn game_board)]
     pub type GameBoard<T: Config> = StorageMap<
-        _,                          // Explicit prefix using the pallet type
+        _, // Explicit prefix using the pallet type
         Blake2_128Concat,
         T::Hash,
         (Board, T::AccountId, T::AccountId), // Store the board and both players
@@ -53,12 +51,7 @@ pub mod pallet {
 
     #[pallet::storage]
     #[pallet::getter(fn player_colors)]
-    pub type PlayerColors<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        T::Hash,
-        (Color, Color)
-    >;
+    pub type PlayerColors<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, (Color, Color)>;
 
     #[pallet::storage]
     #[pallet::getter(fn moves_played)]
@@ -96,19 +89,24 @@ pub mod pallet {
         InvalidMove,
         NotYourTurn,
         CellOccupied,
+        InvalidNumberOfPlayers,
     }
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         #[pallet::call_index(0)]
         #[pallet::weight(10_000)]
-        pub fn create_game(
-          origin: OriginFor<T>, 
-          			players: Vec<AccountIdOf<T>>,
-              ) -> DispatchResult {
+        pub fn create_game(origin: OriginFor<T>, players: Vec<AccountIdOf<T>>) -> DispatchResult {
             //let creator = ensure_signed(origin)?;
-			      let who: AccountIdOf<T> = ensure_signed(origin)?;
-            
+            let who: AccountIdOf<T> = ensure_signed(origin)?;
+
+            // If you want to play, you need to specify yourself in the Vec as well
+            let number_of_players = players.len();
+
+            ensure!(
+                number_of_players == T::NumPlayers::get() as usize,
+                Error::<T>::InvalidNumberOfPlayers
+            );
 
             let creator = players[0].clone();
             let opponent = players[1].clone();

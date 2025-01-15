@@ -37,4 +37,3 @@ pub enum Color {
     Blue,
     Red,
 }
-
