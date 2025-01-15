@@ -1,7 +1,6 @@
 use frame_support::BoundedVec;
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen}; // For Encode, Decode, MaxEncodedLen
 use scale_info::TypeInfo; // For TypeInfo
-use sp_runtime::SaturatedConversion; // For BoundedVec
 
 // Define `Players` type alias
 pub type Players<Account, NumPlayers> = BoundedVec<Account, NumPlayers>;

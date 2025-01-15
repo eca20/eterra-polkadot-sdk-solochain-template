@@ -14,6 +14,7 @@ mod types;
 pub use types::board::Board;
 pub use types::card::{Card, Color};
 pub use types::game::*;
+pub use crate::types::GameId;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -28,6 +29,7 @@ pub mod pallet {
     use crate::types::board::Board;
     use crate::types::card::{Card, Color};
     use crate::types::game::*;
+    use crate::types::GameId;
     #[pallet::pallet]
     pub struct Pallet<T>(_);
 
@@ -46,7 +48,7 @@ pub mod pallet {
     pub type GameStorage<T: Config> = StorageMap<
         _, // Explicit prefix using the pallet type
         Blake2_128Concat,
-        T::Hash,
+        GameId<T>,
         (Board, T::AccountId, T::AccountId), // Store the board and both players
     >;
 
@@ -70,23 +72,24 @@ pub mod pallet {
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
         GameCreated {
-            game_id: T::Hash,
+            game_id: GameId<T>,
         },
-        TurnPlayed {
-            game_id: T::Hash,
+        MovePlayed {
+            game_id: GameId<T>,
             player: T::AccountId,
             x: u8,
             y: u8,
         },
         GameFinished {
-            game_id: T::Hash,
+            game_id: GameId<T>,
             winner: Option<T::AccountId>,
         },
         //New Turn
         NewTurn {
-            game_id: T::Hash,
+            game_id: GameId<T>,
             next_player: AccountIdOf<T>,
         },
+        TurnForceFinished { game_id: GameId<T>, player: AccountIdOf<T> },
     }
 
     #[pallet::error]
@@ -115,7 +118,7 @@ pub mod pallet {
                 Error::<T>::InvalidNumberOfPlayers
             );
 
-            let creator = players[0].clone();
+            let creator = who;
             let opponent = players[1].clone();
             // Prevent creating a game with oneself
             ensure!(creator != opponent, Error::<T>::InvalidMove);
@@ -158,6 +161,9 @@ pub mod pallet {
 
             Scores::<T>::insert(&game_id, (0, 0));
 
+            //GameStorage::<T>::set(game_id, Some(game));
+
+
             Self::deposit_event(Event::GameCreated { game_id });
 
             Ok(())
@@ -166,7 +172,7 @@ pub mod pallet {
         #[pallet::weight(10_000)]
         pub fn play_turn(
             origin: OriginFor<T>,
-            game_id: T::Hash,
+            game_id: GameId<T>,
             player_move: Move,
             card: Card,
         ) -> DispatchResult {
@@ -283,7 +289,7 @@ pub mod pallet {
             log::debug!("Next turn belongs to: {:?}", next_turn);
 
             // Emit event for the turn played
-            Self::deposit_event(Event::TurnPlayed {
+            Self::deposit_event(Event::MovePlayed {
                 game_id,
                 player: who.clone(),
                 x: player_move.place_index_x,
@@ -297,8 +303,9 @@ pub mod pallet {
 
 // Helper methods
 impl<T: Config> Pallet<T> {
+
     fn is_game_won(
-        game_id: &T::Hash,
+        game_id: &GameId<T>,
         board: &Board,
         creator: &T::AccountId,
         opponent: &T::AccountId,
