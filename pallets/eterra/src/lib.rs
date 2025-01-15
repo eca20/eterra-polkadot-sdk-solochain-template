@@ -82,6 +82,11 @@ pub mod pallet {
             game_id: T::Hash,
             winner: Option<T::AccountId>,
         },
+        //New Turn
+        NewTurn {
+            game_id: T::Hash,
+            next_player: AccountIdOf<T>,
+        },
     }
 
     #[pallet::error]
@@ -114,9 +119,10 @@ pub mod pallet {
             let opponent = players[1].clone();
             // Prevent creating a game with oneself
             ensure!(creator != opponent, Error::<T>::InvalidMove);
-			      let current_block_number = <frame_system::Pallet<T>>::block_number();
+            let current_block_number = <frame_system::Pallet<T>>::block_number();
 
-            let game_id = T::Hashing::hash_of(&(creator.clone(), opponent.clone(), current_block_number));
+            let game_id =
+                T::Hashing::hash_of(&(creator.clone(), opponent.clone(), current_block_number));
             ensure!(
                 !GameStorage::<T>::contains_key(&game_id),
                 Error::<T>::GameNotFound
@@ -136,7 +142,10 @@ pub mod pallet {
             let mut game: Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> = Game {
                 state: GameState::Playing,
                 last_played_block: current_block_number,
-                players: players.clone().try_into().map_err(|_| Error::<T>::InternalError)?,
+                players: players
+                    .clone()
+                    .try_into()
+                    .map_err(|_| Error::<T>::InternalError)?,
                 round: 0,
                 max_rounds: T::MaxRounds::get(),
             };
@@ -158,16 +167,16 @@ pub mod pallet {
         pub fn play_turn(
             origin: OriginFor<T>,
             game_id: T::Hash,
-            x: u8,
-            y: u8,
+            player_move: Move,
             card: Card,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
             log::debug!(
-                "Player {:?} is attempting to play on game_id {:?}",
+                "Player {:?} is attempting to play on game_id {:?} at {:?}",
                 who,
-                game_id
+                game_id,
+                player_move
             );
 
             ensure!(
@@ -181,9 +190,13 @@ pub mod pallet {
             log::debug!("Current turn belongs to: {:?}", current_turn);
 
             ensure!(current_turn == who, Error::<T>::NotYourTurn);
-            ensure!(x < 4 && y < 4, Error::<T>::InvalidMove);
             ensure!(
-                board[x as usize][y as usize].is_none(),
+                player_move.place_index_x < 4 && player_move.place_index_y < 4,
+                Error::<T>::InvalidMove
+            );
+            ensure!(
+                board[player_move.place_index_x as usize][player_move.place_index_y as usize]
+                    .is_none(),
                 Error::<T>::CellOccupied
             );
 
@@ -195,7 +208,8 @@ pub mod pallet {
 
             // Place the card with the current player's color
             let placed_card = card.clone().with_color(current_color.clone());
-            board[x as usize][y as usize] = Some(placed_card.clone());
+            board[player_move.place_index_x as usize][player_move.place_index_y as usize] =
+                Some(placed_card.clone());
 
             log::debug!("Board updated before capture: {:?}", board);
 
@@ -205,8 +219,8 @@ pub mod pallet {
                 (0, 1, card.bottom), // Bottom
                 (-1, 0, card.left),  // Left
             ] {
-                let nx = x as isize + dx;
-                let ny = y as isize + dy;
+                let nx = player_move.place_index_x as isize + dx;
+                let ny = player_move.place_index_y as isize + dy;
                 if nx >= 0 && nx < 4 && ny >= 0 && ny < 4 {
                     if let Some(mut opposing_card) = board[nx as usize][ny as usize].clone() {
                         let rank = match (dx, dy) {
@@ -238,37 +252,12 @@ pub mod pallet {
 
             log::debug!("Total moves played: {:?}", moves);
 
-            // Check for end-of-game condition (10 moves)
-            if moves == 10 {
-                // Count cards of each color
-                let mut blue_count = 0;
-                let mut red_count = 0;
-
-                for row in &board {
-                    for cell in row {
-                        if let Some(card) = cell {
-                            match card.color {
-                                Some(Color::Blue) => blue_count += 1,
-                                Some(Color::Red) => red_count += 1,
-                                None => {}
-                            }
-                        }
-                    }
-                }
-
-                // Determine the winner
-                let winner = if blue_count > red_count {
-                    Some(creator.clone())
-                } else if red_count > blue_count {
-                    Some(opponent.clone())
-                } else {
-                    None // Draw
-                };
-
+            // Check if the game is won
+            if let Some(winner) = Self::is_game_won(&game_id, &board, &creator, &opponent, moves) {
                 // Emit game finished event
                 Self::deposit_event(Event::GameFinished {
                     game_id,
-                    winner: winner.clone(), // Clone the winner to prevent move
+                    winner: winner.clone(),
                 });
 
                 log::debug!("Game finished. Winner: {:?}", winner);
@@ -297,11 +286,63 @@ pub mod pallet {
             Self::deposit_event(Event::TurnPlayed {
                 game_id,
                 player: who.clone(),
-                x,
-                y,
+                x: player_move.place_index_x,
+                y: player_move.place_index_y,
             });
 
             Ok(())
         }
+    }
+}
+
+// Helper methods
+impl<T: Config> Pallet<T> {
+    fn is_game_won(
+        game_id: &T::Hash,
+        board: &Board,
+        creator: &T::AccountId,
+        opponent: &T::AccountId,
+        moves: u8,
+    ) -> Option<Option<T::AccountId>> {
+        // Check if the game has reached the end condition
+        if moves < 10 {
+            return None; // Game is not yet finished
+        }
+
+        // Count cards of each color
+        let mut blue_count = 0;
+        let mut red_count = 0;
+
+        for row in board {
+            for cell in row {
+                if let Some(card) = cell {
+                    match card.color {
+                        Some(Color::Blue) => blue_count += 1,
+                        Some(Color::Red) => red_count += 1,
+                        None => {}
+                    }
+                }
+            }
+        }
+
+        // Determine the winner
+        let winner = if blue_count > red_count {
+            Some(creator.clone())
+        } else if red_count > blue_count {
+            Some(opponent.clone())
+        } else {
+            None // Draw
+        };
+
+        // Log game result
+        log::debug!(
+            "Game ID: {:?}, Blue Count: {}, Red Count: {}, Winner: {:?}",
+            game_id,
+            blue_count,
+            red_count,
+            winner
+        );
+
+        Some(winner) // Return wrapped winner to indicate game is finished
     }
 }

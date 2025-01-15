@@ -203,7 +203,6 @@ impl Get<u8> for EterraMaxRounds {
     }
 }
 
-
 impl pallet_eterra::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type NumPlayers = EterraNumPlayers;
