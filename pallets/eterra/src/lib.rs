@@ -1,7 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 pub use pallet::*;
-use sp_io::hashing;
 
 #[cfg(test)]
 mod mock;
@@ -42,7 +41,7 @@ pub mod pallet {
 
     #[pallet::storage]
     #[pallet::getter(fn game_board)]
-    pub type GameBoard<T: Config> = StorageMap<
+    pub type GameStorage<T: Config> = StorageMap<
         _, // Explicit prefix using the pallet type
         Blake2_128Concat,
         T::Hash,
@@ -115,12 +114,12 @@ pub mod pallet {
 
             let game_id = T::Hashing::hash_of(&(creator.clone(), opponent.clone()));
             ensure!(
-                !GameBoard::<T>::contains_key(&game_id),
+                !GameStorage::<T>::contains_key(&game_id),
                 Error::<T>::GameNotFound
             );
 
             let initial_board: Board = Default::default();
-            GameBoard::<T>::insert(&game_id, (initial_board, creator.clone(), opponent.clone()));
+            GameStorage::<T>::insert(&game_id, (initial_board, creator.clone(), opponent.clone()));
 
             // Randomly determine the first turn
             let first_turn = if sp_io::hashing::blake2_128(&creator.encode())[0] % 2 == 0 {
@@ -159,10 +158,10 @@ pub mod pallet {
             );
 
             ensure!(
-                GameBoard::<T>::contains_key(&game_id),
+                GameStorage::<T>::contains_key(&game_id),
                 Error::<T>::GameNotFound
             );
-            let (mut board, creator, opponent) = GameBoard::<T>::get(&game_id).unwrap();
+            let (mut board, creator, opponent) = GameStorage::<T>::get(&game_id).unwrap();
             let current_turn = CurrentTurn::<T>::get(&game_id).unwrap();
             let player_colors = PlayerColors::<T>::get(&game_id).unwrap();
 
@@ -217,7 +216,7 @@ pub mod pallet {
             log::debug!("Board updated after capture: {:?}", board);
 
             // Save the updated board state
-            GameBoard::<T>::insert(&game_id, (board.clone(), creator.clone(), opponent.clone()));
+            GameStorage::<T>::insert(&game_id, (board.clone(), creator.clone(), opponent.clone()));
 
             // Update move counter
             let mut moves = MovesPlayed::<T>::get(&game_id).unwrap_or(0);
@@ -262,7 +261,7 @@ pub mod pallet {
                 log::debug!("Game finished. Winner: {:?}", winner);
 
                 // Remove game data
-                GameBoard::<T>::remove(&game_id);
+                GameStorage::<T>::remove(&game_id);
                 CurrentTurn::<T>::remove(&game_id);
                 Scores::<T>::remove(&game_id);
                 MovesPlayed::<T>::remove(&game_id);

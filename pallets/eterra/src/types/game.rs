@@ -1,5 +1,3 @@
-use super::*;
-
 use frame_support::BoundedVec;
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen}; // For Encode, Decode, MaxEncodedLen
 use scale_info::TypeInfo; // For TypeInfo

@@ -1,5 +1,4 @@
 use frame_support::pallet_prelude::*;
-use frame_system::pallet_prelude::*;
 use scale_info::TypeInfo;
 
 #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone, PartialEq, Eq, Debug)]
