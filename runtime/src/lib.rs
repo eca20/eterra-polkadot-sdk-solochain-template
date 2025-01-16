@@ -199,7 +199,7 @@ impl Get<u32> for EterraNumPlayers {
 pub struct EterraMaxRounds;
 impl Get<u8> for EterraMaxRounds {
     fn get() -> u8 {
-        10 // The number of players in the game
+        5 // The number of players in the game
     }
 }
 

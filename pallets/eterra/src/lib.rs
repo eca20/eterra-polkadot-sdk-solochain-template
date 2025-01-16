@@ -57,10 +57,6 @@ pub mod pallet {
     pub type PlayerColors<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, (Color, Color)>;
 
     #[pallet::storage]
-    #[pallet::getter(fn moves_played)]
-    pub type MovesPlayed<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, u8>;
-
-    #[pallet::storage]
     #[pallet::getter(fn scores)]
     pub type Scores<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, (u8, u8)>;
 
@@ -246,18 +242,14 @@ pub mod pallet {
                 }
             }
 
-            // Update move counter
-            let mut moves = MovesPlayed::<T>::get(&game_id).unwrap_or(0);
-            moves += 1;
-            MovesPlayed::<T>::insert(&game_id, moves);
-
             // Check if the game is won
             if let Some(winner) = Self::is_game_won(
                 &game_id,
                 &game.board,
                 &game.players[0],
                 &game.players[1],
-                moves,
+                game.round,
+                game.max_rounds
             ) {
                 Self::deposit_event(Event::GameFinished {
                     game_id,
@@ -268,13 +260,34 @@ pub mod pallet {
 
                 GameStorage::<T>::remove(&game_id);
                 Scores::<T>::remove(&game_id);
-                MovesPlayed::<T>::remove(&game_id);
 
                 return Ok(());
             }
 
             // Update to the next turn
             game.next_turn();
+
+            // Check if the game is won after updating the round
+            if let Some(winner) = Self::is_game_won(
+                &game_id,
+                &game.board,
+                &game.players[0],
+                &game.players[1],
+                game.round,
+                game.max_rounds
+            ) {
+                Self::deposit_event(Event::GameFinished {
+                    game_id,
+                    winner: winner.clone(),
+                });
+
+                log::debug!("Game finished. Winner: {:?}", winner);
+
+                GameStorage::<T>::remove(&game_id);
+                Scores::<T>::remove(&game_id);
+
+                return Ok(());
+            }
 
             // Save the updated game
             GameStorage::<T>::insert(&game_id, game.clone());
@@ -303,10 +316,11 @@ impl<T: Config> Pallet<T> {
         board: &Board,
         creator: &T::AccountId,
         opponent: &T::AccountId,
-        moves: u8,
+        round: u8,
+        max_rounds: u8
     ) -> Option<Option<T::AccountId>> {
         // Check if the game has reached the end condition
-        if moves < 10 {
+        if round < max_rounds {
             return None; // Game is not yet finished
         }
 
@@ -335,7 +349,6 @@ impl<T: Config> Pallet<T> {
             None // Draw
         };
 
-        // Log game result
         log::debug!(
             "Game ID: {:?}, Blue Count: {}, Red Count: {}, Winner: {:?}",
             game_id,

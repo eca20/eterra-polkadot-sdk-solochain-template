@@ -77,7 +77,7 @@ pub struct MockMaxRounds;
 
 impl Get<u8> for MockMaxRounds {
     fn get() -> u8 {
-        10 // The number of players in the mock setup
+        5 // The number of players in the mock setup
     }
 }
 

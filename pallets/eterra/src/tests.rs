@@ -1,13 +1,13 @@
+use crate::types::game::GameProperties; // Import the GameProperties trait
+use crate::GameStorage;
 use crate::Color;
 use crate::Move;
-use crate::types::game::GameProperties; // Import the GameProperties trait
 use crate::{mock::*, Card};
 use frame_support::{assert_noop, assert_ok};
 use log::{Level, Metadata, Record};
 use sp_core::H256; // Fix: Import H256
 use sp_runtime::traits::{BlakeTwo256, Hash};
 use std::sync::Once;
-
 
 static INIT: Once = Once::new();
 
@@ -347,7 +347,9 @@ fn full_game_simulation() {
             ),
         ];
 
-        for (player, player_move) in &moves {
+        let mut expected_round = 0;
+
+        for (i, (player, player_move)) in moves.iter().enumerate() {
             log::debug!(
                 "Player {} is attempting to play at ({}, {}) with card: {:?}",
                 player,
@@ -355,14 +357,37 @@ fn full_game_simulation() {
                 player_move.place_index_y,
                 player_move.place_card
             );
+
+            // Play the move
             assert_ok!(Eterra::play(
                 frame_system::RawOrigin::Signed(*player).into(),
                 game_id,
                 player_move.clone(),
             ));
+
+            // Check round progression before the game is removed
+            if i % 2 == 1 {
+                expected_round += 1;
+
+                // Fetch the game before it might be removed
+                if let Some(game) = GameStorage::<Test>::get(&game_id) {
+                    let max_rounds = game.max_rounds;
+                    assert_eq!(game.round, expected_round);
+
+                    // Log the current round "of" max_rounds
+                    log::info!(
+                        "Current round: {} of max rounds: {}",
+                        game.round,
+                        max_rounds
+                    );
+                } else {
+                    log::warn!("Game has already been removed from storage.");
+                    break;
+                }
+            }
         }
 
-        // Assert that GameFinished event is emitted
+        // Ensure GameFinished event is emitted without relying on GameStorage
         let events = frame_system::Pallet::<Test>::events();
         let game_finished_event_found = events.iter().any(|record| match record.event {
             RuntimeEvent::Eterra(crate::Event::GameFinished {
@@ -378,6 +403,7 @@ fn full_game_simulation() {
             }
             _ => false,
         });
+
         assert!(
             game_finished_event_found,
             "Expected GameFinished event was not found"
@@ -442,9 +468,7 @@ fn capture_cards_in_all_directions() {
         let (game_id, creator, opponent) = setup_new_game();
 
         // Determine the first player based on the current turn from the pallet
-        let mut current_player = Eterra::game_board(game_id)
-            .unwrap()
-            .get_player_turn();
+        let mut current_player = Eterra::game_board(game_id).unwrap().get_player_turn();
         let mut other_player = if current_player == 0 { 1 } else { 0 };
 
         // Place opponent cards in cardinal directions
@@ -477,7 +501,11 @@ fn capture_cards_in_all_directions() {
             assert_eq!(current_game.get_player_turn(), current_player);
 
             // Play the turn
-            let player_id = if current_player == 0 { creator } else { opponent };
+            let player_id = if current_player == 0 {
+                creator
+            } else {
+                opponent
+            };
             assert_ok!(Eterra::play(
                 frame_system::RawOrigin::Signed(player_id).into(),
                 game_id,
@@ -576,10 +604,8 @@ fn create_game_invalid_number_of_players() {
         let third_player = 3;
 
         // Test with zero players
-        let result_zero_players = Eterra::create_game(
-            frame_system::RawOrigin::Signed(creator).into(),
-            vec![],
-        );
+        let result_zero_players =
+            Eterra::create_game(frame_system::RawOrigin::Signed(creator).into(), vec![]);
         assert_noop!(
             result_zero_players,
             crate::Error::<Test>::InvalidNumberOfPlayers
