@@ -84,26 +84,25 @@ fn invalid_move_on_occupied_cell() {
     init_logger();
     new_test_ext().execute_with(|| {
         let (game_id, creator, opponent) = setup_new_game();
+        let card = Card::new(5, 3, 2, 4);
 
         let player_move = Move {
             place_index_x: 1,
             place_index_y: 1,
+            place_card: card,
         };
 
-        let card = Card::new(5, 3, 2, 4);
-        assert_ok!(Eterra::play_turn(
+        assert_ok!(Eterra::play(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
             player_move.clone(),
-            card.clone()
         ));
 
         // Attempt to play on the same cell
-        let result = Eterra::play_turn(
+        let result = Eterra::play(
             frame_system::RawOrigin::Signed(opponent).into(),
             game_id,
             player_move,
-            card,
         );
 
         assert_noop!(result, crate::Error::<Test>::CellOccupied);
@@ -127,48 +126,49 @@ fn create_game_works() {
 }
 
 #[test]
-fn play_turn_works() {
+fn play_works() {
     init_logger();
     new_test_ext().execute_with(|| {
         let (game_id, creator, opponent) = setup_new_game();
+
+        let card = Card::new(5, 3, 2, 4).with_color(Color::Blue);
 
         // Creator's move
         let creator_move = Move {
             place_index_x: 1,
             place_index_y: 1,
+            place_card: card.clone(),
         };
-        let card = Card::new(5, 3, 2, 4).with_color(Color::Blue);
-        assert_ok!(Eterra::play_turn(
+        assert_ok!(Eterra::play(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
             creator_move.clone(),
-            card.clone()
         ));
 
         let (board, _, _) = Eterra::game_board(game_id).unwrap();
         assert_eq!(
             board[creator_move.place_index_x as usize][creator_move.place_index_y as usize],
-            Some(card)
+            Some(card.clone())
         );
+        let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red);
 
         // Opponent's move
         let opponent_move = Move {
             place_index_x: 1,
             place_index_y: 2,
+            place_card: opponent_card.clone(),
         };
-        let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red);
-        assert_ok!(Eterra::play_turn(
+        assert_ok!(Eterra::play(
             frame_system::RawOrigin::Signed(opponent).into(),
             game_id,
             opponent_move.clone(),
-            opponent_card.clone()
         ));
 
         let (updated_board, _, _) = Eterra::game_board(game_id).unwrap();
         assert_eq!(
             updated_board[opponent_move.place_index_x as usize]
                 [opponent_move.place_index_y as usize],
-            Some(opponent_card)
+            Some(opponent_card.clone())
         );
     });
 }
@@ -179,43 +179,46 @@ fn card_capture_multiple_directions() {
     new_test_ext().execute_with(|| {
         let (game_id, creator, opponent) = setup_new_game();
 
+        let creator_card = Card::new(3, 5, 2, 1).with_color(Color::Blue);
+
         // Creator's first move
         let creator_move = Move {
             place_index_x: 0,
             place_index_y: 0,
+            place_card: creator_card,
         };
-        let creator_card = Card::new(3, 5, 2, 1).with_color(Color::Blue);
-        assert_ok!(Eterra::play_turn(
+        assert_ok!(Eterra::play(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
             creator_move.clone(),
-            creator_card.clone()
         ));
+
+        let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red);
 
         // Opponent's move
         let opponent_move = Move {
             place_index_x: 0,
             place_index_y: 1,
+            place_card: opponent_card,
         };
-        let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red);
-        assert_ok!(Eterra::play_turn(
+        assert_ok!(Eterra::play(
             frame_system::RawOrigin::Signed(opponent).into(),
             game_id,
             opponent_move.clone(),
-            opponent_card.clone()
         ));
+
+        let capturing_card = Card::new(6, 6, 3, 3).with_color(Color::Blue);
 
         // Creator's capturing move
         let capturing_move = Move {
             place_index_x: 0,
             place_index_y: 2,
+            place_card: capturing_card,
         };
-        let capturing_card = Card::new(6, 6, 3, 3).with_color(Color::Blue);
-        assert_ok!(Eterra::play_turn(
+        assert_ok!(Eterra::play(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
             capturing_move.clone(),
-            capturing_card.clone()
         ));
 
         // Validate board state
@@ -232,20 +235,21 @@ fn card_capture_multiple_directions() {
 }
 
 #[test]
-fn play_turn_out_of_bounds_fails() {
+fn play_out_of_bounds_fails() {
     init_logger();
     new_test_ext().execute_with(|| {
         let (game_id, creator, _) = setup_new_game();
+        let card = Card::new(5, 3, 2, 4);
+
         let out_of_bounds_move = Move {
             place_index_x: 5, // Invalid X coordinate
             place_index_y: 1, // Valid Y coordinate
+            place_card: card,
         };
-        let card = Card::new(5, 3, 2, 4);
-        let result = Eterra::play_turn(
+        let result = Eterra::play(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
             out_of_bounds_move,
-            card,
         );
 
         assert_noop!(result, crate::Error::<Test>::InvalidMove);
@@ -264,96 +268,95 @@ fn full_game_simulation() {
                 Move {
                     place_index_x: 0,
                     place_index_y: 0,
+                    place_card: Card::new(5, 3, 2, 4),
                 },
-                Card::new(5, 3, 2, 4),
             ),
             (
                 opponent,
                 Move {
                     place_index_x: 0,
                     place_index_y: 1,
+                    place_card: Card::new(2, 4, 5, 3),
                 },
-                Card::new(2, 4, 5, 3),
             ),
             (
                 creator,
                 Move {
                     place_index_x: 1,
                     place_index_y: 0,
+                    place_card: Card::new(4, 3, 1, 6),
                 },
-                Card::new(4, 3, 1, 6),
             ),
             (
                 opponent,
                 Move {
                     place_index_x: 1,
                     place_index_y: 1,
+                    place_card: Card::new(3, 5, 2, 4),
                 },
-                Card::new(3, 5, 2, 4),
             ),
             (
                 creator,
                 Move {
                     place_index_x: 2,
                     place_index_y: 0,
+                    place_card: Card::new(5, 3, 2, 4),
                 },
-                Card::new(5, 3, 2, 4),
             ),
             (
                 opponent,
                 Move {
                     place_index_x: 2,
                     place_index_y: 1,
+                    place_card: Card::new(2, 4, 5, 3),
                 },
-                Card::new(2, 4, 5, 3),
             ),
             (
                 creator,
                 Move {
                     place_index_x: 3,
                     place_index_y: 0,
+                    place_card: Card::new(4, 3, 1, 6),
                 },
-                Card::new(4, 3, 1, 6),
             ),
             (
                 opponent,
                 Move {
                     place_index_x: 3,
                     place_index_y: 1,
+                    place_card: Card::new(3, 5, 2, 4),
                 },
-                Card::new(3, 5, 2, 4),
             ),
             (
                 creator,
                 Move {
                     place_index_x: 0,
                     place_index_y: 2,
+                    place_card: Card::new(5, 3, 2, 4),
                 },
-                Card::new(5, 3, 2, 4),
             ),
             (
                 opponent,
                 Move {
                     place_index_x: 1,
                     place_index_y: 2,
+                    place_card: Card::new(2, 4, 5, 3),
                 },
-                Card::new(2, 4, 5, 3),
             ),
         ];
 
-        for (player, player_move, card) in &moves {
+        for (player, player_move) in &moves {
             log::debug!(
                 "Player {} is attempting to play at ({}, {}) with card: {:?}",
                 player,
                 player_move.place_index_x,
                 player_move.place_index_y,
-                card
+                player_move.place_card
             );
-            assert_ok!(Eterra::play_turn(
+            assert_ok!(Eterra::play(
                 frame_system::RawOrigin::Signed(*player).into(),
                 game_id,
                 player_move.clone(),
-                card.clone()
             ));
         }
 
@@ -388,31 +391,31 @@ fn play_out_of_turn_fails() {
     new_test_ext().execute_with(|| {
         // Set up a new game
         let (game_id, creator, opponent) = setup_new_game();
+        let card = Card::new(5, 3, 2, 4);
 
         // First turn: the creator plays a card
         let player_move = Move {
             place_index_x: 1,
             place_index_y: 1,
+            place_card: card,
         };
-        let card = Card::new(5, 3, 2, 4);
-        assert_ok!(Eterra::play_turn(
+        assert_ok!(Eterra::play(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
             player_move.clone(),
-            card.clone()
         ));
+        let another_card = Card::new(3, 4, 1, 2);
 
         // Second turn: the creator attempts to play again (out of turn)
         let another_move = Move {
             place_index_x: 1,
             place_index_y: 2,
+            place_card: another_card,
         };
-        let another_card = Card::new(3, 4, 1, 2);
-        let result = Eterra::play_turn(
+        let result = Eterra::play(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
             another_move.clone(),
-            another_card.clone(),
         );
 
         // Assert that the play fails with `NotYourTurn`
@@ -420,11 +423,10 @@ fn play_out_of_turn_fails() {
 
         // Confirm the opponent can play their turn
         let opponent_card = Card::new(2, 4, 5, 3);
-        assert_ok!(Eterra::play_turn(
+        assert_ok!(Eterra::play(
             frame_system::RawOrigin::Signed(opponent).into(),
             game_id,
             another_move,
-            opponent_card
         ));
 
         log::debug!("Test completed: A player cannot play out of turn.");
@@ -446,46 +448,37 @@ fn capture_cards_in_all_directions() {
 
         // Place opponent cards in cardinal directions
         let opponent_cards = vec![
-            (
-                Move {
-                    place_index_x: 0,
-                    place_index_y: 1,
-                },
-                Card::new(2, 4, 5, 3),
-            ), // Top
-            (
-                Move {
-                    place_index_x: 1,
-                    place_index_y: 0,
-                },
-                Card::new(3, 5, 2, 4),
-            ), // Left
-            (
-                Move {
-                    place_index_x: 1,
-                    place_index_y: 2,
-                },
-                Card::new(3, 5, 2, 4),
-            ), // Right
-            (
-                Move {
-                    place_index_x: 2,
-                    place_index_y: 1,
-                },
-                Card::new(2, 4, 5, 3),
-            ), // Bottom
+            (Move {
+                place_index_x: 0,
+                place_index_y: 1,
+                place_card: Card::new(2, 4, 5, 3).with_color(Color::Red),
+            },), // Top
+            (Move {
+                place_index_x: 1,
+                place_index_y: 0,
+                place_card: Card::new(3, 5, 2, 4).with_color(Color::Red),
+            },), // Left
+            (Move {
+                place_index_x: 1,
+                place_index_y: 2,
+                place_card: Card::new(3, 5, 2, 4).with_color(Color::Red),
+            },), // Right
+            (Move {
+                place_index_x: 2,
+                place_index_y: 1,
+                place_card: Card::new(2, 4, 5, 3).with_color(Color::Red),
+            },), // Bottom
         ];
 
-        for (player_move, card) in opponent_cards {
+        for player_move in opponent_cards {
             // Ensure the current player matches the expected player
             assert_eq!(Eterra::current_turn(game_id).unwrap(), current_player);
 
             // Play the turn
-            assert_ok!(Eterra::play_turn(
+            assert_ok!(Eterra::play(
                 frame_system::RawOrigin::Signed(current_player).into(),
                 game_id,
-                player_move.clone(),
-                card.with_color(Color::Red)
+                player_move.0.clone(),
             ));
 
             // Alternate the players for the next move
@@ -497,15 +490,15 @@ fn capture_cards_in_all_directions() {
         let capturing_move = Move {
             place_index_x: 1,
             place_index_y: 1,
+            place_card: capturing_card,
         };
 
         // Ensure it's the creator's turn (or the current player determined by the pallet)
         assert_eq!(Eterra::current_turn(game_id).unwrap(), creator);
-        assert_ok!(Eterra::play_turn(
+        assert_ok!(Eterra::play(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
             capturing_move,
-            capturing_card
         ));
 
         // Validate board state
@@ -538,17 +531,17 @@ fn invalid_game_id_fails() {
     new_test_ext().execute_with(|| {
         // Generate a random game ID that does not exist
         let invalid_game_id = H256::random();
+        let card = Card::new(5, 3, 2, 4);
         let invalid_move = Move {
             place_index_x: 0,
             place_index_y: 0,
+            place_card: card,
         };
         // Attempt to play a turn with the invalid game ID
-        let card = Card::new(5, 3, 2, 4);
-        let result = Eterra::play_turn(
+        let result = Eterra::play(
             frame_system::RawOrigin::Signed(1).into(),
             invalid_game_id,
             invalid_move,
-            card.clone(),
         );
 
         // Assert that the call fails with the `GameNotFound` error

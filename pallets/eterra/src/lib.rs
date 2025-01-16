@@ -11,10 +11,10 @@ mod tests;
 mod types;
 
 // Publicly re-export the Card and Color types for usage in other files
+pub use crate::types::GameId;
 pub use types::board::Board;
 pub use types::card::{Card, Color};
 pub use types::game::*;
-pub use crate::types::GameId;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -89,7 +89,10 @@ pub mod pallet {
             game_id: GameId<T>,
             next_player: AccountIdOf<T>,
         },
-        TurnForceFinished { game_id: GameId<T>, player: AccountIdOf<T> },
+        TurnForceFinished {
+            game_id: GameId<T>,
+            player: AccountIdOf<T>,
+        },
     }
 
     #[pallet::error]
@@ -149,6 +152,7 @@ pub mod pallet {
                     .clone()
                     .try_into()
                     .map_err(|_| Error::<T>::InternalError)?,
+                player_turn: 0,
                 round: 0,
                 max_rounds: T::MaxRounds::get(),
             };
@@ -163,19 +167,13 @@ pub mod pallet {
 
             //GameStorage::<T>::set(game_id, Some(game));
 
-
             Self::deposit_event(Event::GameCreated { game_id });
 
             Ok(())
         }
         #[pallet::call_index(1)]
         #[pallet::weight(10_000)]
-        pub fn play_turn(
-            origin: OriginFor<T>,
-            game_id: GameId<T>,
-            player_move: Move,
-            card: Card,
-        ) -> DispatchResult {
+        pub fn play(origin: OriginFor<T>, game_id: GameId<T>, player_move: Move) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
             log::debug!(
@@ -213,17 +211,20 @@ pub mod pallet {
             };
 
             // Place the card with the current player's color
-            let placed_card = card.clone().with_color(current_color.clone());
+            let placed_card = player_move
+                .place_card
+                .clone()
+                .with_color(current_color.clone());
             board[player_move.place_index_x as usize][player_move.place_index_y as usize] =
                 Some(placed_card.clone());
 
             log::debug!("Board updated before capture: {:?}", board);
 
             for &(dx, dy, opposing_rank) in &[
-                (0, -1, card.top),   // Top
-                (1, 0, card.right),  // Right
-                (0, 1, card.bottom), // Bottom
-                (-1, 0, card.left),  // Left
+                (0, -1, player_move.place_card.top),   // Top
+                (1, 0, player_move.place_card.right),  // Right
+                (0, 1, player_move.place_card.bottom), // Bottom
+                (-1, 0, player_move.place_card.left),  // Left
             ] {
                 let nx = player_move.place_index_x as isize + dx;
                 let ny = player_move.place_index_y as isize + dy;
@@ -303,7 +304,6 @@ pub mod pallet {
 
 // Helper methods
 impl<T: Config> Pallet<T> {
-
     fn is_game_won(
         game_id: &GameId<T>,
         board: &Board,
