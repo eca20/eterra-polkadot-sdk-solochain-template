@@ -1,3 +1,4 @@
+use crate::types::board::Board;
 use crate::types::card::Card;
 use frame_support::BoundedVec;
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen}; // For Encode, Decode, MaxEncodedLen
@@ -28,18 +29,24 @@ pub trait GameProperties<Account, NumPlayers> {
     fn next_turn(&mut self);
 }
 
-#[derive(Encode, Decode, TypeInfo, MaxEncodedLen)]
-pub struct Game<Account, BlockNumber, NumPlayers> {
+#[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone)]
+pub struct Game<Account, BlockNumber, NumPlayers>
+where
+    NumPlayers: Clone, // Add this bound
+{
     pub state: GameState,
     pub last_played_block: BlockNumber,
     pub players: Players<Account, NumPlayers>, // Player AccountIds
     pub player_turn: u8,                       // Current player's turn (0 or 1)
     pub round: u8,                             // Current round number
     pub max_rounds: u8,                        // Maximum number of rounds
+    pub board: Board,
 }
 
 impl<Account, BlockNumber, NumPlayers> GameProperties<Account, NumPlayers>
     for Game<Account, BlockNumber, NumPlayers>
+where
+    NumPlayers: Clone, // Add this bound
 {
     fn get_round(&self) -> u8 {
         self.round

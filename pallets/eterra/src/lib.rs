@@ -38,7 +38,7 @@ pub mod pallet {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
         // Maximum number of players that can join a single game
         #[pallet::constant]
-        type NumPlayers: Get<u32>;
+        type NumPlayers: Get<u32> + Clone + TypeInfo;
         #[pallet::constant]
         type MaxRounds: Get<u8>;
     }
@@ -49,7 +49,7 @@ pub mod pallet {
         _, // Explicit prefix using the pallet type
         Blake2_128Concat,
         GameId<T>,
-        (Board, T::AccountId, T::AccountId), // Store the board and both players
+        Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>, // Store the complete game struct
     >;
 
     #[pallet::storage]
@@ -59,10 +59,6 @@ pub mod pallet {
     #[pallet::storage]
     #[pallet::getter(fn moves_played)]
     pub type MovesPlayed<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, u8>;
-
-    #[pallet::storage]
-    #[pallet::getter(fn current_turn)]
-    pub type CurrentTurn<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, T::AccountId>;
 
     #[pallet::storage]
     #[pallet::getter(fn scores)]
@@ -135,8 +131,6 @@ pub mod pallet {
             );
 
             let initial_board: Board = Default::default();
-            GameStorage::<T>::insert(&game_id, (initial_board, creator.clone(), opponent.clone()));
-
             // Randomly determine the first turn
             let first_turn = if sp_io::hashing::blake2_128(&creator.encode())[0] % 2 == 0 {
                 creator.clone()
@@ -155,13 +149,22 @@ pub mod pallet {
                 player_turn: 0,
                 round: 0,
                 max_rounds: T::MaxRounds::get(),
+                board: initial_board.clone(),
             };
 
+            GameStorage::<T>::insert(&game_id, game.clone());
             // Assign colors
             let player_colors = (Color::Blue, Color::Red);
             PlayerColors::<T>::insert(&game_id, player_colors);
 
-            CurrentTurn::<T>::insert(&game_id, first_turn);
+            // Use set_player_turn instead
+            game.set_player_turn(
+                if sp_io::hashing::blake2_128(&creator.encode())[0] % 2 == 0 {
+                    0 // Player 0 starts
+                } else {
+                    1 // Player 1 starts
+                },
+            );
 
             Scores::<T>::insert(&game_id, (0, 0));
 
@@ -183,43 +186,40 @@ pub mod pallet {
                 player_move
             );
 
-            ensure!(
-                GameStorage::<T>::contains_key(&game_id),
-                Error::<T>::GameNotFound
-            );
-            let (mut board, creator, opponent) = GameStorage::<T>::get(&game_id).unwrap();
-            let current_turn = CurrentTurn::<T>::get(&game_id).unwrap();
-            let player_colors = PlayerColors::<T>::get(&game_id).unwrap();
+            let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
 
-            log::debug!("Current turn belongs to: {:?}", current_turn);
+            let current_turn_index = game.get_player_turn();
+            let current_turn = game.players[current_turn_index as usize].clone();
 
             ensure!(current_turn == who, Error::<T>::NotYourTurn);
+
             ensure!(
                 player_move.place_index_x < 4 && player_move.place_index_y < 4,
                 Error::<T>::InvalidMove
             );
+
             ensure!(
-                board[player_move.place_index_x as usize][player_move.place_index_y as usize]
+                game.board[player_move.place_index_x as usize][player_move.place_index_y as usize]
                     .is_none(),
                 Error::<T>::CellOccupied
             );
 
-            let current_color = if who == creator {
+            let player_colors = PlayerColors::<T>::get(&game_id).unwrap();
+            let current_color = if who == game.players[0] {
                 player_colors.0.clone()
             } else {
                 player_colors.1.clone()
             };
 
-            // Place the card with the current player's color
+            // Place the card
             let placed_card = player_move
                 .place_card
                 .clone()
                 .with_color(current_color.clone());
-            board[player_move.place_index_x as usize][player_move.place_index_y as usize] =
+            game.board[player_move.place_index_x as usize][player_move.place_index_y as usize] =
                 Some(placed_card.clone());
 
-            log::debug!("Board updated before capture: {:?}", board);
-
+            // Capture logic
             for &(dx, dy, opposing_rank) in &[
                 (0, -1, player_move.place_card.top),   // Top
                 (1, 0, player_move.place_card.right),  // Right
@@ -229,7 +229,7 @@ pub mod pallet {
                 let nx = player_move.place_index_x as isize + dx;
                 let ny = player_move.place_index_y as isize + dy;
                 if nx >= 0 && nx < 4 && ny >= 0 && ny < 4 {
-                    if let Some(mut opposing_card) = board[nx as usize][ny as usize].clone() {
+                    if let Some(mut opposing_card) = game.board[nx as usize][ny as usize].clone() {
                         let rank = match (dx, dy) {
                             (0, -1) => opposing_card.bottom,
                             (1, 0) => opposing_card.left,
@@ -238,30 +238,27 @@ pub mod pallet {
                             _ => 0,
                         };
                         if opposing_rank > rank {
-                            // Capture card
                             log::debug!("Captured card at ({}, {})", nx, ny);
                             opposing_card.color = Some(current_color.clone());
-                            board[nx as usize][ny as usize] = Some(opposing_card);
+                            game.board[nx as usize][ny as usize] = Some(opposing_card);
                         }
                     }
                 }
             }
-
-            log::debug!("Board updated after capture: {:?}", board);
-
-            // Save the updated board state
-            GameStorage::<T>::insert(&game_id, (board.clone(), creator.clone(), opponent.clone()));
 
             // Update move counter
             let mut moves = MovesPlayed::<T>::get(&game_id).unwrap_or(0);
             moves += 1;
             MovesPlayed::<T>::insert(&game_id, moves);
 
-            log::debug!("Total moves played: {:?}", moves);
-
             // Check if the game is won
-            if let Some(winner) = Self::is_game_won(&game_id, &board, &creator, &opponent, moves) {
-                // Emit game finished event
+            if let Some(winner) = Self::is_game_won(
+                &game_id,
+                &game.board,
+                &game.players[0],
+                &game.players[1],
+                moves,
+            ) {
                 Self::deposit_event(Event::GameFinished {
                     game_id,
                     winner: winner.clone(),
@@ -269,27 +266,24 @@ pub mod pallet {
 
                 log::debug!("Game finished. Winner: {:?}", winner);
 
-                // Remove game data
                 GameStorage::<T>::remove(&game_id);
-                CurrentTurn::<T>::remove(&game_id);
                 Scores::<T>::remove(&game_id);
                 MovesPlayed::<T>::remove(&game_id);
 
-                return Ok(()); // Return early since the game has ended
+                return Ok(());
             }
 
-            // Update turn
-            let next_turn = if current_turn == creator {
-                opponent.clone()
-            } else {
-                creator.clone()
-            };
+            // Update to the next turn
+            game.next_turn();
 
-            CurrentTurn::<T>::insert(&game_id, next_turn.clone());
+            // Save the updated game
+            GameStorage::<T>::insert(&game_id, game.clone());
 
-            log::debug!("Next turn belongs to: {:?}", next_turn);
+            log::debug!(
+                "Next turn belongs to: {:?}",
+                game.players[game.get_player_turn() as usize]
+            );
 
-            // Emit event for the turn played
             Self::deposit_event(Event::MovePlayed {
                 game_id,
                 player: who.clone(),

@@ -1,11 +1,13 @@
 use crate::Color;
 use crate::Move;
+use crate::types::game::GameProperties; // Import the GameProperties trait
 use crate::{mock::*, Card};
 use frame_support::{assert_noop, assert_ok};
 use log::{Level, Metadata, Record};
 use sp_core::H256; // Fix: Import H256
 use sp_runtime::traits::{BlakeTwo256, Hash};
 use std::sync::Once;
+
 
 static INIT: Once = Once::new();
 
@@ -46,10 +48,10 @@ fn setup_new_game() -> (H256, u64, u64) {
     // Get the current block number
     let current_block_number = <frame_system::Pallet<Test>>::block_number();
 
-    // Calculate game_id using the new logic
+    // Calculate game_id using the hashing function
     let game_id = BlakeTwo256::hash_of(&(creator, opponent, current_block_number));
 
-    // Create the game
+    // Create the game with two players
     assert_ok!(Eterra::create_game(
         frame_system::RawOrigin::Signed(creator).into(),
         vec![creator, opponent],
@@ -115,16 +117,15 @@ fn create_game_works() {
     new_test_ext().execute_with(|| {
         let (game_id, creator, opponent) = setup_new_game();
 
-        let (board, game_creator, game_opponent) = Eterra::game_board(game_id).unwrap();
-        let current_turn = Eterra::current_turn(game_id).unwrap();
+        let game = Eterra::game_board(game_id).unwrap();
+        let current_turn = game.players[game.player_turn as usize].clone();
 
-        assert_eq!(game_creator, creator);
-        assert_eq!(game_opponent, opponent);
+        assert_eq!(game.players[0], creator);
+        assert_eq!(game.players[1], opponent);
         assert!(current_turn == creator || current_turn == opponent);
-        assert!(board.iter().flatten().all(|cell| cell.is_none())); // Verify empty board
+        assert!(game.board.iter().flatten().all(|cell| cell.is_none())); // Verify empty board
     });
 }
-
 #[test]
 fn play_works() {
     init_logger();
@@ -145,11 +146,12 @@ fn play_works() {
             creator_move.clone(),
         ));
 
-        let (board, _, _) = Eterra::game_board(game_id).unwrap();
+        let game = Eterra::game_board(game_id).unwrap(); // Fetch the updated game
         assert_eq!(
-            board[creator_move.place_index_x as usize][creator_move.place_index_y as usize],
+            game.board[creator_move.place_index_x as usize][creator_move.place_index_y as usize],
             Some(card.clone())
         );
+
         let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red);
 
         // Opponent's move
@@ -164,9 +166,9 @@ fn play_works() {
             opponent_move.clone(),
         ));
 
-        let (updated_board, _, _) = Eterra::game_board(game_id).unwrap();
+        let updated_game = Eterra::game_board(game_id).unwrap(); // Fetch the game after the opponent's move
         assert_eq!(
-            updated_board[opponent_move.place_index_x as usize]
+            updated_game.board[opponent_move.place_index_x as usize]
                 [opponent_move.place_index_y as usize],
             Some(opponent_card.clone())
         );
@@ -222,13 +224,13 @@ fn card_capture_multiple_directions() {
         ));
 
         // Validate board state
-        let (board, _, _) = Eterra::game_board(game_id).unwrap();
+        let game = Eterra::game_board(game_id).unwrap(); // Fetch the updated game
         assert_eq!(
-            board[0][1].as_ref().unwrap().get_color(),
+            game.board[0][1].as_ref().unwrap().get_color(),
             Some(&Color::Blue)
         );
         assert_eq!(
-            board[0][2].as_ref().unwrap().get_color(),
+            game.board[0][2].as_ref().unwrap().get_color(),
             Some(&Color::Blue)
         ); // Captured card
     });
@@ -435,50 +437,51 @@ fn play_out_of_turn_fails() {
 
 #[test]
 fn capture_cards_in_all_directions() {
+    init_logger();
     new_test_ext().execute_with(|| {
         let (game_id, creator, opponent) = setup_new_game();
 
         // Determine the first player based on the current turn from the pallet
-        let mut current_player = Eterra::current_turn(game_id).unwrap();
-        let mut other_player = if current_player == creator {
-            opponent
-        } else {
-            creator
-        };
+        let mut current_player = Eterra::game_board(game_id)
+            .unwrap()
+            .get_player_turn();
+        let mut other_player = if current_player == 0 { 1 } else { 0 };
 
         // Place opponent cards in cardinal directions
         let opponent_cards = vec![
-            (Move {
+            Move {
                 place_index_x: 0,
                 place_index_y: 1,
                 place_card: Card::new(2, 4, 5, 3).with_color(Color::Red),
-            },), // Top
-            (Move {
+            }, // Top
+            Move {
                 place_index_x: 1,
                 place_index_y: 0,
                 place_card: Card::new(3, 5, 2, 4).with_color(Color::Red),
-            },), // Left
-            (Move {
+            }, // Left
+            Move {
                 place_index_x: 1,
                 place_index_y: 2,
                 place_card: Card::new(3, 5, 2, 4).with_color(Color::Red),
-            },), // Right
-            (Move {
+            }, // Right
+            Move {
                 place_index_x: 2,
                 place_index_y: 1,
                 place_card: Card::new(2, 4, 5, 3).with_color(Color::Red),
-            },), // Bottom
+            }, // Bottom
         ];
 
         for player_move in opponent_cards {
             // Ensure the current player matches the expected player
-            assert_eq!(Eterra::current_turn(game_id).unwrap(), current_player);
+            let current_game = Eterra::game_board(game_id).unwrap();
+            assert_eq!(current_game.get_player_turn(), current_player);
 
             // Play the turn
+            let player_id = if current_player == 0 { creator } else { opponent };
             assert_ok!(Eterra::play(
-                frame_system::RawOrigin::Signed(current_player).into(),
+                frame_system::RawOrigin::Signed(player_id).into(),
                 game_id,
-                player_move.0.clone(),
+                player_move.clone(),
             ));
 
             // Alternate the players for the next move
@@ -493,39 +496,40 @@ fn capture_cards_in_all_directions() {
             place_card: capturing_card,
         };
 
-        // Ensure it's the creator's turn (or the current player determined by the pallet)
-        assert_eq!(Eterra::current_turn(game_id).unwrap(), creator);
+        // Ensure it's the creator's turnclear
+
+        let game = Eterra::game_board(game_id).unwrap();
+        assert_eq!(game.get_player_turn(), 0); // Creator's turn is 0
         assert_ok!(Eterra::play(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
-            capturing_move,
+            capturing_move.clone(),
         ));
 
         // Validate board state
-        let (board, _, _) = Eterra::game_board(game_id).unwrap();
+        let updated_game = Eterra::game_board(game_id).unwrap();
         assert_eq!(
-            board[1][1].as_ref().unwrap().get_color(),
+            updated_game.board[1][1].as_ref().unwrap().get_color(),
             Some(&Color::Blue)
         );
         assert_eq!(
-            board[0][1].as_ref().unwrap().get_color(),
+            updated_game.board[0][1].as_ref().unwrap().get_color(),
             Some(&Color::Blue)
         );
         assert_eq!(
-            board[1][0].as_ref().unwrap().get_color(),
+            updated_game.board[1][0].as_ref().unwrap().get_color(),
             Some(&Color::Blue)
         );
         assert_eq!(
-            board[1][2].as_ref().unwrap().get_color(),
+            updated_game.board[1][2].as_ref().unwrap().get_color(),
             Some(&Color::Blue)
         );
         assert_eq!(
-            board[2][1].as_ref().unwrap().get_color(),
+            updated_game.board[2][1].as_ref().unwrap().get_color(),
             Some(&Color::Blue)
         );
     });
 }
-
 #[test]
 fn invalid_game_id_fails() {
     new_test_ext().execute_with(|| {
@@ -574,7 +578,7 @@ fn create_game_invalid_number_of_players() {
         // Test with zero players
         let result_zero_players = Eterra::create_game(
             frame_system::RawOrigin::Signed(creator).into(),
-            vec![], // Empty player list
+            vec![],
         );
         assert_noop!(
             result_zero_players,
@@ -584,27 +588,27 @@ fn create_game_invalid_number_of_players() {
         // Test with one player
         let result_one_player = Eterra::create_game(
             frame_system::RawOrigin::Signed(creator).into(),
-            vec![creator], // Only one player
+            vec![creator],
         );
         assert_noop!(
             result_one_player,
             crate::Error::<Test>::InvalidNumberOfPlayers
         );
 
-        // Test with three players (more than allowed)
+        // Test with three players
         let result_three_players = Eterra::create_game(
             frame_system::RawOrigin::Signed(creator).into(),
-            vec![creator, opponent, third_player], // More than allowed players
+            vec![creator, opponent, third_player],
         );
         assert_noop!(
             result_three_players,
             crate::Error::<Test>::InvalidNumberOfPlayers
         );
 
-        // Ensure that valid number of players works as expected
+        // Valid two-player game
         let result_two_players = Eterra::create_game(
             frame_system::RawOrigin::Signed(creator).into(),
-            vec![creator, opponent], // Valid player count
+            vec![creator, opponent],
         );
         assert_ok!(result_two_players);
     });
