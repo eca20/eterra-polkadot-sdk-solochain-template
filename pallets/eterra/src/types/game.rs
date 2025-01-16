@@ -1,8 +1,8 @@
 use crate::types::board::Board;
-use crate::types::card::Card;
 use frame_support::BoundedVec;
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen}; // For Encode, Decode, MaxEncodedLen
 use scale_info::TypeInfo; // For TypeInfo
+use crate::types::card::{Card, Color};
 
 // Define `Players` type alias
 pub type Players<Account, NumPlayers> = BoundedVec<Account, NumPlayers>;
@@ -41,6 +41,8 @@ where
     pub round: u8,                             // Current round number
     pub max_rounds: u8,                        // Maximum number of rounds
     pub board: Board,
+    pub scores: (u8, u8),              // Scores for each player
+    pub player_colors: (Color, Color), // Colors assigned to players
 }
 
 impl<Account, BlockNumber, NumPlayers> GameProperties<Account, NumPlayers>

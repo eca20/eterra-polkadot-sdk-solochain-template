@@ -15,7 +15,7 @@ pub use crate::types::GameId;
 pub use types::board::Board;
 pub use types::card::{Card, Color};
 pub use types::game::*;
-
+use frame_system::pallet_prelude::BlockNumberFor;
 #[frame_support::pallet]
 pub mod pallet {
     use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
@@ -51,14 +51,6 @@ pub mod pallet {
         GameId<T>,
         Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>, // Store the complete game struct
     >;
-
-    #[pallet::storage]
-    #[pallet::getter(fn player_colors)]
-    pub type PlayerColors<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, (Color, Color)>;
-
-    #[pallet::storage]
-    #[pallet::getter(fn scores)]
-    pub type Scores<T: Config> = StorageMap<_, Blake2_128Concat, T::Hash, (u8, u8)>;
 
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -134,7 +126,9 @@ pub mod pallet {
                 opponent.clone()
             };
 
-            // Default Game Config
+            let initial_scores = (5, 5); // Each player starts with 5 points for their unplayed cards
+            let player_colors = (Color::Blue, Color::Red);
+
             let mut game: Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> = Game {
                 state: GameState::Playing,
                 last_played_block: current_block_number,
@@ -146,12 +140,13 @@ pub mod pallet {
                 round: 0,
                 max_rounds: T::MaxRounds::get(),
                 board: initial_board.clone(),
+                scores: initial_scores,
+                player_colors,
             };
 
             GameStorage::<T>::insert(&game_id, game.clone());
             // Assign colors
             let player_colors = (Color::Blue, Color::Red);
-            PlayerColors::<T>::insert(&game_id, player_colors);
 
             // Use set_player_turn instead
             game.set_player_turn(
@@ -162,14 +157,11 @@ pub mod pallet {
                 },
             );
 
-            Scores::<T>::insert(&game_id, (0, 0));
-
-            //GameStorage::<T>::set(game_id, Some(game));
-
             Self::deposit_event(Event::GameCreated { game_id });
 
             Ok(())
         }
+
         #[pallet::call_index(1)]
         #[pallet::weight(10_000)]
         pub fn play(origin: OriginFor<T>, game_id: GameId<T>, player_move: Move) -> DispatchResult {
@@ -200,11 +192,10 @@ pub mod pallet {
                 Error::<T>::CellOccupied
             );
 
-            let player_colors = PlayerColors::<T>::get(&game_id).unwrap();
             let current_color = if who == game.players[0] {
-                player_colors.0.clone()
+                game.player_colors.0.clone()
             } else {
-                player_colors.1.clone()
+                game.player_colors.1.clone()
             };
 
             // Place the card
@@ -235,6 +226,22 @@ pub mod pallet {
                         };
                         if opposing_rank > rank {
                             log::debug!("Captured card at ({}, {})", nx, ny);
+
+                            // Update scores
+                            if let Some(color) = opposing_card.color {
+                                if color == game.player_colors.0 {
+                                    game.scores.0 = game.scores.0.saturating_sub(1);
+                                } else if color == game.player_colors.1 {
+                                    game.scores.1 = game.scores.1.saturating_sub(1);
+                                }
+                            }
+                            if current_color == game.player_colors.0 {
+                                game.scores.0 = game.scores.0.saturating_add(1);
+                            } else {
+                                game.scores.1 = game.scores.1.saturating_add(1);
+                            }
+
+                            // Change ownership of the card
                             opposing_card.color = Some(current_color.clone());
                             game.board[nx as usize][ny as usize] = Some(opposing_card);
                         }
@@ -243,14 +250,7 @@ pub mod pallet {
             }
 
             // Check if the game is won
-            if let Some(winner) = Self::is_game_won(
-                &game_id,
-                &game.board,
-                &game.players[0],
-                &game.players[1],
-                game.round,
-                game.max_rounds
-            ) {
+            if let Some(winner) = Self::is_game_won(&game_id, &game) {
                 Self::deposit_event(Event::GameFinished {
                     game_id,
                     winner: winner.clone(),
@@ -259,7 +259,6 @@ pub mod pallet {
                 log::debug!("Game finished. Winner: {:?}", winner);
 
                 GameStorage::<T>::remove(&game_id);
-                Scores::<T>::remove(&game_id);
 
                 return Ok(());
             }
@@ -268,14 +267,7 @@ pub mod pallet {
             game.next_turn();
 
             // Check if the game is won after updating the round
-            if let Some(winner) = Self::is_game_won(
-                &game_id,
-                &game.board,
-                &game.players[0],
-                &game.players[1],
-                game.round,
-                game.max_rounds
-            ) {
+            if let Some(winner) = Self::is_game_won(&game_id, &game) {
                 Self::deposit_event(Event::GameFinished {
                     game_id,
                     winner: winner.clone(),
@@ -284,7 +276,6 @@ pub mod pallet {
                 log::debug!("Game finished. Winner: {:?}", winner);
 
                 GameStorage::<T>::remove(&game_id);
-                Scores::<T>::remove(&game_id);
 
                 return Ok(());
             }
@@ -313,50 +304,29 @@ pub mod pallet {
 impl<T: Config> Pallet<T> {
     fn is_game_won(
         game_id: &GameId<T>,
-        board: &Board,
-        creator: &T::AccountId,
-        opponent: &T::AccountId,
-        round: u8,
-        max_rounds: u8
+        game: &Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
     ) -> Option<Option<T::AccountId>> {
-        // Check if the game has reached the end condition
-        if round < max_rounds {
+        if game.round < game.max_rounds {
             return None; // Game is not yet finished
         }
 
-        // Count cards of each color
-        let mut blue_count = 0;
-        let mut red_count = 0;
-
-        for row in board {
-            for cell in row {
-                if let Some(card) = cell {
-                    match card.color {
-                        Some(Color::Blue) => blue_count += 1,
-                        Some(Color::Red) => red_count += 1,
-                        None => {}
-                    }
-                }
-            }
-        }
-
-        // Determine the winner
-        let winner = if blue_count > red_count {
-            Some(creator.clone())
-        } else if red_count > blue_count {
-            Some(opponent.clone())
+        // Determine the winner using scores
+        let (score_player_0, score_player_1) = game.scores;
+        let winner = if score_player_0 > score_player_1 {
+            Some(game.players[0].clone())
+        } else if score_player_1 > score_player_0 {
+            Some(game.players[1].clone())
         } else {
             None // Draw
         };
 
         log::debug!(
-            "Game ID: {:?}, Blue Count: {}, Red Count: {}, Winner: {:?}",
+            "Game ID: {:?}, Scores: {:?}, Winner: {:?}",
             game_id,
-            blue_count,
-            red_count,
+            game.scores,
             winner
         );
 
-        Some(winner) // Return wrapped winner to indicate game is finished
+        Some(winner)
     }
 }

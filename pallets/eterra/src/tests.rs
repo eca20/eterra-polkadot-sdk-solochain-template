@@ -1,6 +1,6 @@
 use crate::types::game::GameProperties; // Import the GameProperties trait
-use crate::GameStorage;
 use crate::Color;
+use crate::GameStorage;
 use crate::Move;
 use crate::{mock::*, Card};
 use frame_support::{assert_noop, assert_ok};
