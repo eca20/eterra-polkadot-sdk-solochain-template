@@ -77,24 +77,12 @@ where
     }
 
     fn next_turn(&mut self) {
-        // Switch the turn between player 0 and player 1
-        let next_player_turn = match self.get_player_turn() {
-            0 => 1,
-            1 => 0,
-            _ => 0, // Default to player 0 if the turn is somehow invalid
-        };
+        // Switch turn
+        self.player_turn = (self.player_turn + 1) % 2;
 
-        self.set_player_turn(next_player_turn);
-
-        // Increment the round if we've switched back to player 0
-        if next_player_turn == 0 {
-            let round = self.get_round() + 1;
-            self.set_round(round);
-
-            // Check if max rounds have been reached
-            if round > self.max_rounds {
-                self.set_state(GameState::Finished { winner: None });
-            }
+        // Increment round only when player_turn wraps back to 0
+        if self.player_turn == 0 {
+            self.round += 1;
         }
     }
 }
