@@ -639,3 +639,247 @@ fn create_game_invalid_number_of_players() {
         assert_ok!(result_two_players);
     });
 }
+
+#[test]
+fn game_winner_is_correctly_emitted() {
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+
+        // Strategic moves: Player 0 (creator) will win
+        let moves = vec![
+            (
+                creator,
+                Move {
+                    place_index_x: 0,
+                    place_index_y: 0,
+                    place_card: Card::new(5, 3, 2, 4), // Strong card for Player 0
+                },
+            ),
+            (
+                opponent,
+                Move {
+                    place_index_x: 0,
+                    place_index_y: 1,
+                    place_card: Card::new(2, 2, 2, 2), // Weak card for Player 1
+                },
+            ),
+            (
+                creator,
+                Move {
+                    place_index_x: 1,
+                    place_index_y: 0,
+                    place_card: Card::new(6, 6, 6, 6), // Strong card for Player 0
+                },
+            ),
+            (
+                opponent,
+                Move {
+                    place_index_x: 1,
+                    place_index_y: 1,
+                    place_card: Card::new(3, 3, 3, 3), // Moderate card for Player 1
+                },
+            ),
+            (
+                creator,
+                Move {
+                    place_index_x: 2,
+                    place_index_y: 0,
+                    place_card: Card::new(4, 3, 4, 3), // Strong card for Player 0
+                },
+            ),
+            (
+                opponent,
+                Move {
+                    place_index_x: 2,
+                    place_index_y: 1,
+                    place_card: Card::new(2, 4, 2, 4), // Weak card for Player 1
+                },
+            ),
+            (
+                creator,
+                Move {
+                    place_index_x: 3,
+                    place_index_y: 0,
+                    place_card: Card::new(5, 5, 5, 5), // Strong card for Player 0
+                },
+            ),
+            (
+                opponent,
+                Move {
+                    place_index_x: 3,
+                    place_index_y: 1,
+                    place_card: Card::new(1, 1, 1, 1), // Weak card for Player 1
+                },
+            ),
+            (
+                creator,
+                Move {
+                    place_index_x: 0,
+                    place_index_y: 2,
+                    place_card: Card::new(6, 4, 6, 4), // Strong card for Player 0
+                },
+            ),
+            (
+                opponent,
+                Move {
+                    place_index_x: 1,
+                    place_index_y: 2,
+                    place_card: Card::new(2, 2, 2, 2), // Weak card for Player 1
+                },
+            ),
+        ];
+
+        // Play the game
+        for (player, player_move) in moves.iter() {
+            assert_ok!(Eterra::play(
+                frame_system::RawOrigin::Signed(*player).into(),
+                game_id,
+                player_move.clone(),
+            ));
+        }
+
+        // Check if the GameFinished event is emitted
+        let events = frame_system::Pallet::<Test>::events();
+        let game_finished_event_found = events.iter().any(|record| match &record.event {
+            RuntimeEvent::Eterra(crate::Event::GameFinished {
+                game_id: event_game_id,
+                winner: event_winner,
+            }) => {
+                assert_eq!(*event_game_id, game_id);
+                assert_eq!(*event_winner, Some(creator)); // Player 0 should win
+                true
+            }
+            _ => false,
+        });
+
+        assert!(
+            game_finished_event_found,
+            "Expected GameFinished event was not found"
+        );
+
+        log::info!("Game winner is correctly emitted as Player 0.");
+    });
+}
+
+#[test]
+fn exceeding_max_moves_emits_error() {
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+
+        // 10 valid moves to complete the game
+        let moves = vec![
+            (
+                creator,
+                Move {
+                    place_index_x: 0,
+                    place_index_y: 0,
+                    place_card: Card::new(5, 3, 2, 4),
+                },
+            ),
+            (
+                opponent,
+                Move {
+                    place_index_x: 0,
+                    place_index_y: 1,
+                    place_card: Card::new(2, 2, 2, 2),
+                },
+            ),
+            (
+                creator,
+                Move {
+                    place_index_x: 1,
+                    place_index_y: 0,
+                    place_card: Card::new(6, 6, 6, 6),
+                },
+            ),
+            (
+                opponent,
+                Move {
+                    place_index_x: 1,
+                    place_index_y: 1,
+                    place_card: Card::new(3, 3, 3, 3),
+                },
+            ),
+            (
+                creator,
+                Move {
+                    place_index_x: 2,
+                    place_index_y: 0,
+                    place_card: Card::new(4, 3, 4, 3),
+                },
+            ),
+            (
+                opponent,
+                Move {
+                    place_index_x: 2,
+                    place_index_y: 1,
+                    place_card: Card::new(2, 4, 2, 4),
+                },
+            ),
+            (
+                creator,
+                Move {
+                    place_index_x: 3,
+                    place_index_y: 0,
+                    place_card: Card::new(5, 5, 5, 5),
+                },
+            ),
+            (
+                opponent,
+                Move {
+                    place_index_x: 3,
+                    place_index_y: 1,
+                    place_card: Card::new(1, 1, 1, 1),
+                },
+            ),
+            (
+                creator,
+                Move {
+                    place_index_x: 0,
+                    place_index_y: 2,
+                    place_card: Card::new(6, 4, 6, 4),
+                },
+            ),
+            (
+                opponent,
+                Move {
+                    place_index_x: 1,
+                    place_index_y: 2,
+                    place_card: Card::new(2, 2, 2, 2),
+                },
+            ),
+        ];
+
+        // Play all 10 moves
+        for (player, player_move) in moves.iter() {
+            assert_ok!(Eterra::play(
+                frame_system::RawOrigin::Signed(*player).into(),
+                game_id,
+                player_move.clone(),
+            ));
+        }
+
+        // Attempt an 11th move
+        let extra_move = Move {
+            place_index_x: 2,
+            place_index_y: 2,
+            place_card: Card::new(5, 5, 5, 5),
+        };
+        let result = Eterra::play(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            extra_move,
+        );
+
+        // Assert that the play fails with an error indicating the game has ended
+        assert_noop!(result, crate::Error::<Test>::GameNotFound);
+
+        // Verify that the game has already finished and removed from storage
+        let game = GameStorage::<Test>::get(&game_id);
+        assert!(game.is_none(), "Game should have been removed after completion.");
+
+        log::info!(
+            "Exceeding max moves correctly emits an error and prevents further plays."
+        );
+    });
+}
