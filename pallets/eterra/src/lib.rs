@@ -15,7 +15,7 @@ pub use crate::types::GameId;
 use frame_support::ensure;
 use frame_system::pallet_prelude::BlockNumberFor;
 pub use types::board::Board;
-pub use types::card::{Card, Color};
+pub use types::card::Color;
 pub use types::game::*;
 #[frame_support::pallet]
 pub mod pallet {
@@ -28,7 +28,7 @@ pub mod pallet {
 
     // Import Card and Color types from the crate
     use crate::types::board::Board;
-    use crate::types::card::{Card, Color};
+    use crate::types::card::Color;
     use crate::types::game::*;
     use crate::types::GameId;
     #[pallet::pallet]
@@ -93,6 +93,7 @@ pub mod pallet {
         BlocksToPlayLimitNotPassed,
         CurrentPlayerCannotForceFinishTurn,
         PlayerNotInGame,
+        CreatorMustBeInGame,
     }
 
     #[pallet::call]
@@ -100,10 +101,11 @@ pub mod pallet {
         #[pallet::call_index(0)]
         #[pallet::weight(10_000)]
         pub fn create_game(origin: OriginFor<T>, players: Vec<AccountIdOf<T>>) -> DispatchResult {
-            //let creator = ensure_signed(origin)?;
             let who: AccountIdOf<T> = ensure_signed(origin)?;
 
             // If you want to play, you need to specify yourself in the Vec as well
+            ensure!(players.contains(&who), Error::<T>::CreatorMustBeInGame);
+
             let number_of_players = players.len();
 
             ensure!(
@@ -126,11 +128,11 @@ pub mod pallet {
 
             let initial_board: Board = Default::default();
             // Randomly determine the first turn
-            let first_turn = if sp_io::hashing::blake2_128(&creator.encode())[0] % 2 == 0 {
-                creator.clone()
-            } else {
-                opponent.clone()
-            };
+            // let first_turn = if sp_io::hashing::blake2_128(&creator.encode())[0] % 2 == 0 {
+            //     creator.clone()
+            // } else {
+            //     opponent.clone()
+            // };
 
             let initial_scores = (5, 5); // Each player starts with 5 points for their unplayed cards
             let player_colors = (Color::Blue, Color::Red);
@@ -151,8 +153,6 @@ pub mod pallet {
             };
 
             GameStorage::<T>::insert(&game_id, game.clone());
-            // Assign colors
-            let player_colors = (Color::Blue, Color::Red);
 
             // Use set_player_turn instead
             game.set_player_turn(
