@@ -12,10 +12,11 @@ mod types;
 
 // Publicly re-export the Card and Color types for usage in other files
 pub use crate::types::GameId;
+use frame_support::ensure;
+use frame_system::pallet_prelude::BlockNumberFor;
 pub use types::board::Board;
 pub use types::card::{Card, Color};
 pub use types::game::*;
-use frame_system::pallet_prelude::BlockNumberFor;
 #[frame_support::pallet]
 pub mod pallet {
     use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
@@ -176,90 +177,20 @@ pub mod pallet {
 
             let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
 
-            let current_turn_index = game.get_player_turn();
-            let current_turn = game.players[current_turn_index as usize].clone();
+            Self::validate_player_turn(&game, &who)?;
+            Self::validate_move(&game, &player_move)?;
 
-            ensure!(current_turn == who, Error::<T>::NotYourTurn);
+            let current_color = Self::get_current_color(&game, &who);
 
-            ensure!(
-                player_move.place_index_x < 4 && player_move.place_index_y < 4,
-                Error::<T>::InvalidMove
-            );
-
-            ensure!(
-                game.board[player_move.place_index_x as usize][player_move.place_index_y as usize]
-                    .is_none(),
-                Error::<T>::CellOccupied
-            );
-
-            let current_color = if who == game.players[0] {
-                game.player_colors.0.clone()
-            } else {
-                game.player_colors.1.clone()
-            };
-
-            // Place the card
-            let placed_card = player_move
-                .place_card
-                .clone()
-                .with_color(current_color.clone());
-            game.board[player_move.place_index_x as usize][player_move.place_index_y as usize] =
-                Some(placed_card.clone());
+            // Place the card on the board
+            Self::place_card_on_board(&mut game, &player_move, current_color.clone());
 
             // Capture logic
-            for &(dx, dy, opposing_rank) in &[
-                (0, -1, player_move.place_card.top),   // Top
-                (1, 0, player_move.place_card.right),  // Right
-                (0, 1, player_move.place_card.bottom), // Bottom
-                (-1, 0, player_move.place_card.left),  // Left
-            ] {
-                let nx = player_move.place_index_x as isize + dx;
-                let ny = player_move.place_index_y as isize + dy;
-                if nx >= 0 && nx < 4 && ny >= 0 && ny < 4 {
-                    if let Some(mut opposing_card) = game.board[nx as usize][ny as usize].clone() {
-                        let rank = match (dx, dy) {
-                            (0, -1) => opposing_card.bottom,
-                            (1, 0) => opposing_card.left,
-                            (0, 1) => opposing_card.top,
-                            (-1, 0) => opposing_card.right,
-                            _ => 0,
-                        };
-                        if opposing_rank > rank {
-                            log::debug!("Captured card at ({}, {})", nx, ny);
-
-                            // Update scores
-                            if let Some(color) = opposing_card.color {
-                                if color == game.player_colors.0 {
-                                    game.scores.0 = game.scores.0.saturating_sub(1);
-                                } else if color == game.player_colors.1 {
-                                    game.scores.1 = game.scores.1.saturating_sub(1);
-                                }
-                            }
-                            if current_color == game.player_colors.0 {
-                                game.scores.0 = game.scores.0.saturating_add(1);
-                            } else {
-                                game.scores.1 = game.scores.1.saturating_add(1);
-                            }
-
-                            // Change ownership of the card
-                            opposing_card.color = Some(current_color.clone());
-                            game.board[nx as usize][ny as usize] = Some(opposing_card);
-                        }
-                    }
-                }
-            }
+            Self::apply_capture_logic(&mut game, &player_move, current_color.clone());
 
             // Check if the game is won
             if let Some(winner) = Self::is_game_won(&game_id, &game) {
-                Self::deposit_event(Event::GameFinished {
-                    game_id,
-                    winner: winner.clone(),
-                });
-
-                log::debug!("Game finished. Winner: {:?}", winner);
-
-                GameStorage::<T>::remove(&game_id);
-
+                Self::end_game(&game_id, winner);
                 return Ok(());
             }
 
@@ -268,15 +199,7 @@ pub mod pallet {
 
             // Check if the game is won after updating the round
             if let Some(winner) = Self::is_game_won(&game_id, &game) {
-                Self::deposit_event(Event::GameFinished {
-                    game_id,
-                    winner: winner.clone(),
-                });
-
-                log::debug!("Game finished. Winner: {:?}", winner);
-
-                GameStorage::<T>::remove(&game_id);
-
+                Self::end_game(&game_id, winner);
                 return Ok(());
             }
 
@@ -290,7 +213,7 @@ pub mod pallet {
 
             Self::deposit_event(Event::MovePlayed {
                 game_id,
-                player: who.clone(),
+                player: who,
                 x: player_move.place_index_x,
                 y: player_move.place_index_y,
             });
@@ -328,5 +251,114 @@ impl<T: Config> Pallet<T> {
         );
 
         Some(winner)
+    }
+
+    fn validate_player_turn(
+        game: &Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
+        who: &AccountIdOf<T>,
+    ) -> Result<(), Error<T>> {
+        let current_turn_index = game.get_player_turn();
+        let current_turn = game.players[current_turn_index as usize].clone();
+        ensure!(current_turn == *who, Error::<T>::NotYourTurn);
+        Ok(())
+    }
+
+    fn validate_move(
+        game: &Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
+        player_move: &Move,
+    ) -> Result<(), Error<T>> {
+        ensure!(
+            player_move.place_index_x < 4 && player_move.place_index_y < 4,
+            Error::<T>::InvalidMove
+        );
+        ensure!(
+            game.board[player_move.place_index_x as usize][player_move.place_index_y as usize]
+                .is_none(),
+            Error::<T>::CellOccupied
+        );
+        Ok(())
+    }
+
+    fn get_current_color(
+        game: &Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
+        who: &AccountIdOf<T>,
+    ) -> Color {
+        if who == &game.players[0] {
+            game.player_colors.0.clone()
+        } else {
+            game.player_colors.1.clone()
+        }
+    }
+
+    fn place_card_on_board(
+        game: &mut Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
+        player_move: &Move,
+        current_color: Color,
+    ) {
+        let placed_card = player_move
+            .place_card
+            .clone()
+            .with_color(current_color.clone());
+        game.board[player_move.place_index_x as usize][player_move.place_index_y as usize] =
+            Some(placed_card);
+    }
+
+    fn apply_capture_logic(
+        game: &mut Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
+        player_move: &Move,
+        current_color: Color,
+    ) {
+        for &(dx, dy, opposing_rank) in &[
+            (0, -1, player_move.place_card.top),   // Top
+            (1, 0, player_move.place_card.right),  // Right
+            (0, 1, player_move.place_card.bottom), // Bottom
+            (-1, 0, player_move.place_card.left),  // Left
+        ] {
+            let nx = player_move.place_index_x as isize + dx;
+            let ny = player_move.place_index_y as isize + dy;
+            if nx >= 0 && nx < 4 && ny >= 0 && ny < 4 {
+                if let Some(mut opposing_card) = game.board[nx as usize][ny as usize].clone() {
+                    let rank = match (dx, dy) {
+                        (0, -1) => opposing_card.bottom,
+                        (1, 0) => opposing_card.left,
+                        (0, 1) => opposing_card.top,
+                        (-1, 0) => opposing_card.right,
+                        _ => 0,
+                    };
+                    if opposing_rank > rank {
+                        log::debug!("Captured card at ({}, {})", nx, ny);
+
+                        // Update scores
+                        if let Some(color) = opposing_card.color {
+                            if color == game.player_colors.0 {
+                                game.scores.0 = game.scores.0.saturating_sub(1);
+                            } else if color == game.player_colors.1 {
+                                game.scores.1 = game.scores.1.saturating_sub(1);
+                            }
+                        }
+                        if current_color == game.player_colors.0 {
+                            game.scores.0 = game.scores.0.saturating_add(1);
+                        } else {
+                            game.scores.1 = game.scores.1.saturating_add(1);
+                        }
+
+                        // Change ownership of the card
+                        opposing_card.color = Some(current_color.clone());
+                        game.board[nx as usize][ny as usize] = Some(opposing_card);
+                    }
+                }
+            }
+        }
+    }
+
+    fn end_game(game_id: &GameId<T>, winner: Option<T::AccountId>) {
+        Self::deposit_event(Event::GameFinished {
+            game_id: *game_id,
+            winner: winner.clone(),
+        });
+
+        log::debug!("Game finished. Winner: {:?}", winner);
+
+        GameStorage::<T>::remove(game_id);
     }
 }

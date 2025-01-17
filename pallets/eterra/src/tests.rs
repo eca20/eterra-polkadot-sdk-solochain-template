@@ -876,10 +876,11 @@ fn exceeding_max_moves_emits_error() {
 
         // Verify that the game has already finished and removed from storage
         let game = GameStorage::<Test>::get(&game_id);
-        assert!(game.is_none(), "Game should have been removed after completion.");
-
-        log::info!(
-            "Exceeding max moves correctly emits an error and prevents further plays."
+        assert!(
+            game.is_none(),
+            "Game should have been removed after completion."
         );
+
+        log::info!("Exceeding max moves correctly emits an error and prevents further plays.");
     });
 }
