@@ -81,10 +81,20 @@ impl Get<u8> for MockMaxRounds {
     }
 }
 
+#[derive(Encode, Decode, TypeInfo, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MockBlocksToPlayLimit;
+
+impl Get<u8> for MockBlocksToPlayLimit {
+    fn get() -> u8 {
+        5 // The number of players in the mock setup
+    }
+}
+
 impl pallet_eterra::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type NumPlayers = MockNumPlayers; // Specify the type for NumPlayers
     type MaxRounds = MockMaxRounds;
+    type BlocksToPlayLimit = MockBlocksToPlayLimit;
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {

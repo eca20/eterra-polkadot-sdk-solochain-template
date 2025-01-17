@@ -203,10 +203,18 @@ impl Get<u8> for EterraMaxRounds {
     }
 }
 
+pub struct EterraBlocksToPlayLimit;
+impl Get<u8> for EterraBlocksToPlayLimit {
+    fn get() -> u8 {
+        10 // The number of players in the game
+    }
+}
+
 impl pallet_eterra::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type NumPlayers = EterraNumPlayers;
     type MaxRounds = EterraMaxRounds;
+    type BlocksToPlayLimit = EterraBlocksToPlayLimit;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.

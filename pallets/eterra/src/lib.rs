@@ -42,6 +42,8 @@ pub mod pallet {
         type NumPlayers: Get<u32> + Clone + TypeInfo;
         #[pallet::constant]
         type MaxRounds: Get<u8>;
+        #[pallet::constant]
+        type BlocksToPlayLimit: Get<u8>;
     }
 
     #[pallet::storage]
@@ -88,6 +90,9 @@ pub mod pallet {
         CellOccupied,
         InvalidNumberOfPlayers,
         InternalError,
+        BlocksToPlayLimitNotPassed,
+        CurrentPlayerCannotForceFinishTurn,
+        PlayerNotInGame,
     }
 
     #[pallet::call]
@@ -177,9 +182,11 @@ pub mod pallet {
 
             let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
 
+            // Validate the current player's turn and move
             Self::validate_player_turn(&game, &who)?;
             Self::validate_move(&game, &player_move)?;
 
+            // Get the player's color
             let current_color = Self::get_current_color(&game, &who);
 
             // Place the card on the board
@@ -187,6 +194,10 @@ pub mod pallet {
 
             // Capture logic
             Self::apply_capture_logic(&mut game, &player_move, current_color.clone());
+
+            // Update the last_played_block to the current block number
+            let current_block = <frame_system::Pallet<T>>::block_number();
+            game.last_played_block = current_block;
 
             // Check if the game is won
             if let Some(winner) = Self::is_game_won(&game_id, &game) {
@@ -216,6 +227,52 @@ pub mod pallet {
                 player: who,
                 x: player_move.place_index_x,
                 y: player_move.place_index_y,
+            });
+
+            Ok(())
+        }
+
+        #[pallet::call_index(4)]
+        #[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1, 1).ref_time())]
+        pub fn force_finish_turn(origin: OriginFor<T>, game_id: GameId<T>) -> DispatchResult {
+            let who: AccountIdOf<T> = ensure_signed(origin)?;
+
+            // Retrieve the game from storage
+            let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
+
+            // Ensure the caller is a player in the game
+            ensure!(game.players.contains(&who), Error::<T>::PlayerNotInGame);
+
+            // Ensure the caller is not the current player
+            let current_player = game.players[game.player_turn as usize].clone();
+            ensure!(
+                current_player != who,
+                Error::<T>::CurrentPlayerCannotForceFinishTurn
+            );
+
+            // Check if the BlocksToPlayLimit has passed
+            let current_block = <frame_system::Pallet<T>>::block_number();
+            ensure!(
+                game.last_played_block + T::BlocksToPlayLimit::get().into() < current_block,
+                Error::<T>::BlocksToPlayLimitNotPassed
+            );
+
+            // Force finish the current turn and update the game
+            game.next_turn();
+            game.last_played_block = current_block;
+
+            // Save the updated game state
+            GameStorage::<T>::insert(&game_id, game.clone());
+
+            // Emit events
+            let next_player = game.players[game.player_turn as usize].clone();
+            Self::deposit_event(Event::TurnForceFinished {
+                game_id,
+                player: current_player,
+            });
+            Self::deposit_event(Event::NewTurn {
+                game_id,
+                next_player,
             });
 
             Ok(())
