@@ -214,6 +214,13 @@ pub mod pallet {
                 return Ok(());
             }
 
+            // Emit a NewTurn event for the new current player
+            let next_player = game.players[game.get_player_turn() as usize].clone();
+            Self::deposit_event(Event::NewTurn {
+                game_id,
+                next_player,
+            });
+
             // Save the updated game
             GameStorage::<T>::insert(&game_id, game.clone());
 

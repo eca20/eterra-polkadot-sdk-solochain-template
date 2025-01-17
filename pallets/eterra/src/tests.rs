@@ -3,7 +3,9 @@ use crate::Color;
 use crate::GameStorage;
 use crate::Move;
 use crate::{mock::*, Card};
+use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok};
+use frame_system::pallet_prelude::BlockNumberFor;
 use log::{Level, Metadata, Record};
 use sp_core::H256; // Fix: Import H256
 use sp_runtime::traits::{BlakeTwo256, Hash};
@@ -66,6 +68,13 @@ fn setup_new_game() -> (H256, u64, u64) {
     );
 
     (game_id, creator, opponent)
+}
+
+/// Utility function that advances the current block number by `n` blocks.
+fn run_to_block(n: u64) {
+    while System::block_number() < n {
+        System::set_block_number(System::block_number() + 1);
+    }
 }
 
 #[test]
@@ -882,5 +891,239 @@ fn exceeding_max_moves_emits_error() {
         );
 
         log::info!("Exceeding max moves correctly emits an error and prevents further plays.");
+    });
+}
+
+/// Test: force_finish_turn fails if the caller is not in the game.
+#[test]
+fn force_finish_turn_fails_if_caller_not_in_game() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+        let non_player = 99; // someone who is not a game participant
+
+        // Attempt to force finish with a non-player
+        let result =
+            Eterra::force_finish_turn(frame_system::RawOrigin::Signed(non_player).into(), game_id);
+
+        assert_noop!(result, crate::Error::<Test>::PlayerNotInGame);
+    });
+}
+
+/// Test: force_finish_turn fails if the caller is the current player.
+#[test]
+fn force_finish_turn_fails_if_current_player() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+
+        // By default, one of these (creator or opponent) will be randomly chosen as current player.
+        let game = Eterra::game_board(game_id).unwrap();
+        let current_player = game.players[game.player_turn as usize];
+
+        // Attempt to force finish turn from the current player
+        let result = Eterra::force_finish_turn(
+            frame_system::RawOrigin::Signed(current_player).into(),
+            game_id,
+        );
+
+        assert_noop!(
+            result,
+            crate::Error::<Test>::CurrentPlayerCannotForceFinishTurn
+        );
+    });
+}
+
+/// Test: force_finish_turn fails if the BlocksToPlayLimit has not yet passed.
+#[test]
+fn force_finish_turn_fails_if_blocks_not_passed() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+
+        // Let's assume the initial turn is creator. Then the opponent tries to force finish.
+        // We intentionally do NOT move the block number forward, so BlocksToPlayLimit is not passed.
+
+        // Attempt to force finish from the opponent
+        let result =
+            Eterra::force_finish_turn(frame_system::RawOrigin::Signed(opponent).into(), game_id);
+        assert_noop!(result, crate::Error::<Test>::BlocksToPlayLimitNotPassed);
+    });
+}
+
+/// Test: force_finish_turn succeeds under correct conditions.
+/// * The caller is a game participant, but not the current player.
+/// * The BlocksToPlayLimit has passed.
+///
+/// We will:
+/// 1. Create a new game
+/// 2. Identify the current player
+/// 3. Advance the block number by (BlocksToPlayLimit + 1) to exceed the limit
+/// 4. Call force_finish_turn from the other player
+/// 5. Check that the turn is forced, a TurnForceFinished and NewTurn event are emitted,
+///    and the last_played_block is updated.
+#[test]
+fn force_finish_turn_works_when_limit_passed() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        // Setup
+        let (game_id, creator, opponent) = setup_new_game();
+        let blocks_limit = <Test as crate::Config>::BlocksToPlayLimit::get();
+
+        // Identify the current player
+        let game_before = Eterra::game_board(game_id).unwrap();
+        let current_player = game_before.players[game_before.player_turn as usize];
+
+        // We'll assume that if the current_player == creator, then the caller to force finish
+        // will be the opponent, and vice versa.
+        let caller = if current_player == creator {
+            opponent
+        } else {
+            creator
+        };
+
+        // Advance the block number to exceed the limit
+        let current_block = <frame_system::Pallet<Test>>::block_number();
+        let target_block = current_block + (blocks_limit as u64) + 1;
+        run_to_block(target_block);
+
+        // Attempt to force finish turn from the other player
+        assert_ok!(Eterra::force_finish_turn(
+            frame_system::RawOrigin::Signed(caller).into(),
+            game_id,
+        ));
+
+        // Now check that the game updated the turn and block number
+        let game_after = Eterra::game_board(game_id).unwrap();
+        let new_current_player = game_after.players[game_after.player_turn as usize];
+
+        // The current player should be different after forcing the turn
+        assert_ne!(current_player, new_current_player);
+
+        // The last_played_block should be set to whatever block number we advanced to
+        assert_eq!(
+            game_after.last_played_block,
+            <u64 as Into<BlockNumberFor<Test>>>::into(target_block)
+        );
+
+        // Check that events were emitted
+        let events = frame_system::Pallet::<Test>::events();
+        let mut force_finished_found = false;
+        let mut new_turn_found = false;
+
+        for record in events {
+            if let RuntimeEvent::Eterra(crate::Event::TurnForceFinished {
+                game_id: event_game_id,
+                player: event_player,
+            }) = record.event
+            {
+                if event_game_id == game_id && event_player == current_player {
+                    force_finished_found = true;
+                }
+            } else if let RuntimeEvent::Eterra(crate::Event::NewTurn {
+                game_id: event_game_id,
+                next_player: event_next_player,
+            }) = record.event
+            {
+                if event_game_id == game_id && event_next_player == new_current_player {
+                    new_turn_found = true;
+                }
+            }
+        }
+
+        assert!(
+            force_finished_found,
+            "Expected TurnForceFinished event not found"
+        );
+        assert!(new_turn_found, "Expected NewTurn event not found");
+    });
+}
+
+#[test]
+fn play_emits_new_turn_event() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        // 1. Setup game
+        let (game_id, creator, opponent) = setup_new_game();
+
+        // 2. Creator plays first
+        let creator_card = Card::new(5, 3, 2, 4).with_color(Color::Blue);
+        let creator_move = Move {
+            place_index_x: 1,
+            place_index_y: 1,
+            place_card: creator_card.clone(),
+        };
+
+        assert_ok!(Eterra::play(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            creator_move.clone(),
+        ));
+
+        // 3. Check for NewTurn event
+        let events = frame_system::Pallet::<Test>::events();
+        let mut new_turn_found = false;
+
+        // We expect the new turn to belong to the other player (i.e., opponent)
+        let expected_next_player = opponent;
+
+        for record in &events {
+            if let RuntimeEvent::Eterra(crate::Event::NewTurn {
+                game_id: event_game_id,
+                next_player,
+            }) = &record.event
+            {
+                if *event_game_id == game_id && *next_player == expected_next_player {
+                    new_turn_found = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            new_turn_found,
+            "Expected NewTurn event was not found after creator's move!"
+        );
+
+        // 4. Clear the events so we can test the opponent's move cleanly
+        System::reset_events();
+
+        // 5. Opponent plays next
+        let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red);
+        let opponent_move = Move {
+            place_index_x: 1,
+            place_index_y: 2,
+            place_card: opponent_card.clone(),
+        };
+
+        assert_ok!(Eterra::play(
+            frame_system::RawOrigin::Signed(opponent).into(),
+            game_id,
+            opponent_move.clone(),
+        ));
+
+        // 6. Check for NewTurn event again (now the next turn should belong to the creator)
+        let events = frame_system::Pallet::<Test>::events();
+        let mut new_turn_found = false;
+
+        let expected_next_player = creator; // After opponent, it goes back to creator
+
+        for record in &events {
+            if let RuntimeEvent::Eterra(crate::Event::NewTurn {
+                game_id: event_game_id,
+                next_player,
+            }) = &record.event
+            {
+                if *event_game_id == game_id && *next_player == expected_next_player {
+                    new_turn_found = true;
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            new_turn_found,
+            "Expected NewTurn event was not found after opponent's move!"
+        );
     });
 }
