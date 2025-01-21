@@ -10,7 +10,6 @@ mod tests;
 
 mod types;
 
-// Publicly re-export the Card and Color types for usage in other files
 pub use crate::types::GameId;
 use frame_support::ensure;
 use frame_system::pallet_prelude::BlockNumberFor;
@@ -26,7 +25,6 @@ pub mod pallet {
 
     pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
 
-    // Import Card and Color types from the crate
     use crate::types::board::Board;
     use crate::types::card::Color;
     use crate::types::game::*;
@@ -37,7 +35,7 @@ pub mod pallet {
     #[pallet::config]
     pub trait Config: frame_system::Config {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
-        // Maximum number of players that can join a single game
+        // Exact number of players that can join a single game
         #[pallet::constant]
         type NumPlayers: Get<u32> + Clone + TypeInfo;
         #[pallet::constant]
