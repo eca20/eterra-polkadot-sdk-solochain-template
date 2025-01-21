@@ -1,5 +1,5 @@
 # EterraNode
- EterraNode is an in development fork of the Substrate Node Template that supports the development of EterraPocket, a quickly evolving companion app to out larger suite of planned Eterra games. Current development focuses on a strategic turn based card game with plans to expand features for a comprehensive collectible trading card game: EterraPocket. EterraPocket will be a companion app card game that will seamlessly integrate its features and assets with future planned role playing and first-person arena games. 
+ EterraNode is an in development fork of the Substrate Node Template that supports development of EterraPocket, a quickly evolving companion app to out larger suite of planned Eterra games. Current development focuses on a strategic turn based card game with plans to expand features for a comprehensive collectible trading card game: EterraPocket. EterraPocket will be a companion app card game that will seamlessly integrate its features and assets with future planned role playing and first-person arena games. 
 
 # Substrate Node Template
 
