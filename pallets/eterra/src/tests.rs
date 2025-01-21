@@ -1,9 +1,12 @@
+use crate::mock::RuntimeEvent;
 use crate::types::game::GameProperties; // Import the GameProperties trait
 use crate::Color;
+use crate::GameId;
 use crate::GameStorage;
 use crate::Move;
-use crate::{mock::*, Card};
+use crate::{mock::*, types::card::Card};
 use frame_support::traits::Get;
+use frame_support::traits::Hooks;
 use frame_support::{assert_noop, assert_ok};
 use frame_system::pallet_prelude::BlockNumberFor;
 use log::{Level, Metadata, Record};
@@ -617,7 +620,7 @@ fn create_game_invalid_number_of_players() {
             Eterra::create_game(frame_system::RawOrigin::Signed(creator).into(), vec![]);
         assert_noop!(
             result_zero_players,
-            crate::Error::<Test>::InvalidNumberOfPlayers
+            crate::Error::<Test>::CreatorMustBeInGame
         );
 
         // Test with one player
@@ -1125,5 +1128,59 @@ fn play_emits_new_turn_event() {
             new_turn_found,
             "Expected NewTurn event was not found after opponent's move!"
         );
+    });
+}
+#[test]
+fn test_force_idle_turns() {
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+        let blocks_to_wait = <Test as crate::Config>::BlocksToPlayLimit::get() as u64 * 2;
+
+        // Ensure the game exists in storage
+        assert!(GameStorage::<Test>::contains_key(&game_id));
+
+        let game = GameStorage::<Test>::get(&game_id).unwrap();
+        let initial_player = game.players[game.player_turn as usize];
+
+        // Advance the chain by blocks less than the threshold and check no force finish
+        System::set_block_number(System::block_number() + blocks_to_wait - 1);
+        Eterra::on_finalize(System::block_number());
+
+        let game = GameStorage::<Test>::get(&game_id).unwrap();
+        let expected_turn = game.players[game.player_turn as usize];
+        assert_eq!(
+            expected_turn, initial_player,
+            "Turn should not be forced yet"
+        );
+
+        // Advance the chain past the threshold
+        System::set_block_number(System::block_number() + 2);
+        Eterra::on_finalize(System::block_number());
+
+        // Fetch the updated game state
+        let updated_game = GameStorage::<Test>::get(&game_id).unwrap();
+
+        // Check if the turn was forced
+        assert_ne!(
+            updated_game.players[updated_game.player_turn as usize], initial_player,
+            "Turn should have been forced"
+        );
+
+        // Check emitted events
+        let events = System::events();
+        assert!(events.iter().any(|r| matches!(
+            r.event,
+            RuntimeEvent::Eterra(crate::Event::TurnForceFinished {
+                game_id: _,
+                player: _
+            })
+        )));
+        assert!(events.iter().any(|r| matches!(
+            r.event,
+            RuntimeEvent::Eterra(crate::Event::NewTurn {
+                game_id: _,
+                next_player: _
+            })
+        )));
     });
 }

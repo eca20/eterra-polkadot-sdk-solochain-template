@@ -8,6 +8,7 @@ use parity_scale_codec::{Decode, Encode}; // Ensure Encode and Decode are import
 use scale_info::TypeInfo;
 use sp_core::H256; // Ensure H256 is imported
 use sp_runtime::{
+    testing::Header,
     traits::{BlakeTwo256, IdentityLookup},
     BuildStorage,
 }; // Import TypeInfo

@@ -12,10 +12,13 @@ mod types;
 
 pub use crate::types::GameId;
 use frame_support::ensure;
+use frame_support::traits::Get;
 use frame_system::pallet_prelude::BlockNumberFor;
+use sp_runtime::traits::SaturatedConversion;
 pub use types::board::Board;
 pub use types::card::Color;
 pub use types::game::*;
+
 #[frame_support::pallet]
 pub mod pallet {
     use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
@@ -107,7 +110,10 @@ pub mod pallet {
             let number_of_players = players.len();
 
             ensure!(
-                number_of_players == T::NumPlayers::get() as usize,
+                number_of_players
+                    == <u32 as sp_runtime::traits::SaturatedConversion>::saturated_into::<usize>(
+                        T::NumPlayers::get()
+                    ),
                 Error::<T>::InvalidNumberOfPlayers
             );
 
@@ -283,10 +289,49 @@ pub mod pallet {
             Ok(())
         }
     }
+    #[pallet::hooks]
+    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        fn on_finalize(_n: BlockNumberFor<T>) {
+            Self::force_idle_turns();
+        }
+    }
 }
 
 // Helper methods
 impl<T: Config> Pallet<T> {
+    // Function to force idle turns to be played, preventing zombie games
+    // from a case where both users are not taking turns
+    pub fn force_idle_turns()
+    where
+        BlockNumberFor<T>: From<u32>,
+    {
+        let current_block: BlockNumberFor<T> = <frame_system::Pallet<T>>::block_number();
+
+        // Convert BlocksToPlayLimit safely using saturated_into
+        let blocks_to_wait =
+            BlockNumberFor::<T>::from(T::BlocksToPlayLimit::get().saturated_into::<u32>())
+                * 2u32.into();
+
+        for (game_id, mut game) in GameStorage::<T>::iter() {
+            if game.last_played_block + blocks_to_wait < current_block {
+                let current_player = game.players[game.player_turn as usize].clone();
+                game.next_turn();
+                game.last_played_block = current_block;
+
+                GameStorage::<T>::insert(&game_id, game.clone());
+
+                let next_player = game.players[game.player_turn as usize].clone();
+                Self::deposit_event(Event::TurnForceFinished {
+                    game_id,
+                    player: current_player,
+                });
+                Self::deposit_event(Event::NewTurn {
+                    game_id,
+                    next_player,
+                });
+            }
+        }
+    }
     fn is_game_won(
         game_id: &GameId<T>,
         game: &Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
