@@ -20,10 +20,12 @@ use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
 
 use codec::{Decode, Encode};
+use frame_support::traits::ConstU64;
 use frame_support::traits::Get;
 pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_eterra;
+pub use pallet_eterra_slots;
 pub use pallet_timestamp::Call as TimestampCall;
 use scale_info::TypeInfo;
 
@@ -217,6 +219,11 @@ impl pallet_eterra::Config for Runtime {
     type BlocksToPlayLimit = EterraBlocksToPlayLimit;
 }
 
+impl pallet_eterra_slots::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type RandomnessSeed = ConstU64<42>;
+}
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 #[frame_support::runtime]
 mod runtime {
@@ -261,4 +268,7 @@ mod runtime {
 
     #[runtime::pallet_index(8)]
     pub type Eterra = pallet_eterra;
+
+    #[runtime::pallet_index(9)]
+    pub type EterraSlots = pallet_eterra_slots;
 }

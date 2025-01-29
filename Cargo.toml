@@ -11,6 +11,7 @@ members = [
     "node",
     "pallets/template",
     "pallets/eterra",
+    "pallets/eterra-slots",
     "runtime",
 ]
 resolver = "2"
@@ -86,3 +87,4 @@ substrate-wasm-builder = { version = "24.0.1", default-features = false }
 
 # Substrate Gaming Pallets
 pallet-eterra                            = { path = "pallets/eterra", default-features = false }
+pallet-eterra-slots                            = { path = "pallets/eterra-slots", default-features = false }
