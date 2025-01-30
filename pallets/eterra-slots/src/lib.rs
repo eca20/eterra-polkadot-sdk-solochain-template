@@ -32,8 +32,7 @@ pub mod pallet {
     #[pallet::config]
     pub trait Config: frame_system::Config {
         /// The overarching event type.
-        type RuntimeEvent: From<Event<Self>>
-            + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+        type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
         /// A numeric seed for our randomness.
         #[pallet::constant]
@@ -57,11 +56,17 @@ pub mod pallet {
     // ------------------
 
     /// The info stored about each card.
-    #[derive(Clone, Encode, Decode, Default, PartialEq, TypeInfo, MaxEncodedLen)]
+    #[derive(Clone, Encode, Decode, Default, PartialEq, TypeInfo, MaxEncodedLen, Debug)]
     pub struct CardInfo<AccountId> {
         owner: AccountId,
         finalized: bool,
         slot_values: Option<[u8; 4]>,
+    }
+
+    impl<AccountId> CardInfo<AccountId> {
+        pub fn get_owner(&self) -> &AccountId {
+            &self.owner
+        }
     }
 
     /// A "Pack" just references existing cards by their IDs, rather than embedding them.
@@ -110,13 +115,8 @@ pub mod pallet {
     /// A map from account => list of packs
     #[pallet::storage]
     #[pallet::getter(fn player_packs)]
-    pub type PlayerPacks<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        T::AccountId,
-        BoundedVec<Pack, T::MaxPacks>,
-        ValueQuery,
-    >;
+    pub type PlayerPacks<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<Pack, T::MaxPacks>, ValueQuery>;
 
     /// Tracks the currently “active” card index (within a pack) for each account
     #[pallet::storage]
@@ -128,8 +128,7 @@ pub mod pallet {
     /// We omit the account ID here because the card can be traded to another owner.
     #[pallet::storage]
     #[pallet::getter(fn card_attempts)]
-    pub type CardAttempts<T: Config> =
-        StorageMap<_, Blake2_128Concat, u32, u8, ValueQuery>;
+    pub type CardAttempts<T: Config> = StorageMap<_, Blake2_128Concat, u32, u8, ValueQuery>;
 
     // ------------------
     // Events
@@ -139,28 +138,15 @@ pub mod pallet {
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
         /// A new pack was minted for `player` with ID `pack_id`, containing multiple new cards.
-        PackMinted {
-            player: T::AccountId,
-            pack_id: u32,
-        },
+        PackMinted { player: T::AccountId, pack_id: u32 },
         /// A card’s slot was generated.
-        SlotGenerated {
-            card_id: u32,
-            values: [u8; 4],
-        },
+        SlotGenerated { card_id: u32, values: [u8; 4] },
         /// A card’s slot was accepted (finalized).
-        SlotAccepted {
-            card_id: u32,
-        },
+        SlotAccepted { card_id: u32 },
         /// A card was finalized (forced finalize).
-        SlotFinalized {
-            card_id: u32,
-        },
+        SlotFinalized { card_id: u32 },
         /// A pack was completed (all cards finalized).
-        PackCompleted {
-            player: T::AccountId,
-            pack_id: u32,
-        },
+        PackCompleted { player: T::AccountId, pack_id: u32 },
         /// A card was transferred from `from` to `to`.
         CardTransferred {
             from: T::AccountId,
@@ -252,7 +238,8 @@ pub mod pallet {
                 let pack = packs.last_mut().ok_or(Error::<T>::NoPackFound)?;
 
                 // 2) Get the active card index
-                let active_card_idx = ActiveCard::<T>::get(&player).ok_or(Error::<T>::NoActiveCard)?;
+                let active_card_idx =
+                    ActiveCard::<T>::get(&player).ok_or(Error::<T>::NoActiveCard)?;
                 let card_id = *pack
                     .card_ids
                     .get(active_card_idx as usize)
@@ -264,7 +251,10 @@ pub mod pallet {
 
                 // 4) Check attempts
                 let mut attempts = CardAttempts::<T>::get(card_id);
-                ensure!(attempts < T::MaxAttempts::get(), Error::<T>::MaxAttemptsExceeded);
+                ensure!(
+                    attempts < T::MaxAttempts::get(),
+                    Error::<T>::MaxAttemptsExceeded
+                );
 
                 // 5) Generate slot values
                 let current_block = <frame_system::Pallet<T>>::block_number();
@@ -328,7 +318,7 @@ pub mod pallet {
 
         /// **New**: Transfer a single card from `origin` to `to`.
         /// If that card is also part of a pack, it still references it, but ownership
-        /// changes to `to`. 
+        /// changes to `to`.
         #[pallet::call_index(3)]
         #[pallet::weight(10_000)]
         pub fn transfer_card(
@@ -342,18 +332,16 @@ pub mod pallet {
                 let card_info = maybe_card.as_mut().ok_or(Error::<T>::NoSuchCard)?;
                 ensure!(card_info.owner == from, Error::<T>::NotCardOwner);
 
+                // ✅ Ensure the card is finalized before allowing transfer
+                ensure!(card_info.finalized, Error::<T>::NoActiveCard); // Consider a better error name
+
                 // Transfer ownership
                 card_info.owner = to.clone();
-                // Attempts remain with the card_id (not reset).
 
                 Ok(())
             })?;
 
-            Self::deposit_event(Event::CardTransferred {
-                from,
-                to,
-                card_id,
-            });
+            Self::deposit_event(Event::CardTransferred { from, to, card_id });
             Ok(())
         }
     }

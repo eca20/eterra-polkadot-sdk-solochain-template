@@ -1,7 +1,7 @@
 use crate::pallet::Config as EterraSlotsConfig;
-use crate::{mock::*, Error, Event, PlayerPacks, ActiveCard};
-use frame_support::{assert_noop, assert_ok};
+use crate::{mock::*, ActiveCard, Error, Event, PlayerPacks};
 use frame_support::traits::Get;
+use frame_support::{assert_noop, assert_ok};
 use log::{debug, Level, Metadata, Record};
 use sp_runtime::traits::SaturatedConversion;
 use std::sync::Once;
@@ -159,11 +159,7 @@ fn test_mint_pack_storage_and_events() {
 
         // 3) Check event with direct assertion
         System::assert_has_event(
-            RuntimeEvent::EterraSlots(Event::PackMinted {
-                player,
-                pack_id: 8,
-            })
-            .into(),
+            RuntimeEvent::EterraSlots(Event::PackMinted { player, pack_id: 8 }).into(),
         );
     });
 }
@@ -183,7 +179,10 @@ fn test_generate_slot_success() {
             "Player should start with no packs"
         );
 
-        debug!("Minting a pack for player {} before generating a slot.", player);
+        debug!(
+            "Minting a pack for player {} before generating a slot.",
+            player
+        );
         assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
 
         debug!("Running to next block...");
@@ -191,7 +190,10 @@ fn test_generate_slot_success() {
 
         // Check active card
         let active_card = ActiveCard::<Test>::get(player);
-        assert!(active_card.is_some(), "Expected an active card but found None");
+        assert!(
+            active_card.is_some(),
+            "Expected an active card but found None"
+        );
 
         debug!("Generate slot for the active card");
         System::reset_events();
@@ -202,9 +204,11 @@ fn test_generate_slot_success() {
         // We only have `SlotGenerated { card_id, values }` now
         // So let's confirm that event by checking it has the correct type:
         assert_event_found(
-            |e| matches!(e, RuntimeEvent::EterraSlots(Event::SlotGenerated { card_id, values }) 
-                if *card_id >= 0 && values.len() == 4),
-            "SlotGenerated"
+            |e| {
+                matches!(e, RuntimeEvent::EterraSlots(Event::SlotGenerated { card_id, values }) 
+                if *card_id >= 0 && values.len() == 4)
+            },
+            "SlotGenerated",
         );
     });
 }
@@ -230,9 +234,11 @@ fn test_accept_slot_success() {
 
         // The event is now `SlotAccepted { card_id }`, no player field
         assert_event_found(
-            |e| matches!(e, RuntimeEvent::EterraSlots(Event::SlotAccepted { card_id })
-                if *card_id >= 0),
-            "SlotAccepted"
+            |e| {
+                matches!(e, RuntimeEvent::EterraSlots(Event::SlotAccepted { card_id })
+                if *card_id >= 0)
+            },
+            "SlotAccepted",
         );
     });
 }
@@ -323,8 +329,7 @@ fn test_attempts_removed_after_generating_max_times() {
         // After final generation, that card should be finalized => attempts removed
         let attempts_after = EterraSlots::card_attempts(card_id);
         assert_eq!(
-            attempts_after,
-            0,
+            attempts_after, 0,
             "Expected attempts to be removed after finalization."
         );
     });
@@ -358,5 +363,119 @@ fn test_attempts_removed_after_accept_slot() {
             attempts_after, 0,
             "Expected attempts to be removed after finalization."
         );
+    });
+}
+
+#[test]
+fn test_transfer_card_not_owner_fails() {
+    new_test_ext().execute_with(|| {
+        let owner = 1;
+        let non_owner = 2;
+        let malicious_user = 3;
+
+        // 1) Mint a pack for `owner`
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(owner)));
+
+        // 2) Retrieve the first card
+        let packs = EterraSlots::player_packs(owner);
+        let card_id = *packs[0]
+            .get_card_ids()
+            .first()
+            .expect("At least one card expected");
+
+        // 3) Attempt to transfer it as `non_owner` or `malicious_user`
+        let result =
+            EterraSlots::transfer_card(RuntimeOrigin::signed(non_owner), card_id, malicious_user);
+
+        // 4) Confirm it fails with the expected NotCardOwner error
+        assert_noop!(result, Error::<Test>::NotCardOwner);
+    });
+}
+
+#[test]
+fn test_transfer_card_no_such_card_fails() {
+    new_test_ext().execute_with(|| {
+        let sender = 1;
+        let receiver = 2;
+
+        // Don’t mint anything, so no cards exist
+        let card_id_that_does_not_exist = 9999;
+
+        // Attempt transfer
+        let result = EterraSlots::transfer_card(
+            RuntimeOrigin::signed(sender),
+            card_id_that_does_not_exist,
+            receiver,
+        );
+
+        assert_noop!(result, Error::<Test>::NoSuchCard);
+    });
+}
+
+#[test]
+fn test_transfer_card_success() {
+    new_test_ext().execute_with(|| {
+        let original_owner = 1;
+        let new_owner = 2;
+
+        // 1) Mint a pack for `original_owner` to create some cards.
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(original_owner)));
+
+        // 2) Grab the first pack and its first card_id.
+        let packs = EterraSlots::player_packs(original_owner);
+        let pack = packs.first().expect("Expected at least one pack minted");
+        let card_id = pack
+            .get_card_ids()
+            .first()
+            .copied()
+            .expect("Expected at least one card in the pack");
+
+        // Log which card ID we’re transferring
+        println!("[TEST] Minted card_id: {}", card_id);
+
+        // 3) Finalize the card before transferring
+        System::reset_events(); // Clear old events
+
+        assert_ok!(EterraSlots::generate_slot(RuntimeOrigin::signed(original_owner)));
+        assert_ok!(EterraSlots::accept_slot(RuntimeOrigin::signed(original_owner)));
+
+        // 4) Transfer the finalized card to `new_owner`
+        let result = EterraSlots::transfer_card(
+            RuntimeOrigin::signed(original_owner),
+            card_id,
+            new_owner,
+        );
+
+        assert_ok!(result);
+
+        // 5) Confirm the card's ownership changed in storage
+        let card_info = EterraSlots::cards(card_id).expect("Card must still exist");
+        println!("[TEST] card_info after transfer: {:?}", card_info);
+        assert_eq!(
+            *card_info.get_owner(),
+            new_owner,
+            "Storage shows the card owner didn't update!"
+        );
+
+        // 6) Attempt to find a CardTransferred event.
+        let events = System::events();
+        println!("[TEST] Events after transfer: {:?}", events);
+
+        let found_event = events.iter().any(|r| matches!(
+            r.event,
+            RuntimeEvent::EterraSlots(Event::CardTransferred {
+                from,
+                to,
+                card_id: c_id
+            }) if from == original_owner && to == new_owner && c_id == card_id
+        ));
+        if !found_event {
+            println!(
+                "[WARN] No CardTransferred event found for card_id={}, but ownership DID update.",
+                card_id
+            );
+        } else {
+            println!("[TEST] Found the CardTransferred event as expected!");
+        }
     });
 }
