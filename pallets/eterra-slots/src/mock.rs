@@ -8,7 +8,7 @@ use sp_core::H256;
 use sp_runtime::{
     testing::Header,
     traits::{BlakeTwo256, IdentityLookup},
-    BuildStorage, // ✅ Fixes `build_storage` error
+    BuildStorage,
 };
 
 type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
@@ -22,10 +22,10 @@ frame_support::construct_runtime!(
 );
 
 parameter_types! {
-    pub const BlockHashCount: u64 = 250; // ✅ Changed to `u64` instead of `ConstU32`
-    pub const MaxAttempts: u8 = 3; // Max attempts per card
-    pub const CardsPerPack: u8 = 5; // Number of cards per pack
-    pub const MaxPacks: u32 = 10; // Maximum packs a player can have
+    pub const BlockHashCount: u64 = 250;
+    pub const MaxAttempts: u8 = 3;
+    pub const CardsPerPack: u8 = 5;
+    pub const MaxPacks: u32 = 10;
     pub const RandomnessSeed: u64 = 42;
 }
 
@@ -51,17 +51,14 @@ impl system::Config for Test {
     type SS58Prefix = ();
     type OnSetCode = ();
 
-    // ✅ Fixed missing trait items:
     type Nonce = u64;
     type RuntimeTask = ();
-    type MaxConsumers = frame_support::traits::ConstU32<16>;
+    type MaxConsumers = ConstU32<16>;
     type SingleBlockMigrations = ();
     type MultiBlockMigrator = ();
     type PreInherents = ();
     type PostInherents = ();
     type PostTransactions = ();
-
-    // ✅ Corrected BlockHashCount
     type BlockHashCount = ConstU64<250>;
 }
 
@@ -73,7 +70,6 @@ impl pallet_eterra_slots::Config for Test {
     type MaxPacks = ConstU32<10>;
 }
 
-// ✅ Explicitly specify `Test` in `GenesisConfig`
 pub fn new_test_ext() -> sp_io::TestExternalities {
     let mut storage = system::GenesisConfig::<Test>::default()
         .build_storage()
