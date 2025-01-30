@@ -1,8 +1,12 @@
+use crate::pallet::Config as EterraSlotsConfig;
 use crate::ActiveCard;
 use crate::PlayerPacks;
 use crate::{mock::*, Error, Event};
 use frame_support::{assert_noop, assert_ok};
+use frame_support::traits::Get;
+
 use log::{debug, info, Level, Metadata, Record};
+use sp_runtime::traits::SaturatedConversion;
 use std::sync::Once;
 
 static INIT: Once = Once::new();
@@ -95,7 +99,7 @@ fn test_mint_pack_simple_storage_check() {
 fn test_mint_pack_check_event_directly() {
     new_test_ext().execute_with(|| {
         let player = 1;
-        
+
         // Ensure a known block number so pack_id is predictable
         System::set_block_number(100);
 
@@ -110,12 +114,13 @@ fn test_mint_pack_check_event_directly() {
         // Because your code uses:
         //   let pack_id = <frame_system::Pallet<T>>::block_number().saturated_into::<u32>();
         // that means pack_id should be 100 here.
-        System::assert_has_event(RuntimeEvent::EterraSlots(
-            crate::Event::<Test>::PackMinted {
+        System::assert_has_event(
+            RuntimeEvent::EterraSlots(crate::Event::<Test>::PackMinted {
                 player,
                 pack_id: 100,
-            },
-        ).into());
+            })
+            .into(),
+        );
     });
 }
 
@@ -136,10 +141,9 @@ fn test_mint_pack_inspect_events() {
         // 3) Check for your specific event
         let minted_event_found = all_events.iter().any(|r| match &r.event {
             RuntimeEvent::EterraSlots(crate::Event::PackMinted {
-                player: who, pack_id
-            }) => {
-                *who == player && *pack_id == 7
-            },
+                player: who,
+                pack_id,
+            }) => *who == player && *pack_id == 7,
             _ => false,
         });
         assert!(
@@ -165,15 +169,16 @@ fn test_mint_pack_storage_and_events() {
         let packs = EterraSlots::player_packs(player);
         assert_eq!(packs.len(), 1, "Should have 1 pack minted now.");
         let minted_pack = &packs[0];
-        assert_eq!(minted_pack.get_id(), 8, "Pack should have ID=8 if block #=8");
+        assert_eq!(
+            minted_pack.get_id(),
+            8,
+            "Pack should have ID=8 if block #=8"
+        );
 
         // 3) Check event with a direct assertion
-        System::assert_has_event(RuntimeEvent::EterraSlots(
-            crate::Event::PackMinted {
-                player,
-                pack_id: 8,
-            },
-        ).into());
+        System::assert_has_event(
+            RuntimeEvent::EterraSlots(crate::Event::PackMinted { player, pack_id: 8 }).into(),
+        );
     });
 }
 
@@ -309,5 +314,63 @@ fn test_accept_slot_fail_when_slot_not_rolled() {
         );
 
         debug!("Correctly failed to accept slot without rolling one first.");
+    });
+}
+
+#[test]
+fn test_attempts_removed_after_generating_max_times() {
+    new_test_ext().execute_with(|| {
+        let player = 1;
+
+        // Mint a pack
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
+
+        // Convert block_number to u32
+        let pack_id: u32 = System::block_number().saturated_into();
+
+        // Now call .get() on MaxAttempts
+        let max_attempts: u8 = <Test as EterraSlotsConfig>::MaxAttempts::get();
+
+        for _ in 0..max_attempts {
+            assert_ok!(EterraSlots::generate_slot(RuntimeOrigin::signed(player)));
+        }
+
+        // After final generation, card attempts should be removed
+        let key = (player, pack_id, 0u32);
+        assert_eq!(
+            EterraSlots::card_attempts(key),
+            0,
+            "Expected card attempts to be removed after finalization."
+        );
+    });
+}
+
+#[test]
+fn test_attempts_removed_after_accept_slot() {
+    new_test_ext().execute_with(|| {
+        let player = 1;
+
+        // Mint a pack
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
+        let pack_id: u32 = System::block_number().saturated_into();
+        let card_id = 0;
+
+        // Generate one slot
+        assert_ok!(EterraSlots::generate_slot(RuntimeOrigin::signed(player)));
+
+        // Check attempts is 1
+        let key = (player, pack_id, card_id);
+        let attempts_before = EterraSlots::card_attempts(key);
+        assert_eq!(attempts_before, 1);
+
+        // Accept slot => finalize
+        assert_ok!(EterraSlots::accept_slot(RuntimeOrigin::signed(player)));
+
+        // Should be removed
+        let attempts_after = EterraSlots::card_attempts(key);
+        assert_eq!(
+            attempts_after, 0,
+            "Expected attempts to be removed after finalization."
+        );
     });
 }

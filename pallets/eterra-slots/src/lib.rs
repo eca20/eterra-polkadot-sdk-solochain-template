@@ -28,25 +28,33 @@ pub mod pallet {
 
     #[pallet::config]
     pub trait Config: frame_system::Config {
+        /// The overarching event type.
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
+        /// A numeric seed for our randomness.
         #[pallet::constant]
         type RandomnessSeed: Get<u64>;
 
+        /// The maximum times a card can generate slots before it is forced to finalize.
         #[pallet::constant]
         type MaxAttempts: Get<u8>;
 
+        /// How many cards are in each newly minted pack.
         #[pallet::constant]
         type CardsPerPack: Get<u8>;
 
+        /// The maximum number of packs a single account can hold.
         #[pallet::constant]
         type MaxPacks: Get<u32>;
     }
 
+    // ------------------
+    // Data Structures
+    // ------------------
+
     #[derive(Clone, Encode, Decode, Default, PartialEq, TypeInfo, MaxEncodedLen)]
     pub struct Card {
         id: u32,
-        attempts: u8,
         finalized: bool,
         slot_values: Option<[u8; 4]>,
     }
@@ -91,15 +99,32 @@ pub mod pallet {
         }
     }
 
+    // ------------------
+    // Storage Items
+    // ------------------
+
+    /// A map from account -> list of packs
     #[pallet::storage]
     #[pallet::getter(fn player_packs)]
     pub type PlayerPacks<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<Pack, T::MaxPacks>, ValueQuery>;
 
+    /// Tracks the currently “active” card index for each account
     #[pallet::storage]
     #[pallet::getter(fn active_card)]
     pub type ActiveCard<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, Option<u8>, ValueQuery>;
+
+    /// Stores the "attempts" count for each individual card:
+    /// Key is `(account, pack_id, card_id)` => how many times they've generated so far
+    #[pallet::storage]
+    #[pallet::getter(fn card_attempts)]
+    pub type CardAttempts<T: Config> =
+        StorageMap<_, Blake2_128Concat, (T::AccountId, u32, u32), u8, ValueQuery>;
+
+    // ------------------
+    // Events
+    // ------------------
 
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -130,6 +155,10 @@ pub mod pallet {
         },
     }
 
+    // ------------------
+    // Errors
+    // ------------------
+
     #[pallet::error]
     pub enum Error<T> {
         MaxAttemptsExceeded,
@@ -139,8 +168,13 @@ pub mod pallet {
         MaxPacksReached,
     }
 
+    // ------------------
+    // Calls (Extrinsics)
+    // ------------------
+
     #[pallet::call]
     impl<T: Config> Pallet<T> {
+        /// Mint a new pack of cards for the caller, up to `MaxPacks`.
         #[pallet::call_index(0)]
         #[pallet::weight(10_000)]
         pub fn mint_pack(origin: OriginFor<T>) -> DispatchResult {
@@ -151,12 +185,6 @@ pub mod pallet {
             );
 
             let mut packs = PlayerPacks::<T>::get(&player);
-            log::debug!(
-                "mint_pack: Player {:?} currently has {} packs.",
-                player,
-                packs.len()
-            );
-
             ensure!(
                 packs.len() < T::MaxPacks::get() as usize,
                 Error::<T>::MaxPacksReached
@@ -167,19 +195,15 @@ pub mod pallet {
 
             let mut cards: BoundedVec<Card, ConstU32<16>> = BoundedVec::default();
 
+            // Create each card with no attempts stored in the struct
             for i in 0..T::CardsPerPack::get() {
-                log::debug!("mint_pack: Adding card {} to pack.", i);
                 cards
                     .try_push(Card {
                         id: i as u32,
-                        attempts: 0,
                         finalized: false,
                         slot_values: None,
                     })
-                    .map_err(|_| {
-                        log::error!("mint_pack: Failed to add card {} to pack.", i);
-                        Error::<T>::MaxPacksReached
-                    })?;
+                    .map_err(|_| Error::<T>::MaxPacksReached)?;
             }
 
             let pack = Pack {
@@ -189,71 +213,64 @@ pub mod pallet {
                 completed: false,
             };
 
-            packs.try_push(pack).map_err(|_| {
-                log::error!("mint_pack: Failed to add new pack for player {:?}", player);
-                Error::<T>::MaxPacksReached
-            })?;
+            packs
+                .try_push(pack)
+                .map_err(|_| Error::<T>::MaxPacksReached)?;
 
+            // Update storage
             PlayerPacks::<T>::insert(&player, packs);
             ActiveCard::<T>::insert(&player, Some(0));
 
-            log::debug!(
-                "mint_pack: Successfully minted pack {:?} for player {:?}",
-                pack_id,
-                player
-            );
-
-            // 🔹 Ensure event is emitted
             Self::deposit_event(Event::PackMinted {
                 player: player.clone(),
                 pack_id,
             });
-
-            log::debug!(
-                "mint_pack: PackMinted event emitted for player {:?}, pack_id {:?}",
-                player,
-                pack_id
-            );
-
             Ok(())
         }
 
+        /// Generate new slot values for the current (active) card, up to `MaxAttempts`.
         #[pallet::call_index(1)]
         #[pallet::weight(10_000)]
         pub fn generate_slot(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
 
             PlayerPacks::<T>::mutate(&player, |packs| {
-                let pack_index = packs.len().saturating_sub(1);
-                let pack = packs.get_mut(pack_index).ok_or(Error::<T>::NoPackFound)?;
+                let pack = packs.last_mut().ok_or(Error::<T>::NoPackFound)?; // use the last pack minted
 
                 let active_card_idx =
                     ActiveCard::<T>::get(&player).ok_or(Error::<T>::NoActiveCard)?;
-                let max_attempts = T::MaxAttempts::get();
 
-                // 🔹 Extract reference to card ONCE
                 let card = &mut pack.cards[active_card_idx as usize];
+                let card_id = card.id;
+
+                // Check how many attempts so far
+                let mut attempts = CardAttempts::<T>::get((player.clone(), pack.id, card_id));
 
                 ensure!(
-                    card.attempts < max_attempts,
+                    attempts < T::MaxAttempts::get(),
                     Error::<T>::MaxAttemptsExceeded
                 );
 
+                // Generate random values
                 let current_block = <frame_system::Pallet<T>>::block_number();
                 let seed = T::RandomnessSeed::get();
                 let hash = T::Hashing::hash_of(&(current_block, &player, seed));
                 let values = hash.as_ref()[..4].try_into().unwrap_or([0u8; 4]);
 
+                // Update the card
                 card.slot_values = Some(values);
-                card.attempts += 1;
-                let card_id = card.id;
 
-                if card.attempts == max_attempts {
+                // Increment attempts
+                attempts += 1;
+                CardAttempts::<T>::insert((player.clone(), pack.id, card_id), attempts);
+
+                // If we've hit max attempts, finalize the card now
+                if attempts == T::MaxAttempts::get() {
                     card.finalized = true;
                     Self::finalize_card(&player, pack, active_card_idx)?;
                 }
 
-                // 🔹 Ensure event is emitted
+                // Emit
                 Self::deposit_event(Event::SlotGenerated {
                     player: player.clone(),
                     pack_id: pack.id,
@@ -265,36 +282,33 @@ pub mod pallet {
             })
         }
 
+        /// Accept the current card's slot values (finalize it immediately).
         #[pallet::call_index(2)]
         #[pallet::weight(10_000)]
         pub fn accept_slot(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
 
             PlayerPacks::<T>::mutate(&player, |packs| {
-                if packs.is_empty() {
-                    return Err(Error::<T>::NoPackFound.into());
-                }
-
-                let pack_index = packs.len().saturating_sub(1);
-                let pack = packs.get_mut(pack_index).ok_or(Error::<T>::NoPackFound)?;
+                let pack = packs.last_mut().ok_or(Error::<T>::NoPackFound)?;
 
                 let active_card_idx =
                     ActiveCard::<T>::get(&player).ok_or(Error::<T>::NoActiveCard)?;
 
-                // Extract mutable reference ONCE
                 let card = &mut pack.cards[active_card_idx as usize];
 
-                // Ensure the slot has been rolled before allowing acceptance
+                // Must have generated at least once
                 if card.slot_values.is_none() {
                     return Err(Error::<T>::NoActiveCard.into());
                 }
 
-                let card_id = card.id; // Get ID before modifying
-
+                let card_id = card.id;
+                // Mark the card as finalized
                 card.finalized = true;
 
+                // Also finalize from the pallet perspective
                 Self::finalize_card(&player, pack, active_card_idx)?;
 
+                // Emit
                 Self::deposit_event(Event::SlotAccepted {
                     player: player.clone(),
                     pack_id: pack.id,
@@ -306,7 +320,12 @@ pub mod pallet {
         }
     }
 
+    // ------------------
+    // Pallet Internals
+    // ------------------
+
     impl<T: Config> Pallet<T> {
+        /// Helper to finalize a card (mark it done, advance or complete the pack)
         fn finalize_card(
             player: &T::AccountId,
             pack: &mut Pack,
@@ -315,20 +334,26 @@ pub mod pallet {
             let card = &mut pack.cards[current_idx as usize];
             let card_id = card.id;
 
-            // 🔹 Ensure `finalized` is properly set
+            // Mark final
             card.finalized = true;
+            // Remove attempts data now that it's finalized
+            CardAttempts::<T>::remove((player.clone(), pack.id, card_id));
 
+            // Emit event
             Self::deposit_event(Event::SlotFinalized {
                 player: player.clone(),
                 pack_id: pack.id,
                 card_id,
             });
 
+            // If not at the last card, increment the active index
             if (current_idx as usize) < (pack.cards.len() - 1) {
                 ActiveCard::<T>::insert(player, Some(current_idx + 1));
             } else {
+                // If that was the last card, the pack is now complete
                 pack.completed = true;
                 ActiveCard::<T>::remove(player);
+
                 Self::deposit_event(Event::PackCompleted {
                     player: player.clone(),
                     pack_id: pack.id,
