@@ -1,101 +1,313 @@
-use crate::{mock::*, Error};
-use frame_support::{assert_err, assert_ok};
-use log::info;
+use crate::ActiveCard;
+use crate::PlayerPacks;
+use crate::{mock::*, Error, Event};
+use frame_support::{assert_noop, assert_ok};
+use log::{debug, info, Level, Metadata, Record};
+use std::sync::Once;
+
+static INIT: Once = Once::new();
+
+pub struct SimpleLogger;
+
+impl log::Log for SimpleLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() <= Level::Debug
+    }
+
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            println!(
+                "[{}] {}: {}",
+                record.level(),
+                record.target(),
+                record.args()
+            );
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static LOGGER: SimpleLogger = SimpleLogger;
+
+pub fn init_logger() {
+    INIT.call_once(|| {
+        log::set_logger(&LOGGER).unwrap();
+        log::set_max_level(log::LevelFilter::Debug);
+    });
+}
+
+fn assert_event_found<F>(matcher: F, event_name: &str)
+where
+    F: Fn(&RuntimeEvent) -> bool,
+{
+    let events = frame_system::Pallet::<Test>::events();
+    let found = events.iter().any(|record| matcher(&record.event));
+
+    assert!(
+        found,
+        "Expected {} event but did not find it. Events seen: {:?}",
+        event_name, events
+    );
+}
+
+/// Advances the block number to `n` to ensure event processing occurs.
+fn run_to_block(n: u64) {
+    while frame_system::Pallet::<Test>::block_number() < n {
+        frame_system::Pallet::<Test>::set_block_number(
+            frame_system::Pallet::<Test>::block_number() + 1,
+        );
+        frame_system::Pallet::<Test>::finalize();
+        frame_system::Pallet::<Test>::initialize(
+            &frame_system::Pallet::<Test>::block_number(),
+            &Default::default(),
+            &Default::default(),
+        );
+    }
+}
 
 #[test]
-fn generate_slot_works() {
+fn test_mint_pack_simple_storage_check() {
     new_test_ext().execute_with(|| {
-        let player: u64 = 1;
-        info!("Starting generate_slot_works test...");
+        let player = 1;
 
-        System::set_block_number(1);
+        // Clear any old data
+        PlayerPacks::<Test>::remove(&player);
+        ActiveCard::<Test>::remove(&player);
+        System::reset_events();
+        System::set_block_number(42); // or any number you prefer
 
-        assert_eq!(SlotMachine::player_attempts(&player), 0);
+        // Call your mint_pack
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
 
-        assert_ok!(SlotMachine::generate_slot(RuntimeOrigin::signed(player)));
+        // Verify the minted pack is in storage
+        let packs = EterraSlots::player_packs(player);
+        assert_eq!(packs.len(), 1, "Should have exactly 1 pack minted");
 
-        assert_eq!(SlotMachine::player_attempts(&player), 1);
+        // Additional check: The newly minted pack should have ID = 42 (the current block),
+        // or whatever your logic for pack_id might be.
+        let minted_pack = &packs[0];
+        assert_eq!(minted_pack.get_id(), 42);
+    });
+}
 
-        // Retrieve the generated event
+#[test]
+fn test_mint_pack_check_event_directly() {
+    new_test_ext().execute_with(|| {
+        let player = 1;
+        
+        // Ensure a known block number so pack_id is predictable
+        System::set_block_number(100);
+
+        // Clear events to avoid pollution from prior tests
+        System::reset_events();
+
+        // Dispatch the extrinsic
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
+
+        // Now check that the event was indeed emitted
+        //
+        // Because your code uses:
+        //   let pack_id = <frame_system::Pallet<T>>::block_number().saturated_into::<u32>();
+        // that means pack_id should be 100 here.
+        System::assert_has_event(RuntimeEvent::EterraSlots(
+            crate::Event::<Test>::PackMinted {
+                player,
+                pack_id: 100,
+            },
+        ).into());
+    });
+}
+
+#[test]
+fn test_mint_pack_inspect_events() {
+    new_test_ext().execute_with(|| {
+        let player = 1;
+        System::set_block_number(7);
+        System::reset_events();
+
+        // 1) Call the extrinsic
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
+
+        // 2) Immediately get the events from the same block
         let all_events = System::events();
-        info!("Total events: {}", all_events.len());
+        assert!(!all_events.is_empty(), "No events were recorded at all!");
 
-        let last_event = all_events.last();
+        // 3) Check for your specific event
+        let minted_event_found = all_events.iter().any(|r| match &r.event {
+            RuntimeEvent::EterraSlots(crate::Event::PackMinted {
+                player: who, pack_id
+            }) => {
+                *who == player && *pack_id == 7
+            },
+            _ => false,
+        });
         assert!(
-            last_event.is_some(),
-            "Expected an event to be emitted but found None."
+            minted_event_found,
+            "Expected PackMinted for player={}, pack_id=7, but no such event was found.",
+            player
+        );
+    });
+}
+
+#[test]
+fn test_mint_pack_storage_and_events() {
+    new_test_ext().execute_with(|| {
+        let player = 1;
+        // Assume block #8
+        System::set_block_number(8);
+        System::reset_events();
+
+        // 1) Mint the pack
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
+
+        // 2) Check storage updated
+        let packs = EterraSlots::player_packs(player);
+        assert_eq!(packs.len(), 1, "Should have 1 pack minted now.");
+        let minted_pack = &packs[0];
+        assert_eq!(minted_pack.get_id(), 8, "Pack should have ID=8 if block #=8");
+
+        // 3) Check event with a direct assertion
+        System::assert_has_event(RuntimeEvent::EterraSlots(
+            crate::Event::PackMinted {
+                player,
+                pack_id: 8,
+            },
+        ).into());
+    });
+}
+
+#[test]
+fn test_generate_slot_success() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let player = 1;
+
+        debug!("Ensuring fresh state for player {}", player);
+        PlayerPacks::<Test>::remove(&player);
+        ActiveCard::<Test>::remove(&player);
+        assert!(EterraSlots::player_packs(player).is_empty(), "Player should start with no packs");
+
+        debug!("Minting a pack for player {} before generating a slot.", player);
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
+
+        debug!("Running to next block to ensure event processing...");
+        run_to_block(frame_system::Pallet::<Test>::block_number() + 1);
+
+        debug!("Checking if active card is set...");
+        let active_card = ActiveCard::<Test>::get(player);
+        assert!(active_card.is_some(), "Expected an active card but found None");
+
+        debug!("Generating slot for the first card for player {}", player);
+        assert_ok!(EterraSlots::generate_slot(RuntimeOrigin::signed(player)));
+
+        debug!("Running to next block to ensure event processing...");
+        run_to_block(frame_system::Pallet::<Test>::block_number() + 1);
+
+        debug!("Checking emitted events...");
+        assert_event_found(
+            |e| matches!(e, RuntimeEvent::EterraSlots(Event::SlotGenerated { player: event_player, .. }) if *event_player == player),
+            "SlotGenerated"
         );
 
-        if let RuntimeEvent::SlotMachine(crate::Event::SlotGenerated { player: event_player, values }) = &last_event.unwrap().event {
-            assert_eq!(*event_player, player, "Player ID in event does not match expected.");
-            assert_eq!(values.len(), 4, "Generated values should be exactly 4 bytes.");
-        } else {
-            panic!("Expected SlotGenerated event but got something else: {:?}", last_event);
-        }
+        debug!("SlotGenerated event emitted for player {}", player);
     });
 }
 
 #[test]
-fn accept_slot_works() {
+fn test_accept_slot_success() {
+    init_logger();
     new_test_ext().execute_with(|| {
-        let player: u64 = 1;
+        let player = 1;
 
-        info!("Starting accept_slot_works test...");
+        debug!("Minting a pack and generating a slot for player {}", player);
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
+        run_to_block(frame_system::Pallet::<Test>::block_number() + 1);
 
-        System::set_block_number(1);
+        assert_ok!(EterraSlots::generate_slot(RuntimeOrigin::signed(player)));
+        run_to_block(frame_system::Pallet::<Test>::block_number() + 1);
 
-        assert_ok!(SlotMachine::generate_slot(RuntimeOrigin::signed(player)));
-        assert_eq!(SlotMachine::player_attempts(&player), 1);
+        debug!("Accepting slot for player {}", player);
+        assert_ok!(EterraSlots::accept_slot(RuntimeOrigin::signed(player)));
 
-        assert_ok!(SlotMachine::accept_slot(RuntimeOrigin::signed(player)));
-        info!("Slot accepted by player {}", player);
+        debug!("Running to next block to ensure event processing...");
+        run_to_block(frame_system::Pallet::<Test>::block_number() + 1);
 
-        assert_eq!(SlotMachine::player_attempts(&player), 0);
-
-        // Check event was emitted
-        System::assert_has_event(RuntimeEvent::SlotMachine(crate::Event::SlotAccepted { player }));
-    });
-}
-
-#[test]
-fn deny_slot_works() {
-    new_test_ext().execute_with(|| {
-        let player: u64 = 1;
-
-        info!("Starting deny_slot_works test...");
-
-        System::set_block_number(1);
-
-        assert_ok!(SlotMachine::generate_slot(RuntimeOrigin::signed(player)));
-        assert_eq!(SlotMachine::player_attempts(&player), 1);
-
-        assert_ok!(SlotMachine::deny_slot(RuntimeOrigin::signed(player)));
-        info!("Slot denied by player {}", player);
-
-        assert_eq!(SlotMachine::player_attempts(&player), 1);
-
-        // Check event was emitted
-        System::assert_has_event(RuntimeEvent::SlotMachine(crate::Event::SlotDenied { player }));
-    });
-}
-
-#[test]
-fn max_attempts_exceeded() {
-    new_test_ext().execute_with(|| {
-        let player: u64 = 1;
-
-        info!("Starting max_attempts_exceeded test...");
-
-        System::set_block_number(1);
-
-        for _ in 0..3 {
-            assert_ok!(SlotMachine::generate_slot(RuntimeOrigin::signed(player)));
-        }
-
-        // Expect failure when exceeding limit
-        assert_err!(
-            SlotMachine::generate_slot(RuntimeOrigin::signed(player)),
-            Error::<Test>::MaxAttemptsExceeded
+        debug!("Checking emitted events...");
+        assert_event_found(
+            |e| matches!(e, RuntimeEvent::EterraSlots(Event::SlotAccepted { player: event_player, .. }) if *event_player == player),
+            "SlotAccepted"
         );
+
+        debug!("SlotAccepted event emitted for player {}", player);
+    });
+}
+
+#[test]
+fn test_mint_pack_fail_when_max_packs_reached() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let player = 1;
+        debug!("Minting maximum allowed packs for player {}", player);
+
+        for _ in 0..10 {
+            assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
+            run_to_block(frame_system::Pallet::<Test>::block_number() + 1);
+        }
+
+        debug!(
+            "Attempting to mint an 11th pack for player {} (should fail).",
+            player
+        );
+        assert_noop!(
+            EterraSlots::mint_pack(RuntimeOrigin::signed(player)),
+            Error::<Test>::MaxPacksReached
+        );
+
+        debug!("Mint pack failure correctly triggered for exceeding max packs.");
+    });
+}
+
+#[test]
+fn test_generate_slot_fail_when_no_active_card() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let player = 1;
+        debug!(
+            "Attempting to generate a slot for player {} without any packs.",
+            player
+        );
+
+        assert_noop!(
+            EterraSlots::generate_slot(RuntimeOrigin::signed(player)),
+            Error::<Test>::NoPackFound
+        );
+
+        debug!("Correctly failed to generate slot without an active pack.");
+    });
+}
+
+#[test]
+fn test_accept_slot_fail_when_slot_not_rolled() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let player = 1;
+
+        debug!(
+            "Minting a pack for player {} before accepting slot.",
+            player
+        );
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
+
+        debug!("Attempting to accept a slot before rolling one.");
+        let result = EterraSlots::accept_slot(RuntimeOrigin::signed(player));
+
+        assert!(
+            result == Err(Error::<Test>::NoActiveCard.into()),
+            "Expected NoActiveCard error but got {:?}",
+            result
+        );
+
+        debug!("Correctly failed to accept slot without rolling one first.");
     });
 }

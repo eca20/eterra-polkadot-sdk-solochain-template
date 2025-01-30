@@ -22,6 +22,7 @@ use sp_version::RuntimeVersion;
 use codec::{Decode, Encode};
 use frame_support::traits::ConstU64;
 use frame_support::traits::Get;
+use frame_support::traits::{ConstU32, ConstU8};
 pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_eterra;
@@ -222,8 +223,11 @@ impl pallet_eterra::Config for Runtime {
 impl pallet_eterra_slots::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type RandomnessSeed = ConstU64<42>;
-}
 
+    type MaxAttempts = ConstU8<3>; // Set maximum attempts per card to 3
+    type CardsPerPack = ConstU8<5>; // Set number of cards per pack to 5
+    type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
+}
 // Create the runtime by composing the FRAME pallets that were previously configured.
 #[frame_support::runtime]
 mod runtime {
