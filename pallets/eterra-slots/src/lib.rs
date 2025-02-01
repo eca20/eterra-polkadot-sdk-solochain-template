@@ -1,3 +1,5 @@
+// TODO: Add ability to purchase slot pulls via tokens
+
 #![cfg_attr(not(feature = "std"), no_std)]
 
 pub use pallet::*;
