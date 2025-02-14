@@ -5190,6 +5190,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-eterra-daily-slots"
+version = "0.1.0"
+dependencies = [
+ "frame-support",
+ "frame-system",
+ "hex",
+ "log",
+ "pallet-timestamp",
+ "parity-scale-codec",
+ "scale-info",
+ "schnorrkel",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
 name = "pallet-eterra-slots"
 version = "0.1.0"
 dependencies = [
@@ -8275,6 +8293,7 @@ dependencies = [
  "pallet-aura",
  "pallet-balances",
  "pallet-eterra",
+ "pallet-eterra-daily-slots",
  "pallet-eterra-slots",
  "pallet-grandpa",
  "pallet-sudo",

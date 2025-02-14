@@ -27,6 +27,7 @@ pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_eterra;
 pub use pallet_eterra_slots;
+pub use pallet_eterra_daily_slots;
 pub use pallet_timestamp::Call as TimestampCall;
 use scale_info::TypeInfo;
 
@@ -213,6 +214,29 @@ impl Get<u8> for EterraBlocksToPlayLimit {
     }
 }
 
+pub struct MaxSlotLength;
+impl Get<u32> for MaxSlotLength {
+    fn get() -> u32 {
+        3 // The number of slots per slot roll
+    }
+}
+
+pub struct MaxOptionsPerSlot;
+impl Get<u32> for MaxOptionsPerSlot {
+    fn get() -> u32 {
+        10 // The number of players in the game
+    }
+}
+
+pub struct MaxRollsPerRound;
+impl Get<u32> for MaxRollsPerRound {
+    fn get() -> u32 {
+        3 // The number of players in the game
+    }
+}
+
+
+
 impl pallet_eterra::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type NumPlayers = EterraNumPlayers;
@@ -228,6 +252,16 @@ impl pallet_eterra_slots::Config for Runtime {
     type CardsPerPack = ConstU8<5>; // Set number of cards per pack to 5
     type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
 }
+
+
+impl pallet_eterra_daily_slots::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type TimeProvider = pallet_timestamp::Pallet<Runtime>; // ✅ Ensure pallet_timestamp is used
+    type MaxSlotLength = MaxSlotLength;
+    type MaxOptionsPerSlot = MaxOptionsPerSlot;
+    type MaxRollsPerRound = MaxRollsPerRound;
+}
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 #[frame_support::runtime]
 mod runtime {
@@ -275,4 +309,7 @@ mod runtime {
 
     #[runtime::pallet_index(9)]
     pub type EterraSlots = pallet_eterra_slots;
+
+    #[runtime::pallet_index(10)]
+    pub type EterraDailySlots = pallet_eterra_daily_slots;
 }
