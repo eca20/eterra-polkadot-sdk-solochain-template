@@ -64,35 +64,38 @@ pub mod pallet {
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
-        #[pallet::call_index(0)]
-        #[pallet::weight(10_000)]
-        pub fn roll(origin: OriginFor<T>) -> DispatchResult {
-            let who = ensure_signed(origin)?;
-            let now = T::TimeProvider::now().as_secs(); // ✅ Use UnixTime to fetch current time
-            let last_roll = LastRollTime::<T>::get(&who);
+       #[pallet::call_index(0)]
+    #[pallet::weight(10_000)] // or 0 for dev
+    pub fn roll(origin: OriginFor<T>) -> DispatchResult {
+        let who = ensure_signed(origin)?;
+        
+        // 1. Check that the config is valid first
+        let (slot_length, options_per_slot, rolls_per_round) = SlotMachineConfig::<T>::get();
+        ensure!(
+            slot_length > 0 && options_per_slot > 0 && rolls_per_round > 0,
+            Error::<T>::InvalidConfiguration
+        );
 
-            ensure!(now >= last_roll + 86_400, Error::<T>::RollNotAvailableYet);
+        // 2. Now check the daily-limit logic
+        let now = T::TimeProvider::now().as_secs();
+        let last_roll = LastRollTime::<T>::get(&who);
+        ensure!(now >= last_roll + 86_400, Error::<T>::RollNotAvailableYet);
 
-            let (slot_length, options_per_slot, rolls_per_round) = SlotMachineConfig::<T>::get();
-            ensure!(
-                slot_length > 0 && options_per_slot > 0 && rolls_per_round > 0,
-                Error::<T>::InvalidConfiguration
-            );
-
-            let mut result = Vec::new();
-            for _ in 0..slot_length {
-                let roll = (now % options_per_slot.saturated_into::<u64>()) as u32;
-                result.push(roll);
-            }
-
-            LastRollTime::<T>::insert(&who, now);
-            Self::deposit_event(Event::SlotRolled {
-                player: who,
-                result,
-            });
-
-            Ok(())
+        // 3. Perform the slot roll
+        let mut result = Vec::new();
+        for _ in 0..slot_length {
+            let roll = (now % options_per_slot.saturated_into::<u64>()) as u32;
+            result.push(roll);
         }
+
+        LastRollTime::<T>::insert(&who, now);
+        Self::deposit_event(Event::SlotRolled {
+            player: who,
+            result,
+        });
+
+        Ok(())
+    }
     }
 
     #[pallet::hooks]
