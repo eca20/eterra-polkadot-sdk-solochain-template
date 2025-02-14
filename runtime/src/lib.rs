@@ -26,10 +26,11 @@ use frame_support::traits::{ConstU32, ConstU8};
 pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_eterra;
-pub use pallet_eterra_slots;
 pub use pallet_eterra_daily_slots;
+pub use pallet_eterra_slots;
 pub use pallet_timestamp::Call as TimestampCall;
 use scale_info::TypeInfo;
+use sp_runtime::traits::BlockNumberProvider;
 
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
@@ -235,8 +236,6 @@ impl Get<u32> for MaxRollsPerRound {
     }
 }
 
-
-
 impl pallet_eterra::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type NumPlayers = EterraNumPlayers;
@@ -252,7 +251,6 @@ impl pallet_eterra_slots::Config for Runtime {
     type CardsPerPack = ConstU8<5>; // Set number of cards per pack to 5
     type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
 }
-
 
 impl pallet_eterra_daily_slots::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;

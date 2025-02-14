@@ -3,8 +3,7 @@
 use crate as pallet_eterra_daily_slots;
 
 use frame_support::{
-    construct_runtime,
-    parameter_types,
+    construct_runtime, parameter_types,
     traits::{ConstU16, ConstU32, Everything, UnixTime},
 };
 use frame_system as system;

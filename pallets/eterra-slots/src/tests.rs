@@ -419,7 +419,9 @@ fn test_transfer_card_success() {
         let new_owner = 2;
 
         // 1) Mint a pack for `original_owner` to create some cards.
-        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(original_owner)));
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(
+            original_owner
+        )));
 
         // 2) Grab the first pack and its first card_id.
         let packs = EterraSlots::player_packs(original_owner);
@@ -436,15 +438,16 @@ fn test_transfer_card_success() {
         // 3) Finalize the card before transferring
         System::reset_events(); // Clear old events
 
-        assert_ok!(EterraSlots::generate_slot(RuntimeOrigin::signed(original_owner)));
-        assert_ok!(EterraSlots::accept_slot(RuntimeOrigin::signed(original_owner)));
+        assert_ok!(EterraSlots::generate_slot(RuntimeOrigin::signed(
+            original_owner
+        )));
+        assert_ok!(EterraSlots::accept_slot(RuntimeOrigin::signed(
+            original_owner
+        )));
 
         // 4) Transfer the finalized card to `new_owner`
-        let result = EterraSlots::transfer_card(
-            RuntimeOrigin::signed(original_owner),
-            card_id,
-            new_owner,
-        );
+        let result =
+            EterraSlots::transfer_card(RuntimeOrigin::signed(original_owner), card_id, new_owner);
 
         assert_ok!(result);
 
@@ -461,14 +464,16 @@ fn test_transfer_card_success() {
         let events = System::events();
         println!("[TEST] Events after transfer: {:?}", events);
 
-        let found_event = events.iter().any(|r| matches!(
-            r.event,
-            RuntimeEvent::EterraSlots(Event::CardTransferred {
-                from,
-                to,
-                card_id: c_id
-            }) if from == original_owner && to == new_owner && c_id == card_id
-        ));
+        let found_event = events.iter().any(|r| {
+            matches!(
+                r.event,
+                RuntimeEvent::EterraSlots(Event::CardTransferred {
+                    from,
+                    to,
+                    card_id: c_id
+                }) if from == original_owner && to == new_owner && c_id == card_id
+            )
+        });
         if !found_event {
             println!(
                 "[WARN] No CardTransferred event found for card_id={}, but ownership DID update.",

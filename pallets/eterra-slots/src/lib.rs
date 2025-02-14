@@ -1,5 +1,5 @@
 // TODO: Add ability to purchase slot pulls via tokens
-// TODO: Add limited card storage, 600 cards? 
+// TODO: Add limited card storage, 600 cards?
 // TODO: Add ability to add storage for 50 tokens
 #![cfg_attr(not(feature = "std"), no_std)]
 
