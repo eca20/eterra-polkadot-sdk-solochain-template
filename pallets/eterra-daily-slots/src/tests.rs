@@ -306,10 +306,10 @@ fn test_no_weekly_drawing_with_no_tickets() {
 
 #[test]
 fn test_weekly_drawing_only_once_per_week() {
-    let sunday_time = 324000;
-    MockTimeState::set_now(sunday_time);
-
     new_test_ext().execute_with(|| {
+        let sunday_time = 324000; // Correct Sunday 6PM time
+        MockTimeState::set_now(sunday_time); // ✅ move inside here
+
         SlotMachineConfig::<TestRuntime>::put((3, 5, 2));
 
         crate::TicketsPerUser::<TestRuntime>::insert(1, 5);
@@ -341,5 +341,72 @@ fn test_weekly_drawing_only_once_per_week() {
             )
         }).count();
         assert_eq!(winner_events, 1, "Should have exactly one WeeklyWinner event");
+    });
+}
+
+#[test]
+fn test_slot_rolled_event_emitted_correctly() {
+    new_test_ext().execute_with(|| {
+        // Set up a valid config
+        SlotMachineConfig::<TestRuntime>::put((3, 5, 2));
+        LastRollTime::<TestRuntime>::insert(1, 0); // avoid daily limit
+
+        // Clear events
+        frame_system::Pallet::<TestRuntime>::reset_events();
+
+        // Perform a roll
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
+
+        // Capture events
+        let events = frame_system::Pallet::<TestRuntime>::events();
+
+        // Find SlotRolled event
+        let slot_rolled_found = events.iter().any(|event_record| {
+            matches!(
+                event_record.event,
+                RuntimeEvent::EterraDailySlots(crate::Event::SlotRolled { .. })
+            )
+        });
+
+        assert!(slot_rolled_found, "SlotRolled event should have been emitted");
+    });
+}
+
+#[test]
+fn test_weekly_winner_event_emitted_correctly() {
+    new_test_ext().execute_with(|| {
+        // Simulate Sunday 6PM
+        let sunday_time = 324_000;
+        MockTimeState::set_now(sunday_time);
+
+        // Set up tickets
+        SlotMachineConfig::<TestRuntime>::put((3, 5, 2));
+        crate::TicketsPerUser::<TestRuntime>::insert(1, 5);
+        crate::TotalTickets::<TestRuntime>::put(5);
+        crate::LastDrawingTime::<TestRuntime>::put(0);
+
+        frame_system::Pallet::<TestRuntime>::set_block_number(1000);
+        frame_system::Pallet::<TestRuntime>::set_block_number(1001);
+
+        // Clear events
+        frame_system::Pallet::<TestRuntime>::reset_events();
+
+        // Trigger on_initialize where drawing should happen
+        Pallet::<TestRuntime>::on_initialize(1001);
+
+        // Capture events
+        let events = frame_system::Pallet::<TestRuntime>::events();
+
+        // Find WeeklyWinner event
+        let winner_found = events.iter().any(|event_record| {
+            matches!(
+                event_record.event,
+                RuntimeEvent::EterraDailySlots(crate::Event::WeeklyWinner { .. })
+            )
+        });
+
+        assert!(winner_found, "WeeklyWinner event should have been emitted");
     });
 }
