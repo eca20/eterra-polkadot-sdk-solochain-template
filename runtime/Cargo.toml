@@ -52,7 +52,7 @@ pallet-template.workspace = true
 
 # Local Dependencies
 pallet-eterra                             = { workspace = true }
-pallet-eterra-slots = { workspace = true }
+pallet-eterra-tcg = { workspace = true }
 pallet-eterra-daily-slots = { workspace = true }
 
 [build-dependencies]

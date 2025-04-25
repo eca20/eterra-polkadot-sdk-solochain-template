@@ -204,19 +204,19 @@ pub mod pallet {
             game.last_played_block = current_block;
 
             // Check if the game is won
-            if let Some(winner) = Self::is_game_won(&game_id, &game) {
-                Self::end_game(&game_id, winner);
-                return Ok(());
-            }
+            // if let Some(winner) = Self::is_game_won(&game_id, &game) {
+            //     Self::end_game(&game_id, winner);
+            //     return Ok(());
+            // }
 
             // Update to the next turn
             game.next_turn();
 
-            // Check if the game is won after updating the round
-            if let Some(winner) = Self::is_game_won(&game_id, &game) {
-                Self::end_game(&game_id, winner);
-                return Ok(());
-            }
+            log::debug!(
+                "Saving game state after next_turn. Current round: {}, player_turn: {}",
+                game.round,
+                game.player_turn
+            );
 
             // Emit a NewTurn event for the new current player
             let next_player = game.players[game.get_player_turn() as usize].clone();
@@ -227,6 +227,12 @@ pub mod pallet {
 
             // Save the updated game
             GameStorage::<T>::insert(&game_id, game.clone());
+
+            // Check if the game is won after updating the round
+            if let Some(winner) = Self::is_game_won(&game_id, &game) {
+                Self::end_game(&game_id, winner);
+                return Ok(());
+            }
 
             log::debug!(
                 "Next turn belongs to: {:?}",
@@ -268,9 +274,22 @@ pub mod pallet {
                 Error::<T>::BlocksToPlayLimitNotPassed
             );
 
-            // Force finish the current turn and update the game
+            // Force finish the current turn
             game.next_turn();
             game.last_played_block = current_block;
+
+            log::debug!(
+                "Force finish turn: game_id {:?}, current round: {}, max rounds: {}",
+                game_id,
+                game.round,
+                game.max_rounds
+            );
+
+            // ✅ Check if game is won after forcing turn
+            if let Some(winner) = Self::is_game_won(&game_id, &game) {
+                Self::end_game(&game_id, winner);
+                return Ok(()); // Stop execution if game is finished
+            }
 
             // Save the updated game state
             GameStorage::<T>::insert(&game_id, game.clone());
@@ -332,15 +351,34 @@ impl<T: Config> Pallet<T> {
             }
         }
     }
+
     fn is_game_won(
         game_id: &GameId<T>,
         game: &Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
     ) -> Option<Option<T::AccountId>> {
-        if game.round < game.max_rounds {
-            return None; // Game is not yet finished
+        log::debug!(
+            "Checking if game is won. Current round: {}, Max rounds: {}",
+            game.round,
+            game.max_rounds
+        );
+
+        // Ensure game is still in storage before checking win conditions
+        if !GameStorage::<T>::contains_key(game_id) {
+            log::warn!(
+                "Warning: Attempted to check is_game_won() on a removed game: {:?}",
+                game_id
+            );
+            return None;
         }
 
-        // Determine the winner using scores
+        if game.round >= game.max_rounds {
+            log::debug!("Max rounds reached. Determining winner...");
+        } else {
+            log::debug!("Game continues. Not at max rounds yet.");
+            return None;
+        }
+
+        // Determine winner
         let (score_player_0, score_player_1) = game.scores;
         let winner = if score_player_0 > score_player_1 {
             Some(game.players[0].clone())
@@ -359,7 +397,6 @@ impl<T: Config> Pallet<T> {
 
         Some(winner)
     }
-
     fn validate_player_turn(
         game: &Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
         who: &AccountIdOf<T>,

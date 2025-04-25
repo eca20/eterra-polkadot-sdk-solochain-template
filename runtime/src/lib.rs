@@ -27,7 +27,7 @@ pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_eterra;
 pub use pallet_eterra_daily_slots;
-pub use pallet_eterra_slots;
+pub use pallet_eterra_tcg;
 pub use pallet_timestamp::Call as TimestampCall;
 use scale_info::TypeInfo;
 use sp_runtime::traits::BlockNumberProvider;
@@ -211,7 +211,10 @@ impl Get<u8> for EterraMaxRounds {
 pub struct EterraBlocksToPlayLimit;
 impl Get<u8> for EterraBlocksToPlayLimit {
     fn get() -> u8 {
-        10 // The number of players in the game
+        6 // The limit in blocks each player has until their turn is force finished
+          // Eventually, the force finish may allow the opponent to click to force finish
+          // but forcing the node to finish turns prevents stale games from laying around
+          // while risking bots accruing rewards.
     }
 }
 
@@ -243,7 +246,7 @@ impl pallet_eterra::Config for Runtime {
     type BlocksToPlayLimit = EterraBlocksToPlayLimit;
 }
 
-impl pallet_eterra_slots::Config for Runtime {
+impl pallet_eterra_tcg::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type RandomnessSeed = ConstU64<42>;
 
@@ -306,7 +309,7 @@ mod runtime {
     pub type Eterra = pallet_eterra;
 
     #[runtime::pallet_index(9)]
-    pub type EterraSlots = pallet_eterra_slots;
+    pub type EterraTCG = pallet_eterra_tcg;
 
     #[runtime::pallet_index(10)]
     pub type EterraDailySlots = pallet_eterra_daily_slots;

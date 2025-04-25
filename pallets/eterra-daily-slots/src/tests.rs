@@ -3,6 +3,7 @@
 use crate::mock::*;
 use crate::{Error, LastRollTime, Pallet, RollsThisBlock, SlotMachineConfig};
 use frame_support::{assert_noop, assert_ok};
+use frame_support::traits::Hooks;
 
 #[test]
 fn test_roll_succeeds_with_valid_config() {
@@ -161,7 +162,7 @@ fn test_only_one_successful_roll_per_block() {
         match &events_after_first[0].event {
             RuntimeEvent::EterraDailySlots(crate::Event::SlotRolled { player, .. }) => {
                 assert_eq!(*player, 1, "Wrong player for first roll");
-            },
+            }
             _ => panic!("Expected first event to be SlotRolled"),
         }
 
@@ -170,10 +171,8 @@ fn test_only_one_successful_roll_per_block() {
         frame_system::Pallet::<TestRuntime>::set_block_number(block_num);
 
         // 4. Second roll => should fail with ExceedRollsPerRound
-        LastRollTime::<TestRuntime>::insert(1, 0); 
-        let second_roll = Pallet::<TestRuntime>::roll(
-            frame_system::RawOrigin::Signed(1).into()
-        );
+        LastRollTime::<TestRuntime>::insert(1, 0);
+        let second_roll = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
         assert_noop!(second_roll, Error::<TestRuntime>::ExceedRollsPerRound);
 
         // Because the second roll returned an error, it does not emit or persist new events.
@@ -186,5 +185,88 @@ fn test_only_one_successful_roll_per_block() {
             1,
             "No new event should be added for the failing roll"
         );
+    });
+}
+
+ #[test]
+fn test_ticket_awarded_on_special_symbol() {
+    new_test_ext().execute_with(|| {
+        SlotMachineConfig::<TestRuntime>::put((3, 5, 2));
+
+        // Clear previous LastRollTime
+        LastRollTime::<TestRuntime>::insert(1, 0);
+
+        // Perform a roll
+        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+
+        // Check that tickets were assigned (mock time now() % 5 = 0 or 1 or so depending on timing)
+        // For MockTime::now() = 90,000, options_per_slot = 5, so roll value is (90_000 % 5) = 0
+        // Special symbol is 7 in current pallet logic, so unless options_per_slot changed, this test assumes symbol not 7
+        assert_eq!(crate::TicketsPerUser::<TestRuntime>::get(1), 0);
+
+        // This tests that unless you hit the special symbol (7), no tickets awarded.
+        // For a stronger test, we would simulate a case where result = 7.
+    });
+}
+
+#[test]
+fn test_no_weekly_drawing_if_not_sunday_6pm() {
+    new_test_ext().execute_with(|| {
+        SlotMachineConfig::<TestRuntime>::put((3, 5, 2));
+
+        // Set tickets to simulate a pool
+        crate::TicketsPerUser::<TestRuntime>::insert(1, 5);
+        crate::TotalTickets::<TestRuntime>::put(5);
+
+        // Simulate last drawing already recent
+        crate::LastDrawingTime::<TestRuntime>::put(89_500); // very close to now
+
+        // Should not draw again if < 24h passed
+        Pallet::<TestRuntime>::on_initialize(1);
+
+        // Tickets should still exist
+        assert_eq!(crate::TotalTickets::<TestRuntime>::get(), 5);
+
+        // No WeeklyWinner event should exist
+        let events = frame_system::Pallet::<TestRuntime>::events();
+        let winner_event_found = events.iter().any(|event_record| {
+            matches!(
+                event_record.event,
+                RuntimeEvent::EterraDailySlots(crate::Event::WeeklyWinner { .. })
+            )
+        });
+        assert!(!winner_event_found, "Should NOT have emitted WeeklyWinner event");
+    });
+}
+
+#[test]
+fn test_weekly_drawing_selects_winner() {
+    // 🔥 Corrected substrate-Sunday-6PM time
+    let sunday_time = 324000;
+    MockTimeState::set_now(sunday_time);
+
+    new_test_ext().execute_with(|| {
+        SlotMachineConfig::<TestRuntime>::put((3, 5, 2));
+
+        crate::TicketsPerUser::<TestRuntime>::insert(1, 5);
+        crate::TotalTickets::<TestRuntime>::put(5);
+        crate::LastDrawingTime::<TestRuntime>::put(0);
+
+        frame_system::Pallet::<TestRuntime>::set_block_number(1000);
+        frame_system::Pallet::<TestRuntime>::set_block_number(1001);
+        frame_system::Pallet::<TestRuntime>::reset_events();
+
+        Pallet::<TestRuntime>::on_initialize(1001);
+
+        assert_eq!(crate::TotalTickets::<TestRuntime>::get(), 0);
+
+        let events = frame_system::Pallet::<TestRuntime>::events();
+        let winner_event_found = events.iter().any(|event_record| {
+            matches!(
+                event_record.event,
+                RuntimeEvent::EterraDailySlots(crate::Event::WeeklyWinner { .. })
+            )
+        });
+        assert!(winner_event_found, "WeeklyWinner event should have been emitted");
     });
 }

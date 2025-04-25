@@ -17,11 +17,26 @@ use sp_runtime::{
 use std::time::Duration;
 
 // 1. Define a MockTime struct implementing UnixTime
+// Outside impl
+static mut MOCK_NOW: u64 = 90_000; // safe global mutable time
+
 pub struct MockTime;
+
 impl UnixTime for MockTime {
     fn now() -> Duration {
-        // e.g. 90000 seconds is ~1 day + 1 hour
-        Duration::from_secs(90_000)
+        Duration::from_secs(unsafe { MOCK_NOW })
+    }
+}
+
+pub struct MockTimeState;
+
+impl MockTimeState {
+    pub fn set_now(new_now: u64) {
+        unsafe { MOCK_NOW = new_now; }
+    }
+
+    pub fn now() -> u64 {
+        unsafe { MOCK_NOW }
     }
 }
 

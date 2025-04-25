@@ -1184,3 +1184,84 @@ fn test_force_idle_turns() {
         )));
     });
 }
+
+#[test]
+fn debug_game_rounds_and_termination() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+        let max_rounds = <Test as crate::Config>::MaxRounds::get();
+        let mut expected_round = 0;
+
+        log::info!("Starting game with max rounds: {}", max_rounds);
+
+        // Play a full game up to max_rounds
+        for i in 0..(max_rounds * 2) {
+            let current_player = if i % 2 == 0 { creator } else { opponent };
+            let card = Card::new(5, 3, 2, 4);
+            let player_move = Move {
+                place_index_x: (i % 4) as u8,
+                place_index_y: ((i / 4) % 4) as u8,
+                place_card: card,
+            };
+
+            log::debug!(
+                "Turn {}: Player {} placing at ({}, {})",
+                i + 1,
+                current_player,
+                player_move.place_index_x,
+                player_move.place_index_y
+            );
+
+            assert_ok!(Eterra::play(
+                frame_system::RawOrigin::Signed(current_player).into(),
+                game_id,
+                player_move.clone(),
+            ));
+
+            // Check round progression before game removal
+            if i % 2 == 1 {
+                expected_round += 1;
+
+                if let Some(game) = GameStorage::<Test>::get(&game_id) {
+                    assert_eq!(game.round, expected_round);
+                    log::info!("✅ Current round: {} / {}", game.round, max_rounds);
+                } else {
+                    log::warn!("⚠️ Game removed from storage, likely finished.");
+                    break;
+                }
+            }
+        }
+
+        // Ensure `GameFinished` event was emitted
+        let events = frame_system::Pallet::<Test>::events();
+        let game_finished_event_found = events.iter().any(|record| match record.event {
+            RuntimeEvent::Eterra(crate::Event::GameFinished {
+                game_id: event_game_id,
+                winner: event_winner,
+            }) => {
+                log::info!(
+                    "🎉 GameFinished Event Found: Game ID {:?}, Winner: {:?}",
+                    event_game_id,
+                    event_winner
+                );
+                event_game_id == game_id
+            }
+            _ => false,
+        });
+
+        assert!(
+            game_finished_event_found,
+            "❌ Expected GameFinished event was NOT found!"
+        );
+
+        // Ensure the game is removed from storage
+        let game = GameStorage::<Test>::get(&game_id);
+        assert!(
+            game.is_none(),
+            "❌ Game should have been removed after completion."
+        );
+
+        log::info!("✅ Game successfully completed and removed from storage.");
+    });
+}

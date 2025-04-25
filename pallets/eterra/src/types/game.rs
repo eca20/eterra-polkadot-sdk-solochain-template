@@ -79,6 +79,12 @@ where
     }
 
     fn next_turn(&mut self) {
+        // If the game is already finished, don't proceed with next turn
+        if let GameState::Finished { winner: _ } = self.state {
+            log::debug!("Game is finished, skipping next turn.");
+            return;
+        }
+
         // Switch turn
         self.player_turn = (self.player_turn + 1) % 2;
 
@@ -86,6 +92,12 @@ where
         if self.player_turn == 0 {
             self.round += 1;
         }
+
+        log::debug!(
+            "After next_turn: player_turn = {}, round = {}",
+            self.player_turn,
+            self.round
+        );
     }
 }
 

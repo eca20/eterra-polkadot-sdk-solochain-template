@@ -5208,7 +5208,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pallet-eterra-slots"
+name = "pallet-eterra-tcg"
 version = "0.1.0"
 dependencies = [
  "frame-support",
@@ -8294,7 +8294,7 @@ dependencies = [
  "pallet-balances",
  "pallet-eterra",
  "pallet-eterra-daily-slots",
- "pallet-eterra-slots",
+ "pallet-eterra-tcg",
  "pallet-grandpa",
  "pallet-sudo",
  "pallet-template",

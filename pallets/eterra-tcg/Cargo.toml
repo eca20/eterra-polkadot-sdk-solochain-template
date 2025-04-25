@@ -1,6 +1,6 @@
 [package]
-name = "pallet-eterra-slots"
-description = "Slot machine pallet for Substrate"
+name = "pallet-eterra-tcg"
+description = "Trading Card pallet for Substrate"
 authors.workspace    = true
 edition.workspace    = true
 homepage.workspace   = true
