@@ -1,5 +1,7 @@
 #![cfg(test)]
 
+//! Mock runtime and helpers for pallet-eterra-daily-slots
+
 use crate as pallet_eterra_daily_slots;
 
 use frame_support::{
@@ -16,10 +18,14 @@ use sp_runtime::{
 };
 use std::time::Duration;
 
-// 1. Define a MockTime struct implementing UnixTime
-// Outside impl
-static mut MOCK_NOW: u64 = 90_000; // safe global mutable time
+// =====================================================
+// 🕰️ Mock Time Provider
+// =====================================================
 
+/// Global mutable variable for mock time
+static mut MOCK_NOW: u64 = 90_000; // default baseline time
+
+/// Mock implementation of UnixTime
 pub struct MockTime;
 
 impl UnixTime for MockTime {
@@ -28,23 +34,30 @@ impl UnixTime for MockTime {
     }
 }
 
+/// Utility to manipulate MockTime safely in tests
 pub struct MockTimeState;
 
 impl MockTimeState {
+    /// Set the mock current time
     pub fn set_now(new_now: u64) {
         unsafe { MOCK_NOW = new_now; }
     }
 
+    /// Get the current mock time
     pub fn now() -> u64 {
         unsafe { MOCK_NOW }
     }
 }
 
-// 2. Types for Extrinsic and Block
+// =====================================================
+// 🛠️ Mock Runtime Setup
+// =====================================================
+
+/// Define UncheckedExtrinsic and Block
 type UncheckedExtrinsic = system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = system::mocking::MockBlock<Test>;
 
-// 3. Construct a runtime named `Test`
+/// Create a mock runtime
 construct_runtime!(
     pub enum Test {
         System: system,
@@ -52,20 +65,18 @@ construct_runtime!(
     }
 );
 
-// -----------------------------------------------------------------------------
-//  IMPORTANT: Provide an alias for `TestRuntime` so that tests referencing
-//  `TestRuntime` still compile without error (E0412).
-// -----------------------------------------------------------------------------
+/// Alias to avoid confusion in test files
 pub type TestRuntime = Test;
 
-// 4. System config
+// =====================================================
+// ⚙️ Runtime Config Implementations
+// =====================================================
+
 parameter_types! {
     pub const BlockHashCount: u64 = 250;
-    // If needed, define other constants here
 }
 
 impl system::Config for Test {
-    // The same approach as in your `pallet_eterra` mock
     type BaseCallFilter = Everything;
     type BlockWeights = ();
     type BlockLength = ();
@@ -91,7 +102,7 @@ impl system::Config for Test {
     type RuntimeTask = ();
     type RuntimeEvent = RuntimeEvent;
 
-    // Additional associated types for newer Substrate versions
+    // Newer Substrate associated types
     type SingleBlockMigrations = ();
     type MultiBlockMigrator = ();
     type PreInherents = ();
@@ -99,7 +110,6 @@ impl system::Config for Test {
     type PostTransactions = ();
 }
 
-// 5. Pallet config
 parameter_types! {
     pub const MaxSlotLength: u32 = 3;
     pub const MaxOptionsPerSlot: u32 = 5;
@@ -107,7 +117,6 @@ parameter_types! {
 }
 
 impl pallet_eterra_daily_slots::Config for Test {
-    // Same event alias from above
     type RuntimeEvent = RuntimeEvent;
     type TimeProvider = MockTime;
     type MaxSlotLength = MaxSlotLength;
@@ -115,20 +124,35 @@ impl pallet_eterra_daily_slots::Config for Test {
     type MaxRollsPerRound = MaxRollsPerRound;
 }
 
+// =====================================================
+// 🧪 Externalities Setup
+// =====================================================
+
+/// Reset mock time to baseline (90_000) before each test
 fn reset_mock_time() {
-    MockTimeState::set_now(90_000); // original baseline
+    MockTimeState::set_now(90_000);
 }
 
-
-// 6. Build test externalities
+/// Build externalities for tests
 pub fn new_test_ext() -> sp_io::TestExternalities {
-    reset_mock_time(); // always reset!
+    reset_mock_time(); // Always reset mock clock
+
     let storage = system::GenesisConfig::<Test>::default()
         .build_storage()
-        .unwrap();
+        .expect("Failed to build storage");
+
     let mut ext = sp_io::TestExternalities::from(storage);
     ext.execute_with(|| {
+        // Reset system
         frame_system::Pallet::<Test>::set_block_number(1);
+
+        // 🧹 Reset custom storage values
+        crate::LastRollTime::<TestRuntime>::remove_all(None);
+        crate::RollsThisBlock::<TestRuntime>::remove_all(None);
+        crate::SlotMachineConfig::<TestRuntime>::kill(); // if needed
+        crate::TicketsPerUser::<TestRuntime>::remove_all(None);
+        crate::TotalTickets::<TestRuntime>::kill();
+        crate::LastDrawingTime::<TestRuntime>::kill();
     });
     ext
 }
