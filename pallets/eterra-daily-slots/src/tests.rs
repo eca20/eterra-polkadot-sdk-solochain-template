@@ -5,6 +5,8 @@ use crate::{Error, LastRollTime, Pallet, RollsThisBlock, SlotMachineConfig};
 use frame_support::{assert_noop, assert_ok};
 use frame_support::traits::Hooks;
 
+
+
 #[test]
 fn test_roll_succeeds_with_valid_config() {
     new_test_ext().execute_with(|| {
@@ -241,11 +243,11 @@ fn test_no_weekly_drawing_if_not_sunday_6pm() {
 
 #[test]
 fn test_weekly_drawing_selects_winner() {
-    // 🔥 Corrected substrate-Sunday-6PM time
-    let sunday_time = 324000;
-    MockTimeState::set_now(sunday_time);
-
     new_test_ext().execute_with(|| {
+        // 🔥 Move MockTime set here (inside execute_with block)
+        let sunday_time = 324_000; // Correct Substrate Sunday 6PM
+        MockTimeState::set_now(sunday_time);
+
         SlotMachineConfig::<TestRuntime>::put((3, 5, 2));
 
         crate::TicketsPerUser::<TestRuntime>::insert(1, 5);
@@ -268,5 +270,76 @@ fn test_weekly_drawing_selects_winner() {
             )
         });
         assert!(winner_event_found, "WeeklyWinner event should have been emitted");
+    });
+}
+
+#[test]
+fn test_no_weekly_drawing_with_no_tickets() {
+    let sunday_time = 324000; // Correct Sunday 6PM time
+    MockTimeState::set_now(sunday_time);
+
+    new_test_ext().execute_with(|| {
+        SlotMachineConfig::<TestRuntime>::put((3, 5, 2));
+
+        crate::TotalTickets::<TestRuntime>::put(0); // No tickets
+        crate::LastDrawingTime::<TestRuntime>::put(0);
+
+        frame_system::Pallet::<TestRuntime>::set_block_number(1001);
+        frame_system::Pallet::<TestRuntime>::reset_events();
+
+        Pallet::<TestRuntime>::on_initialize(1001);
+
+        // TotalTickets should remain 0
+        assert_eq!(crate::TotalTickets::<TestRuntime>::get(), 0);
+
+        // No WeeklyWinner event emitted
+        let events = frame_system::Pallet::<TestRuntime>::events();
+        let winner_event_found = events.iter().any(|event_record| {
+            matches!(
+                event_record.event,
+                RuntimeEvent::EterraDailySlots(crate::Event::WeeklyWinner { .. })
+            )
+        });
+        assert!(!winner_event_found, "Should NOT have emitted WeeklyWinner event");
+    });
+}
+
+#[test]
+fn test_weekly_drawing_only_once_per_week() {
+    let sunday_time = 324000;
+    MockTimeState::set_now(sunday_time);
+
+    new_test_ext().execute_with(|| {
+        SlotMachineConfig::<TestRuntime>::put((3, 5, 2));
+
+        crate::TicketsPerUser::<TestRuntime>::insert(1, 5);
+        crate::TotalTickets::<TestRuntime>::put(5);
+        crate::LastDrawingTime::<TestRuntime>::put(0);
+
+        frame_system::Pallet::<TestRuntime>::set_block_number(1000);
+        frame_system::Pallet::<TestRuntime>::set_block_number(1001);
+        frame_system::Pallet::<TestRuntime>::reset_events();
+
+        // First drawing
+        Pallet::<TestRuntime>::on_initialize(1001);
+
+        // Tickets should now be 0 after first draw
+        assert_eq!(crate::TotalTickets::<TestRuntime>::get(), 0);
+
+        // Now attempt second drawing immediately
+        Pallet::<TestRuntime>::on_initialize(1002);
+
+        // TotalTickets still 0 (no second drawing)
+        assert_eq!(crate::TotalTickets::<TestRuntime>::get(), 0);
+
+        // Only one WeeklyWinner event should exist
+        let events = frame_system::Pallet::<TestRuntime>::events();
+        let winner_events = events.iter().filter(|event_record| {
+            matches!(
+                event_record.event,
+                RuntimeEvent::EterraDailySlots(crate::Event::WeeklyWinner { .. })
+            )
+        }).count();
+        assert_eq!(winner_events, 1, "Should have exactly one WeeklyWinner event");
     });
 }

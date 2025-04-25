@@ -115,15 +115,19 @@ impl pallet_eterra_daily_slots::Config for Test {
     type MaxRollsPerRound = MaxRollsPerRound;
 }
 
+fn reset_mock_time() {
+    MockTimeState::set_now(90_000); // original baseline
+}
+
+
 // 6. Build test externalities
 pub fn new_test_ext() -> sp_io::TestExternalities {
+    reset_mock_time(); // always reset!
     let storage = system::GenesisConfig::<Test>::default()
         .build_storage()
         .unwrap();
-
     let mut ext = sp_io::TestExternalities::from(storage);
     ext.execute_with(|| {
-        // Optionally set an initial block number or do other setup
         frame_system::Pallet::<Test>::set_block_number(1);
     });
     ext
