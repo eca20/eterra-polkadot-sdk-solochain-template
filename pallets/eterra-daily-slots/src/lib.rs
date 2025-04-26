@@ -160,24 +160,24 @@ pub mod pallet {
         }
     }
 
-    #[pallet::hooks]
-    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-        fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
-            let now = T::TimeProvider::now().as_secs();
-            let days_since_epoch = now / 86_400;
-            let day_of_week = (days_since_epoch + 4) % 7;
-            let seconds_today = now % 86_400;
+  #[pallet::hooks]
+  impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+      fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
+          let now = T::TimeProvider::now().as_secs();
+          let days_since_epoch = now / 86_400;
+          let day_of_week = (days_since_epoch + 4) % 7;
+          let seconds_today = now % 86_400;
 
-            if day_of_week == 0 && seconds_today >= 64_800 {
-                let last_draw = LastDrawingTime::<T>::get();
-                if (now - last_draw) >= 86_400 {
-                    if let Err(e) = Self::perform_weekly_drawing() {
-                        log::warn!("(pallet_eterra_daily_slots) => Weekly drawing failed: {:?}", e);
-                    }
-                }
-            }
+          if day_of_week == 0 && seconds_today >= 64_800 {
+              let last_draw = LastDrawingTime::<T>::get();
+              if (now - last_draw) >= 86_400 {
+                  if let Err(e) = Self::perform_weekly_drawing() {
+                      log::warn!("(pallet_eterra_daily_slots) => Weekly drawing failed: {:?}", e);
+                  }
+              }
+          }
 
-            10_000.into()
-        }
-    }
+          frame_support::weights::Weight::from_parts(10_000, 0)
+      }
+  }
 }
