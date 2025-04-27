@@ -2,7 +2,7 @@
 
 use crate::mock::*;
 use crate::{
-    Error, Event, LastRollTime, LastDrawingTime, Pallet, RollsThisBlock, TicketsPerUser, TotalTickets, SlotMachineConfig,
+    Error, Event, LastRollTime, LastDrawingTime, Pallet, RollsThisBlock, TicketsPerUser, TotalTickets,
 };
 use crate::mock::{MaxSlotLength, MaxOptionsPerSlot, MaxRollsPerRound};
 use frame_support::{assert_noop, assert_ok};
@@ -15,12 +15,7 @@ use crate::mock::RuntimeEvent;
 
 /// Set a basic valid slot machine config.
 fn setup_valid_config() {
-    // pull the .get()-values out of the parameter_types and store that triple
-    SlotMachineConfig::<TestRuntime>::put((
-        MaxSlotLength::get(),
-        MaxOptionsPerSlot::get(),
-        MaxRollsPerRound::get(),
-    ));
+    // constants come from the parameter_types, no on-chain config needed
 }
 
 /// Set MockTime to Sunday 6PM (correct drawing time).
@@ -52,16 +47,6 @@ fn test_roll_fails_if_not_enough_time_has_passed() {
 }
 
 #[test]
-fn test_roll_fails_on_invalid_configuration() {
-    new_test_ext().execute_with(|| {
-        // inject an invalid config
-        SlotMachineConfig::<TestRuntime>::put((0, 5, 2));
-        let res = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
-        assert_noop!(res, Error::<TestRuntime>::InvalidConfiguration);
-    });
-}
-
-#[test]
 fn test_roll_succeeds_after_24_hours() {
     new_test_ext().execute_with(|| {
         setup_valid_config();
@@ -88,11 +73,10 @@ fn test_different_accounts_can_roll_independently() {
 fn test_only_one_successful_roll_per_block() {
     new_test_ext().execute_with(|| {
         // one roll per block
-        SlotMachineConfig::<TestRuntime>::put((3, 5, 1));
         LastRollTime::<TestRuntime>::insert(1, 0);
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
         let second = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
-        assert_noop!(second, Error::<TestRuntime>::ExceedRollsPerRound);
+        assert_noop!(second, Error::<TestRuntime>::RollNotAvailableYet);
     });
 }
 
@@ -100,7 +84,6 @@ fn test_only_one_successful_roll_per_block() {
 fn test_roll_with_max_config() {
     new_test_ext().execute_with(|| {
         // huge slot length, options and rolls
-        SlotMachineConfig::<TestRuntime>::put((1000, 10, 5));
         LastRollTime::<TestRuntime>::insert(1, 0);
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
     });

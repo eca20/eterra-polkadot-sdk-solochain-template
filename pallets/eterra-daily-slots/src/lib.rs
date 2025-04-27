@@ -49,11 +49,6 @@ pub mod pallet {
     >;
 
     #[pallet::storage]
-    #[pallet::getter(fn slot_machine_config)]
-    pub type SlotMachineConfig<T: Config> =
-        StorageValue<_, (u32, u32, u32), ValueQuery>;
-
-    #[pallet::storage]
     #[pallet::getter(fn tickets_per_user)]
     pub type TicketsPerUser<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, u32, ValueQuery>;
@@ -96,9 +91,11 @@ impl<T: Config> Pallet<T> {
         let who = ensure_signed(origin)?;
 
         // ─── LOAD CONFIG FROM STORAGE ───────────────────────────────
-        let (slot_len, options_per, max_rolls) = SlotMachineConfig::<T>::get();
-        ensure!(
-            slot_len > 0 && options_per > 0 && max_rolls > 0,
+        // 📌 Pull directly from the runtime constants:
+        let slot_len       = T::MaxSlotLength::get();
+        let options_per_slot  = T::MaxOptionsPerSlot::get();
+        let max_rolls      = T::MaxRollsPerRound::get();        ensure!(
+            slot_len > 0 && options_per_slot > 0 && max_rolls > 0,
             Error::<T>::InvalidConfiguration
         );
 
@@ -115,7 +112,7 @@ impl<T: Config> Pallet<T> {
         // ─── DO THE SLOTS ────────────────────────────────────────────
         let mut result = Vec::with_capacity(slot_len as usize);
         for _ in 0..slot_len {
-            let roll_value = (now % (options_per as u64)) as u32;
+            let roll_value = (now % (options_per_slot as u64)) as u32;
             result.push(roll_value);
         }
 
