@@ -33,6 +33,19 @@ pub mod pallet {
 
     // ─── STORAGE ────────────────────────────────────────────────────────────────
 
+
+    /// (YYYY-day, count_so_far)
+    #[pallet::storage]
+    #[pallet::getter(fn rolls_today)]
+    pub type RollsToday<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        (u64, u32),
+        ValueQuery
+    >;
+
+
     #[pallet::storage]
     #[pallet::getter(fn last_roll_time)]
     pub type LastRollTime<T: Config> =
@@ -84,54 +97,50 @@ pub mod pallet {
 // pallets/eterra-daily-slots/src/lib.rs
 
 #[pallet::call]
-impl<T: Config> Pallet<T> {
-    #[pallet::call_index(0)]
-    #[pallet::weight(10_000)]
-    pub fn roll(origin: OriginFor<T>) -> DispatchResult {
-        let who = ensure_signed(origin)?;
+    impl<T: Config> Pallet<T> {
+        #[pallet::call_index(0)]
+        #[pallet::weight(10_000)]
+        pub fn roll(origin: OriginFor<T>) -> DispatchResult {
+            let who = ensure_signed(origin)?;
 
-        // ─── LOAD CONFIG FROM STORAGE ───────────────────────────────
-        // 📌 Pull directly from the runtime constants:
-        let slot_len       = T::MaxSlotLength::get();
-        let options_per_slot  = T::MaxOptionsPerSlot::get();
-        let max_rolls      = T::MaxRollsPerRound::get();        ensure!(
-            slot_len > 0 && options_per_slot > 0 && max_rolls > 0,
-            Error::<T>::InvalidConfiguration
-        );
+            let slot_len      = T::MaxSlotLength::get();
+            let options       = T::MaxOptionsPerSlot::get();
+            let max_rolls     = T::MaxRollsPerRound::get();
+            ensure!(slot_len > 0 && options > 0 && max_rolls > 0,
+                Error::<T>::InvalidConfiguration
+            );
 
-        // ─── ENFORCE ONE ROLL PER BLOCK ──────────────────────────────
-        let current_block = frame_system::Pallet::<T>::block_number();
-        let used = RollsThisBlock::<T>::get(current_block, &who);
-        ensure!(used < max_rolls, Error::<T>::ExceedRollsPerRound);
+            // ─── DAILY CAP ──────────────────────
+            let now_secs = T::TimeProvider::now().as_secs();
+            let day      = now_secs / 86_400;                // integer day since epoch
+            let (stored_day, used) = Self::rolls_today(&who);
+            let used = if stored_day == day { used } else { 0 };
+            ensure!(used < max_rolls, Error::<T>::ExceedRollsPerRound);
 
-        // ─── ENFORCE 24H COOLDOWN ────────────────────────────────────
-        let now = T::TimeProvider::now().as_secs();
-        let last_roll = LastRollTime::<T>::get(&who);
-        ensure!(now >= last_roll + 86_400, Error::<T>::RollNotAvailableYet);
+            // ─── DO THE SLOTS ───────────────────
+            let mut result = Vec::with_capacity(slot_len as usize);
+            for _ in 0..slot_len {
+                result.push((now_secs % (options as u64)) as u32);
+            }
 
-        // ─── DO THE SLOTS ────────────────────────────────────────────
-        let mut result = Vec::with_capacity(slot_len as usize);
-        for _ in 0..slot_len {
-            let roll_value = (now % (options_per_slot as u64)) as u32;
-            result.push(roll_value);
+            // ─── UPDATE STATE ───────────────────
+            // bump that user’s count for *this* day
+            RollsToday::<T>::insert(&who, (day, used + 1));
+            LastRollTime::<T>::insert(&who, now_secs);
+
+            // ─── AWARD TICKETS ──────────────────
+            let ticket_symbol = 7u32;
+            let tickets = result.iter().filter(|&&v| v == ticket_symbol).count() as u32;
+            if tickets > 0 {
+                TicketsPerUser::<T>::mutate(&who, |t| *t += tickets);
+                TotalTickets::<T>::mutate(|t| *t += tickets);
+            }
+
+            Self::deposit_event(Event::SlotRolled { player: who, result });
+            Ok(())
         }
-
-        // ─── UPDATE STATE ───────────────────────────────────────────
-        RollsThisBlock::<T>::insert(current_block, &who, used + 1);
-        LastRollTime::<T>::insert(&who, now);
-
-        // ─── AWARD TICKETS ──────────────────────────────────────────
-        let ticket_symbol: u32 = 7;
-        let ticket_count = result.iter().filter(|&&v| v == ticket_symbol).count() as u32;
-        if ticket_count > 0 {
-            TicketsPerUser::<T>::mutate(&who, |t| *t += ticket_count);
-            TotalTickets::<T>::mutate(|total| *total += ticket_count);
-        }
-
-        Self::deposit_event(Event::SlotRolled { player: who, result });
-        Ok(())
     }
-}
+
 
     // ─── INTERNAL ───────────────────────────────────────────────────────────────
 

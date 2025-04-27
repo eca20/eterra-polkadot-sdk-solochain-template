@@ -2,107 +2,86 @@
 
 use crate::mock::*;
 use crate::{
-    Error, Event, LastRollTime, LastDrawingTime, Pallet, RollsThisBlock, TicketsPerUser, TotalTickets,
+    Error, Event, LastRollTime, LastDrawingTime, Pallet,
+    TicketsPerUser, TotalTickets,
 };
-use crate::mock::{MaxSlotLength, MaxOptionsPerSlot, MaxRollsPerRound};
 use frame_support::{assert_noop, assert_ok};
 use frame_support::traits::Hooks;
 use crate::mock::RuntimeEvent;
 
-// =====================================================
-// 🛠 Helpers
-// =====================================================
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
-/// Set a basic valid slot machine config.
-fn setup_valid_config() {
-    // constants come from the parameter_types, no on-chain config needed
-}
-
-/// Set MockTime to Sunday 6PM (correct drawing time).
 fn set_mock_time_to_sunday_6pm() {
     MockTimeState::set_now(324_000);
 }
 
-// =====================================================
-// 🎰 Basic Slot Roll Tests
-// =====================================================
+// ─── Basic Slot Roll Tests ─────────────────────────────────────────────────
 
 #[test]
 fn test_roll_succeeds_with_valid_config() {
     new_test_ext().execute_with(|| {
-        setup_valid_config();
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        // our MockTime starts at 90_000
         assert_eq!(LastRollTime::<TestRuntime>::get(1), 90_000);
     });
 }
 
+/// You can roll up to 3× in a 24h window, so the second and third rolls still succeed.
 #[test]
-fn test_roll_fails_if_not_enough_time_has_passed() {
+fn test_second_and_third_roll_succeed() {
     new_test_ext().execute_with(|| {
-        setup_valid_config();
+        // first roll
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
-        let second = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
-        assert_noop!(second, Error::<TestRuntime>::RollNotAvailableYet);
+        // second roll must also succeed
+        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        // third roll still under the 3-roll limit
+        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+    });
+}
+
+#[test]
+fn test_exceed_rolls_per_day() {
+    new_test_ext().execute_with(|| {
+        // allow three rolls
+        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        // fourth roll in the same 24h window must now fail
+        let fourth = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
+        assert_noop!(fourth, Error::<TestRuntime>::ExceedRollsPerRound);
     });
 }
 
 #[test]
 fn test_roll_succeeds_after_24_hours() {
     new_test_ext().execute_with(|| {
-        setup_valid_config();
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        // pretend it was 24h ago:
         LastRollTime::<TestRuntime>::insert(1, 90_000 - 86_400);
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
     });
 }
 
-// =====================================================
-// 👥 Edge Case Roll Tests
-// =====================================================
+// ─── Edge Case: independent accounts ─────────────────────────────────────────
 
 #[test]
 fn test_different_accounts_can_roll_independently() {
     new_test_ext().execute_with(|| {
-        setup_valid_config();
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(2).into()));
     });
 }
 
-#[test]
-fn test_only_one_successful_roll_per_block() {
-    new_test_ext().execute_with(|| {
-        // one roll per block
-        LastRollTime::<TestRuntime>::insert(1, 0);
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
-        let second = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
-        assert_noop!(second, Error::<TestRuntime>::RollNotAvailableYet);
-    });
-}
-
-#[test]
-fn test_roll_with_max_config() {
-    new_test_ext().execute_with(|| {
-        // huge slot length, options and rolls
-        LastRollTime::<TestRuntime>::insert(1, 0);
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
-    });
-}
-
-// =====================================================
-// 🔔 Slot Event Tests
-// =====================================================
+// ─── Slot Event Tests ──────────────────────────────────────────────────────
 
 #[test]
 fn test_slot_rolled_event_emitted() {
     new_test_ext().execute_with(|| {
-        setup_valid_config();
         frame_system::Pallet::<TestRuntime>::reset_events();
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
 
         let evts = frame_system::Pallet::<TestRuntime>::events();
         assert_eq!(evts.len(), 1);
-
         match &evts[0].event {
             RuntimeEvent::EterraDailySlots(Event::SlotRolled { player, result }) => {
                 assert_eq!(*player, 1);
@@ -116,7 +95,6 @@ fn test_slot_rolled_event_emitted() {
 #[test]
 fn test_slot_rolled_event_emitted_correctly() {
     new_test_ext().execute_with(|| {
-        setup_valid_config();
         LastRollTime::<TestRuntime>::insert(1, 0);
         frame_system::Pallet::<TestRuntime>::reset_events();
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
@@ -128,28 +106,22 @@ fn test_slot_rolled_event_emitted_correctly() {
     });
 }
 
-// =====================================================
-// 🎟️ Ticket Awarding Tests
-// =====================================================
+// ─── Ticket Awarding ────────────────────────────────────────────────────────
 
 #[test]
 fn test_ticket_awarded_on_special_symbol() {
     new_test_ext().execute_with(|| {
-        setup_valid_config();
         LastRollTime::<TestRuntime>::insert(1, 0);
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
         assert_eq!(TicketsPerUser::<TestRuntime>::get(1), 0);
     });
 }
 
-// =====================================================
-// 📅 Weekly Drawing Behavior Tests
-// =====================================================
+// ─── Weekly Drawing Tests ──────────────────────────────────────────────────
 
 #[test]
 fn test_no_weekly_drawing_if_not_sunday_6pm() {
     new_test_ext().execute_with(|| {
-        setup_valid_config();
         TicketsPerUser::<TestRuntime>::insert(1, 5);
         TotalTickets::<TestRuntime>::put(5);
         LastDrawingTime::<TestRuntime>::put(89_500);
@@ -167,7 +139,6 @@ fn test_no_weekly_drawing_if_not_sunday_6pm() {
 #[test]
 fn test_no_weekly_drawing_with_no_tickets() {
     new_test_ext().execute_with(|| {
-        setup_valid_config();
         set_mock_time_to_sunday_6pm();
         TotalTickets::<TestRuntime>::put(0);
         LastDrawingTime::<TestRuntime>::put(0);
@@ -187,7 +158,6 @@ fn test_no_weekly_drawing_with_no_tickets() {
 #[test]
 fn test_weekly_drawing_selects_winner() {
     new_test_ext().execute_with(|| {
-        setup_valid_config();
         set_mock_time_to_sunday_6pm();
         TicketsPerUser::<TestRuntime>::insert(1, 5);
         TotalTickets::<TestRuntime>::put(5);
@@ -208,7 +178,6 @@ fn test_weekly_drawing_selects_winner() {
 #[test]
 fn test_weekly_drawing_only_once_per_week() {
     new_test_ext().execute_with(|| {
-        setup_valid_config();
         set_mock_time_to_sunday_6pm();
         TicketsPerUser::<TestRuntime>::insert(1, 5);
         TotalTickets::<TestRuntime>::put(5);
@@ -230,7 +199,6 @@ fn test_weekly_drawing_only_once_per_week() {
 #[test]
 fn test_weekly_winner_event_emitted_correctly() {
     new_test_ext().execute_with(|| {
-        setup_valid_config();
         set_mock_time_to_sunday_6pm();
         TicketsPerUser::<TestRuntime>::insert(1, 5);
         TotalTickets::<TestRuntime>::put(5);
