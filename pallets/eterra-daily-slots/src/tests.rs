@@ -1,26 +1,24 @@
+#![cfg(test)]
 //! Tests for pallet-eterra-daily-slots
 
-#![cfg(test)]
-
 use crate::mock::*;
-use crate::{Error, LastRollTime, Pallet, RollsThisBlock, SlotMachineConfig};
+use crate::{
+    Error, Event, LastRollTime, LastDrawingTime, Pallet, RollsThisBlock, SlotMachineConfig,
+    TicketsPerUser, TotalTickets,
+};
 use frame_support::{assert_noop, assert_ok};
 use frame_support::traits::Hooks;
+use crate::mock::RuntimeEvent; // <— import the RuntimeEvent from your mock
 
 // =====================================================
 // 🛠 Helpers
 // =====================================================
-
-/// Set a basic valid slot machine config.
 fn setup_valid_config() {
     SlotMachineConfig::<TestRuntime>::put((3, 5, 2));
 }
-
-/// Set MockTime to Sunday 6PM (correct drawing time).
 fn set_mock_time_to_sunday_6pm() {
     MockTimeState::set_now(324_000);
 }
-
 // =====================================================
 // 🎰 Basic Slot Roll Tests
 // =====================================================
@@ -39,8 +37,8 @@ fn test_roll_fails_if_not_enough_time_has_passed() {
     new_test_ext().execute_with(|| {
         setup_valid_config();
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
-        let second_roll = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
-        assert_noop!(second_roll, Error::<TestRuntime>::RollNotAvailableYet);
+        let second = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
+        assert_noop!(second, Error::<TestRuntime>::RollNotAvailableYet);
     });
 }
 
@@ -48,8 +46,8 @@ fn test_roll_fails_if_not_enough_time_has_passed() {
 fn test_roll_fails_on_invalid_configuration() {
     new_test_ext().execute_with(|| {
         SlotMachineConfig::<TestRuntime>::put((0, 5, 2));
-        let result = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
-        assert_noop!(result, Error::<TestRuntime>::InvalidConfiguration);
+        let res = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
+        assert_noop!(res, Error::<TestRuntime>::InvalidConfiguration);
     });
 }
 
@@ -82,8 +80,8 @@ fn test_only_one_successful_roll_per_block() {
         SlotMachineConfig::<TestRuntime>::put((3, 5, 1));
         LastRollTime::<TestRuntime>::insert(1, 0);
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
-        let second_roll = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
-        assert_noop!(second_roll, Error::<TestRuntime>::ExceedRollsPerRound);
+        let second = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
+        assert_noop!(second, Error::<TestRuntime>::ExceedRollsPerRound);
     });
 }
 
@@ -107,15 +105,15 @@ fn test_slot_rolled_event_emitted() {
         frame_system::Pallet::<TestRuntime>::reset_events();
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
 
-        let events = frame_system::Pallet::<TestRuntime>::events();
-        assert_eq!(events.len(), 1);
+        let evts = frame_system::Pallet::<TestRuntime>::events();
+        assert_eq!(evts.len(), 1);
 
-        match &events[0].event {
-            RuntimeEvent::EterraDailySlots(crate::Event::SlotRolled { player, result }) => {
+        match &evts[0].event {
+            RuntimeEvent::EterraDailySlots(Event::SlotRolled { player, result }) => {
                 assert_eq!(*player, 1);
                 assert_eq!(result.len(), 3);
             }
-            _ => panic!("Unexpected event type"),
+            _ => panic!("unexpected event"),
         }
     });
 }
@@ -128,10 +126,10 @@ fn test_slot_rolled_event_emitted_correctly() {
         frame_system::Pallet::<TestRuntime>::reset_events();
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
 
-        let slot_rolled_found = frame_system::Pallet::<TestRuntime>::events().iter().any(|event_record| {
-            matches!(event_record.event, RuntimeEvent::EterraDailySlots(crate::Event::SlotRolled { .. }))
+        let found = frame_system::Pallet::<TestRuntime>::events().iter().any(|r| {
+            matches!(r.event, RuntimeEvent::EterraDailySlots(Event::SlotRolled { .. }))
         });
-        assert!(slot_rolled_found, "SlotRolled event should have been emitted");
+        assert!(found, "SlotRolled should have been emitted");
     });
 }
 
@@ -145,7 +143,7 @@ fn test_ticket_awarded_on_special_symbol() {
         setup_valid_config();
         LastRollTime::<TestRuntime>::insert(1, 0);
         assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
-        assert_eq!(crate::TicketsPerUser::<TestRuntime>::get(1), 0);
+        assert_eq!(TicketsPerUser::<TestRuntime>::get(1), 0);
     });
 }
 
@@ -157,17 +155,17 @@ fn test_ticket_awarded_on_special_symbol() {
 fn test_no_weekly_drawing_if_not_sunday_6pm() {
     new_test_ext().execute_with(|| {
         setup_valid_config();
-        crate::TicketsPerUser::<TestRuntime>::insert(1, 5);
-        crate::TotalTickets::<TestRuntime>::put(5);
-        crate::LastDrawingTime::<TestRuntime>::put(89_500);
+        TicketsPerUser::<TestRuntime>::insert(1, 5);
+        TotalTickets::<TestRuntime>::put(5);
+        LastDrawingTime::<TestRuntime>::put(89_500);
 
         Pallet::<TestRuntime>::on_initialize(1);
 
-        assert_eq!(crate::TotalTickets::<TestRuntime>::get(), 5);
-        let winner_event_found = frame_system::Pallet::<TestRuntime>::events().iter().any(|event_record| {
-            matches!(event_record.event, RuntimeEvent::EterraDailySlots(crate::Event::WeeklyWinner { .. }))
+        assert_eq!(TotalTickets::<TestRuntime>::get(), 5);
+        let fired = frame_system::Pallet::<TestRuntime>::events().iter().any(|r| {
+            matches!(r.event, RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. }))
         });
-        assert!(!winner_event_found, "Should NOT have emitted WeeklyWinner event");
+        assert!(!fired);
     });
 }
 
@@ -176,18 +174,18 @@ fn test_no_weekly_drawing_with_no_tickets() {
     new_test_ext().execute_with(|| {
         setup_valid_config();
         set_mock_time_to_sunday_6pm();
-        crate::TotalTickets::<TestRuntime>::put(0);
-        crate::LastDrawingTime::<TestRuntime>::put(0);
+        TotalTickets::<TestRuntime>::put(0);
+        LastDrawingTime::<TestRuntime>::put(0);
         frame_system::Pallet::<TestRuntime>::set_block_number(1001);
         frame_system::Pallet::<TestRuntime>::reset_events();
 
         Pallet::<TestRuntime>::on_initialize(1001);
 
-        assert_eq!(crate::TotalTickets::<TestRuntime>::get(), 0);
-        let winner_event_found = frame_system::Pallet::<TestRuntime>::events().iter().any(|event_record| {
-            matches!(event_record.event, RuntimeEvent::EterraDailySlots(crate::Event::WeeklyWinner { .. }))
+        assert_eq!(TotalTickets::<TestRuntime>::get(), 0);
+        let fired = frame_system::Pallet::<TestRuntime>::events().iter().any(|r| {
+            matches!(r.event, RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. }))
         });
-        assert!(!winner_event_found, "Should NOT have emitted WeeklyWinner event");
+        assert!(!fired);
     });
 }
 
@@ -196,19 +194,19 @@ fn test_weekly_drawing_selects_winner() {
     new_test_ext().execute_with(|| {
         setup_valid_config();
         set_mock_time_to_sunday_6pm();
-        crate::TicketsPerUser::<TestRuntime>::insert(1, 5);
-        crate::TotalTickets::<TestRuntime>::put(5);
-        crate::LastDrawingTime::<TestRuntime>::put(0);
+        TicketsPerUser::<TestRuntime>::insert(1, 5);
+        TotalTickets::<TestRuntime>::put(5);
+        LastDrawingTime::<TestRuntime>::put(0);
         frame_system::Pallet::<TestRuntime>::set_block_number(1001);
         frame_system::Pallet::<TestRuntime>::reset_events();
 
         Pallet::<TestRuntime>::on_initialize(1001);
 
-        assert_eq!(crate::TotalTickets::<TestRuntime>::get(), 0);
-        let winner_event_found = frame_system::Pallet::<TestRuntime>::events().iter().any(|event_record| {
-            matches!(event_record.event, RuntimeEvent::EterraDailySlots(crate::Event::WeeklyWinner { .. }))
+        assert_eq!(TotalTickets::<TestRuntime>::get(), 0);
+        let fired = frame_system::Pallet::<TestRuntime>::events().iter().any(|r| {
+            matches!(r.event, RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. }))
         });
-        assert!(winner_event_found, "WeeklyWinner event should have been emitted");
+        assert!(fired);
     });
 }
 
@@ -217,42 +215,38 @@ fn test_weekly_drawing_only_once_per_week() {
     new_test_ext().execute_with(|| {
         setup_valid_config();
         set_mock_time_to_sunday_6pm();
-        crate::TicketsPerUser::<TestRuntime>::insert(1, 5);
-        crate::TotalTickets::<TestRuntime>::put(5);
-        crate::LastDrawingTime::<TestRuntime>::put(0);
+        TicketsPerUser::<TestRuntime>::insert(1, 5);
+        TotalTickets::<TestRuntime>::put(5);
+        LastDrawingTime::<TestRuntime>::put(0);
         frame_system::Pallet::<TestRuntime>::set_block_number(1001);
         frame_system::Pallet::<TestRuntime>::reset_events();
 
         Pallet::<TestRuntime>::on_initialize(1001);
         Pallet::<TestRuntime>::on_initialize(1002);
 
-        let winner_events = frame_system::Pallet::<TestRuntime>::events().iter().filter(|event_record| {
-            matches!(event_record.event, RuntimeEvent::EterraDailySlots(crate::Event::WeeklyWinner { .. }))
+        let count = frame_system::Pallet::<TestRuntime>::events().iter().filter(|r| {
+            matches!(r.event, RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. }))
         }).count();
-        assert_eq!(winner_events, 1, "Should have exactly one WeeklyWinner event");
+        assert_eq!(count, 1);
     });
 }
-
-// =====================================================
-// 🏆 Weekly Winner Event Tests
-// =====================================================
 
 #[test]
 fn test_weekly_winner_event_emitted_correctly() {
     new_test_ext().execute_with(|| {
         setup_valid_config();
         set_mock_time_to_sunday_6pm();
-        crate::TicketsPerUser::<TestRuntime>::insert(1, 5);
-        crate::TotalTickets::<TestRuntime>::put(5);
-        crate::LastDrawingTime::<TestRuntime>::put(0);
+        TicketsPerUser::<TestRuntime>::insert(1, 5);
+        TotalTickets::<TestRuntime>::put(5);
+        LastDrawingTime::<TestRuntime>::put(0);
         frame_system::Pallet::<TestRuntime>::set_block_number(1001);
         frame_system::Pallet::<TestRuntime>::reset_events();
 
         Pallet::<TestRuntime>::on_initialize(1001);
 
-        let winner_found = frame_system::Pallet::<TestRuntime>::events().iter().any(|event_record| {
-            matches!(event_record.event, RuntimeEvent::EterraDailySlots(crate::Event::WeeklyWinner { .. }))
+        let found = frame_system::Pallet::<TestRuntime>::events().iter().any(|r| {
+            matches!(r.event, RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. }))
         });
-        assert!(winner_found, "WeeklyWinner event should have been emitted");
+        assert!(found);
     });
 }
