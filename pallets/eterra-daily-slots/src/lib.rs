@@ -85,54 +85,56 @@ pub mod pallet {
 
     // ─── DISPATCHABLE CALLS ───────────────────────────────────────────────────
 
-    #[pallet::call]
-    impl<T: Config> Pallet<T> {
-        /// Spin the slot machine.
-        #[pallet::call_index(0)]
-        #[pallet::weight(10_000)]
-        pub fn roll(origin: OriginFor<T>) -> DispatchResult {
-            let who = ensure_signed(origin)?;
+   
+// pallets/eterra-daily-slots/src/lib.rs
 
-            // read and validate config
-            let (slot_length, options_per_slot, rolls_per_round) =
-                SlotMachineConfig::<T>::get();
-            ensure!(
-                slot_length > 0 && options_per_slot > 0 && rolls_per_round > 0,
-                Error::<T>::InvalidConfiguration
-            );
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(10_000)]
+    pub fn roll(origin: OriginFor<T>) -> DispatchResult {
+        let who = ensure_signed(origin)?;
 
-            // per‐block limit
-            let block = frame_system::Pallet::<T>::block_number();
-            let used = RollsThisBlock::<T>::get(block, &who);
-            ensure!(used < rolls_per_round, Error::<T>::ExceedRollsPerRound);
+        // ─── LOAD CONFIG FROM STORAGE ───────────────────────────────
+        let (slot_len, options_per, max_rolls) = SlotMachineConfig::<T>::get();
+        ensure!(
+            slot_len > 0 && options_per > 0 && max_rolls > 0,
+            Error::<T>::InvalidConfiguration
+        );
 
-            // daily cooldown
-            let now = T::TimeProvider::now().as_secs();
-            let last = LastRollTime::<T>::get(&who);
-            ensure!(now >= last + 86_400, Error::<T>::RollNotAvailableYet);
+        // ─── ENFORCE ONE ROLL PER BLOCK ──────────────────────────────
+        let current_block = frame_system::Pallet::<T>::block_number();
+        let used = RollsThisBlock::<T>::get(current_block, &who);
+        ensure!(used < max_rolls, Error::<T>::ExceedRollsPerRound);
 
-            // roll
-            let mut result = Vec::with_capacity(slot_length as usize);
-            for _ in 0..slot_length {
-                let v = (now % options_per_slot.saturated_into::<u64>()) as u32;
-                result.push(v);
-            }
+        // ─── ENFORCE 24H COOLDOWN ────────────────────────────────────
+        let now = T::TimeProvider::now().as_secs();
+        let last_roll = LastRollTime::<T>::get(&who);
+        ensure!(now >= last_roll + 86_400, Error::<T>::RollNotAvailableYet);
 
-            // record
-            RollsThisBlock::<T>::insert(block, &who, used + 1);
-            LastRollTime::<T>::insert(&who, now);
-
-            // award tickets for symbol == 7
-            let count = result.iter().filter(|&&v| v == 7).count() as u32;
-            if count > 0 {
-                TicketsPerUser::<T>::mutate(&who, |t| *t += count);
-                TotalTickets::<T>::mutate(|t| *t += count);
-            }
-
-            Self::deposit_event(Event::SlotRolled { player: who, result });
-            Ok(())
+        // ─── DO THE SLOTS ────────────────────────────────────────────
+        let mut result = Vec::with_capacity(slot_len as usize);
+        for _ in 0..slot_len {
+            let roll_value = (now % (options_per as u64)) as u32;
+            result.push(roll_value);
         }
+
+        // ─── UPDATE STATE ───────────────────────────────────────────
+        RollsThisBlock::<T>::insert(current_block, &who, used + 1);
+        LastRollTime::<T>::insert(&who, now);
+
+        // ─── AWARD TICKETS ──────────────────────────────────────────
+        let ticket_symbol: u32 = 7;
+        let ticket_count = result.iter().filter(|&&v| v == ticket_symbol).count() as u32;
+        if ticket_count > 0 {
+            TicketsPerUser::<T>::mutate(&who, |t| *t += ticket_count);
+            TotalTickets::<T>::mutate(|total| *total += ticket_count);
+        }
+
+        Self::deposit_event(Event::SlotRolled { player: who, result });
+        Ok(())
     }
+}
 
     // ─── INTERNAL ───────────────────────────────────────────────────────────────
 
@@ -170,23 +172,34 @@ use frame_support::weights::Weight;
 #[pallet::hooks]
 impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
     fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
-        let now = T::TimeProvider::now().as_secs();
-        let days_since_epoch = now / 86_400;
+        // Grab “now” once:
+        let now_secs = T::TimeProvider::now().as_secs();
+
+        // How many seconds have elapsed since UNIX epoch in days:
+        let days_since_epoch = now_secs / 86_400;
+        // Adjust so that day_of_week == 0 means Sunday:
         let day_of_week = (days_since_epoch + 4) % 7;
-        let seconds_today = now % 86_400;
 
-        // bail out unless it's Sunday at/after 18:00
-        if day_of_week != 0 || seconds_today < 64_800 {
+        // How many seconds into *today* we are:
+        let secs_today = now_secs % 86_400;
+
+        // Only run the weekly drawing if *both*:
+        //   1) it's Sunday (day_of_week == 0), and
+        //   2) it's at or after 18:00 (18 * 3600 = 64800)
+        let is_sunday = day_of_week == 0;
+        let is_after_6pm = secs_today >= 18 * 3600;
+        if !(is_sunday && is_after_6pm) {
+            // bail out early, no drawing
             return Weight::from_parts(10_000, 0);
         }
 
-        // bail out if we’ve already drawn in the last 24h
-        let last_draw = LastDrawingTime::<T>::get();
-        if now.saturating_sub(last_draw) < 86_400 {
+        // If we’ve already done a drawing in the last 24 h, bail again:
+        let last = LastDrawingTime::<T>::get();
+        if now_secs.saturating_sub(last) < 24 * 3600 {
             return Weight::from_parts(10_000, 0);
         }
 
-        // perform the weekly drawing
+        // Now we really do a weekly drawing
         if let Err(e) = Self::perform_weekly_drawing() {
             log::warn!("(eterra-daily-slots) weekly drawing failed: {:?}", e);
         }

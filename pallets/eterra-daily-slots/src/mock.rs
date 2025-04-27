@@ -14,24 +14,35 @@ use sp_runtime::{
     BuildStorage,
 };
 use std::time::Duration;
-
+use std::cell::Cell;
 // =====================================================
 // 🕰️ Mock Time Provider
 // =====================================================
-use std::sync::atomic::{AtomicU64, Ordering};
-static MOCK_NOW: AtomicU64 = AtomicU64::new(90_000);
+thread_local! {
+    // each test thread gets its own clock, defaulting to 90_000
+    static MOCK_NOW: Cell<u64> = Cell::new(90_000);
+}
 
+/// A `UnixTime` implementation that reads from our thread-local clock.
 pub struct MockTime;
 impl UnixTime for MockTime {
     fn now() -> Duration {
-        Duration::from_secs(MOCK_NOW.load(Ordering::SeqCst))
+        let secs = MOCK_NOW.with(|c| c.get());
+        Duration::from_secs(secs)
     }
 }
 
+/// Helpers to manipulate the thread-local clock.
 pub struct MockTimeState;
 impl MockTimeState {
-    pub fn set_now(new_now: u64) { MOCK_NOW.store(new_now, Ordering::SeqCst); }
-    pub fn now() -> u64 { MOCK_NOW.load(Ordering::SeqCst)}
+    /// Reset to a known baseline (90 000).
+    pub fn set_now(new_now: u64) {
+        MOCK_NOW.with(|c| c.set(new_now));
+    }
+    /// Read it back (if needed).
+    pub fn now() -> u64 {
+        MOCK_NOW.with(|c| c.get())
+    }
 }
 
 // =====================================================
@@ -136,7 +147,6 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
         // clear our pallet storage
         let _ = crate::LastRollTime::<TestRuntime>::remove_all(None);
         let _ = crate::RollsThisBlock::<TestRuntime>::remove_all(None);
-        let _ = crate::SlotMachineConfig::<TestRuntime>::kill();
         let _ = crate::TicketsPerUser::<TestRuntime>::remove_all(None);
         let _ = crate::TotalTickets::<TestRuntime>::kill();
         let _ = crate::LastDrawingTime::<TestRuntime>::kill();
