@@ -3,16 +3,29 @@
 use crate::mock::*;
 use crate::{
     Error, Event, LastRollTime, LastDrawingTime, Pallet,
-    TicketsPerUser, TotalTickets,
+    TicketsPerUser, TotalTickets, RollHistory, Config,
 };
 use frame_support::{assert_noop, assert_ok};
 use frame_support::traits::Hooks;
+use frame_system::Origin;
+use frame_system::RawOrigin;
 use crate::mock::RuntimeEvent;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 fn set_mock_time_to_sunday_6pm() {
     MockTimeState::set_now(324_000);
+}
+
+fn roll_n_times<T: crate::pallet::Config>(
+    who: &T::AccountId,
+    n: u32,
+) {
+    for _ in 0..n {
+        assert_ok!(crate::Pallet::<T>::roll(
+            frame_system::RawOrigin::Signed(who.clone()).into()
+        ));
+    }
 }
 
 // ─── Basic Slot Roll Tests ─────────────────────────────────────────────────
@@ -212,5 +225,38 @@ fn test_weekly_winner_event_emitted_correctly() {
             .iter()
             .any(|r| matches!(r.event, RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. })));
         assert!(found);
+    });
+}
+
+#[test]
+fn roll_creates_history_entry() {
+    new_test_ext().execute_with(|| {
+        let user = 1u64; // Assume u64 AccountId in mock.rs
+        assert_eq!(RollHistory::<Test>::get(user).len(), 0);
+
+        assert_ok!(Pallet::<Test>::roll(RawOrigin::Signed(user).into()));
+        let history = RollHistory::<Test>::get(user);
+        assert_eq!(history.len(), 1);
+        let entry = &history[0];
+
+        assert!(entry.timestamp > 0);
+        assert!(!entry.result.is_empty());
+    });
+}
+
+#[test]
+fn roll_history_respects_max_length() {
+    new_test_ext().execute_with(|| {
+        let user = 1u64;
+
+        let max_len = <Test as Config>::MaxRollHistoryLength::get();
+        let roll_limit = <Test as Config>::MaxRollsPerRound::get();
+
+        // Roll up to allowed limit
+        roll_n_times::<Test>(&user, roll_limit);
+
+        let history = RollHistory::<Test>::get(user);
+        assert!(history.len() as u32 <= roll_limit);
+        assert!(history.len() as u32 <= max_len);
     });
 }

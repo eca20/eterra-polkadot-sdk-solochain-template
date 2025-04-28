@@ -29,10 +29,19 @@ pub mod pallet {
         #[pallet::constant] type MaxOptionsPerSlot: Get<u32>;
         /// Max rolls allowed per block
         #[pallet::constant] type MaxRollsPerRound: Get<u32>;
+        /// Maximum number of roll results stored per account
+        #[pallet::constant]
+        type MaxRollHistoryLength: Get<u32>;
     }
 
     // ─── STORAGE ────────────────────────────────────────────────────────────────
 
+    #[derive(Encode, Decode, TypeInfo, Clone, PartialEq, Eq, MaxEncodedLen)]
+    #[scale_info(skip_type_params(T))]
+    pub struct RollResult<T: Config> {
+        pub timestamp: u64,
+        pub result: BoundedVec<u32, T::MaxSlotLength>,
+    }
 
     /// (YYYY-day, count_so_far)
     #[pallet::storage]
@@ -73,6 +82,16 @@ pub mod pallet {
     #[pallet::storage]
     #[pallet::getter(fn last_drawing_time)]
     pub type LastDrawingTime<T: Config> = StorageValue<_, u64, ValueQuery>;
+
+    #[pallet::storage]
+    #[pallet::getter(fn roll_history)]
+    pub type RollHistory<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedVec<RollResult<T>, T::MaxRollHistoryLength>,
+        ValueQuery,
+    >;
 
     // ─── EVENTS & ERRORS ───────────────────────────────────────────────────────
 
@@ -136,7 +155,24 @@ pub mod pallet {
                 TotalTickets::<T>::mutate(|t| *t += tickets);
             }
 
-            Self::deposit_event(Event::SlotRolled { player: who, result });
+            Self::deposit_event(Event::SlotRolled { player: who.clone(), result: result.clone() });
+
+            // Save the roll result
+            let bounded_result: BoundedVec<_, T::MaxSlotLength> =
+                result.clone().try_into().map_err(|_| Error::<T>::InvalidConfiguration)?;
+
+            let roll_entry = RollResult::<T> {
+                timestamp: now_secs,
+                result: bounded_result,
+            };
+
+            RollHistory::<T>::mutate(&who, |history| {
+                if history.len() as u32 >= T::MaxRollHistoryLength::get() {
+                    history.remove(0);
+                }
+                let _ = history.try_push(roll_entry);
+            });
+            
             Ok(())
         }
     }

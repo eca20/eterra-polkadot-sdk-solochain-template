@@ -111,7 +111,8 @@ impl system::Config for Test {
 parameter_types! {
     pub const MaxSlotLength:     u32 = 3;
     pub const MaxOptionsPerSlot: u32 = 5;
-    pub const MaxRollsPerRound:  u32 = 3;  // ← was 2, tests assume 3
+    pub const MaxRollsPerRound:  u32 = 3;  
+    pub const MaxRollHistoryLength: u32 = 100;
 }
 impl pallet_eterra_daily_slots::Config for Test {
     type RuntimeEvent      = RuntimeEvent;
@@ -119,6 +120,7 @@ impl pallet_eterra_daily_slots::Config for Test {
     type MaxSlotLength     = MaxSlotLength;
     type MaxOptionsPerSlot = MaxOptionsPerSlot;
     type MaxRollsPerRound  = MaxRollsPerRound;
+    type MaxRollHistoryLength = MaxRollHistoryLength;
 }
 
 // =====================================================

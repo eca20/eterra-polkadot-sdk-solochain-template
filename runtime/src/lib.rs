@@ -208,6 +208,13 @@ impl Get<u8> for EterraMaxRounds {
     }
 }
 
+pub struct MaxRollHistoryLength;
+impl Get<u8> for MaxRollHistoryLength {
+    fn get() -> u8 {
+        100 // The number of players in the game
+    }
+}
+
 pub struct EterraBlocksToPlayLimit;
 impl Get<u8> for EterraBlocksToPlayLimit {
     fn get() -> u8 {
@@ -244,6 +251,7 @@ impl pallet_eterra::Config for Runtime {
     type NumPlayers = EterraNumPlayers;
     type MaxRounds = EterraMaxRounds;
     type BlocksToPlayLimit = EterraBlocksToPlayLimit;
+    type MaxRollHistoryLength = MaxRollHistoryLength;
 }
 
 impl pallet_eterra_tcg::Config for Runtime {
