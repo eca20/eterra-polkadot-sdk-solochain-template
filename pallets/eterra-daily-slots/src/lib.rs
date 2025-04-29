@@ -30,8 +30,7 @@ pub mod pallet {
         /// Max rolls allowed per block
         #[pallet::constant] type MaxRollsPerRound: Get<u32>;
         /// Maximum number of roll results stored per account
-        #[pallet::constant]
-        type MaxRollHistoryLength: Get<u32>;
+        #[pallet::constant] type MaxRollHistoryLength: Get<u32>;
     }
 
     // ─── STORAGE ────────────────────────────────────────────────────────────────
@@ -138,8 +137,14 @@ pub mod pallet {
 
             // ─── DO THE SLOTS ───────────────────
             let mut result = Vec::with_capacity(slot_len as usize);
-            for _ in 0..slot_len {
-                result.push((now_secs % (options as u64)) as u32);
+            for i in 0..slot_len {
+                // Create unique input per reel
+                let entropy = (now_secs, &who, i, frame_system::Pallet::<T>::block_number());
+                let hash = T::Hashing::hash_of(&entropy);
+
+                // Use the first byte of the hash to pick a symbol
+                let symbol = (hash.as_ref()[0] as u32) % options;
+                result.push(symbol);
             }
 
             // ─── UPDATE STATE ───────────────────
@@ -172,7 +177,7 @@ pub mod pallet {
                 }
                 let _ = history.try_push(roll_entry);
             });
-            
+
             Ok(())
         }
     }

@@ -209,8 +209,8 @@ impl Get<u8> for EterraMaxRounds {
 }
 
 pub struct MaxRollHistoryLength;
-impl Get<u8> for MaxRollHistoryLength {
-    fn get() -> u8 {
+impl Get<u32> for MaxRollHistoryLength {
+    fn get() -> u32 {
         100 // The number of players in the game
     }
 }
@@ -251,7 +251,6 @@ impl pallet_eterra::Config for Runtime {
     type NumPlayers = EterraNumPlayers;
     type MaxRounds = EterraMaxRounds;
     type BlocksToPlayLimit = EterraBlocksToPlayLimit;
-    type MaxRollHistoryLength = MaxRollHistoryLength;
 }
 
 impl pallet_eterra_tcg::Config for Runtime {
@@ -265,10 +264,11 @@ impl pallet_eterra_tcg::Config for Runtime {
 
 impl pallet_eterra_daily_slots::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    type TimeProvider = pallet_timestamp::Pallet<Runtime>; // ✅ Ensure pallet_timestamp is used
+    type TimeProvider = pallet_timestamp::Pallet<Runtime>; 
     type MaxSlotLength = MaxSlotLength;
     type MaxOptionsPerSlot = MaxOptionsPerSlot;
     type MaxRollsPerRound = MaxRollsPerRound;
+    type MaxRollHistoryLength = MaxRollHistoryLength;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
