@@ -3,6 +3,8 @@
 use crate::mock::MaxWeightEntries;
 use crate::mock::RuntimeEvent;
 use crate::mock::*;
+use crate::ReelWeights;
+use crate::RollsThisBlock;
 use crate::{
     Config, Error, Event, LastDrawingTime, LastRollTime, Pallet, RollHistory, TicketsPerUser,
     TotalTickets,
@@ -10,10 +12,11 @@ use crate::{
 use frame_support::traits::Hooks;
 use frame_support::BoundedVec;
 use frame_support::{assert_noop, assert_ok};
-
 use frame_system::RawOrigin;
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use std::collections::HashMap; // Optional: use fixed seed for deterministic tests
+                               // ─── Helpers ────────────────────────────────────────────────────────────────
 
 fn set_mock_time_to_sunday_6pm() {
     MockTimeState::set_now(324_000);
@@ -333,5 +336,85 @@ fn test_set_reel_weights_and_roll_with_weights() {
         assert_ok!(Pallet::<Test>::roll(RawOrigin::Signed(1).into()));
         let history = RollHistory::<Test>::get(1);
         assert!(!history.is_empty());
+    });
+}
+
+#[test]
+fn test_outcomes_follow_weights_distribution() {
+    new_test_ext().execute_with(|| {
+        let total_rolls = 1000;
+        let rolls_per_user = <Test as Config>::MaxRollsPerRound::get();
+        let num_users = (total_rolls + rolls_per_user - 1) / rolls_per_user;
+
+        // Set known weights for each reel
+        for reel in 0..<Test as Config>::MaxSlotLength::get() {
+            let weights = vec![(0, 5), (1, 3), (2, 2)];
+            let bounded: BoundedVec<_, MaxWeightEntries> = weights.try_into().unwrap();
+            ReelWeights::<Test>::insert(reel, bounded);
+        }
+
+        // Outcome counter
+        let mut counter: HashMap<u32, u32> = HashMap::new();
+        let mut total_performed = 0;
+
+        for user_id in 1..=num_users {
+            let user = user_id as u64;
+
+            for _ in 0..rolls_per_user {
+                if total_performed >= total_rolls {
+                    break;
+                }
+
+                // Clear daily roll count and reset timestamp
+                for slot in 0..<Test as Config>::MaxSlotLength::get() {
+                    RollsThisBlock::<Test>::remove(user, slot as u64);
+                }
+                LastRollTime::<Test>::insert(user, 0);
+                RollHistory::<Test>::remove(user);
+
+                assert_ok!(Pallet::<Test>::roll(RawOrigin::Signed(user).into()));
+
+                let result = RollHistory::<Test>::get(user)
+                    .last()
+                    .unwrap()
+                    .result
+                    .clone();
+
+                for symbol in result {
+                    *counter.entry(symbol).or_insert(0) += 1;
+                }
+
+                total_performed += 1;
+            }
+        }
+
+        // Print symbol counts (optional for debugging)
+        for (symbol, count) in &counter {
+            println!("Symbol {}: {}", symbol, count);
+        }
+
+        // Validate the observed distribution against expected weights
+        let total_symbols = (total_rolls * <Test as Config>::MaxSlotLength::get()) as u32;
+        let tolerance = 0.10;
+
+        let expected_weights = vec![(0, 5), (1, 3), (2, 2)];
+        let total_weight: u32 = expected_weights.iter().map(|(_, w)| w).sum();
+
+        for (symbol, weight) in expected_weights {
+            let expected = (weight * total_symbols) / total_weight;
+            let actual = counter.get(&symbol).cloned().unwrap_or(0);
+
+            let lower = (expected as f32 * (1.0 - tolerance)) as u32;
+            let upper = (expected as f32 * (1.0 + tolerance)) as u32;
+
+            assert!(
+                (lower..=upper).contains(&actual),
+                "Symbol {} out of expected range: {} not in {}..={}",
+                symbol,
+                actual,
+                lower,
+                upper
+            );
+        }
     });
 }

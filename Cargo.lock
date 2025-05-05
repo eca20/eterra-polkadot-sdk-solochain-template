@@ -5199,6 +5199,7 @@ dependencies = [
  "log",
  "pallet-timestamp",
  "parity-scale-codec",
+ "rand",
  "scale-info",
  "schnorrkel",
  "sp-core",
