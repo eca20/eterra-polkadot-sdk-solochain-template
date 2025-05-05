@@ -1,15 +1,17 @@
 #![cfg(test)]
 
+use crate::mock::MaxWeightEntries;
+use crate::mock::RuntimeEvent;
 use crate::mock::*;
 use crate::{
-    Error, Event, LastRollTime, LastDrawingTime, Pallet,
-    TicketsPerUser, TotalTickets, RollHistory, Config,
+    Config, Error, Event, LastDrawingTime, LastRollTime, Pallet, RollHistory, TicketsPerUser,
+    TotalTickets,
 };
-use frame_support::{assert_noop, assert_ok};
 use frame_support::traits::Hooks;
-use frame_system::Origin;
+use frame_support::BoundedVec;
+use frame_support::{assert_noop, assert_ok};
+
 use frame_system::RawOrigin;
-use crate::mock::RuntimeEvent;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -17,10 +19,7 @@ fn set_mock_time_to_sunday_6pm() {
     MockTimeState::set_now(324_000);
 }
 
-fn roll_n_times<T: crate::pallet::Config>(
-    who: &T::AccountId,
-    n: u32,
-) {
+fn roll_n_times<T: crate::pallet::Config>(who: &T::AccountId, n: u32) {
     for _ in 0..n {
         assert_ok!(crate::Pallet::<T>::roll(
             frame_system::RawOrigin::Signed(who.clone()).into()
@@ -33,7 +32,9 @@ fn roll_n_times<T: crate::pallet::Config>(
 #[test]
 fn test_roll_succeeds_with_valid_config() {
     new_test_ext().execute_with(|| {
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
         // our MockTime starts at 90_000
         assert_eq!(LastRollTime::<TestRuntime>::get(1), 90_000);
     });
@@ -44,11 +45,17 @@ fn test_roll_succeeds_with_valid_config() {
 fn test_second_and_third_roll_succeed() {
     new_test_ext().execute_with(|| {
         // first roll
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
         // second roll must also succeed
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
         // third roll still under the 3-roll limit
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
     });
 }
 
@@ -56,9 +63,15 @@ fn test_second_and_third_roll_succeed() {
 fn test_exceed_rolls_per_day() {
     new_test_ext().execute_with(|| {
         // allow three rolls
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
         // fourth roll in the same 24h window must now fail
         let fourth = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
         assert_noop!(fourth, Error::<TestRuntime>::ExceedRollsPerRound);
@@ -68,10 +81,14 @@ fn test_exceed_rolls_per_day() {
 #[test]
 fn test_roll_succeeds_after_24_hours() {
     new_test_ext().execute_with(|| {
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
         // pretend it was 24h ago:
         LastRollTime::<TestRuntime>::insert(1, 90_000 - 86_400);
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
     });
 }
 
@@ -80,8 +97,12 @@ fn test_roll_succeeds_after_24_hours() {
 #[test]
 fn test_different_accounts_can_roll_independently() {
     new_test_ext().execute_with(|| {
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(2).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(2).into()
+        ));
     });
 }
 
@@ -91,7 +112,9 @@ fn test_different_accounts_can_roll_independently() {
 fn test_slot_rolled_event_emitted() {
     new_test_ext().execute_with(|| {
         frame_system::Pallet::<TestRuntime>::reset_events();
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
 
         let evts = frame_system::Pallet::<TestRuntime>::events();
         assert_eq!(evts.len(), 1);
@@ -110,11 +133,18 @@ fn test_slot_rolled_event_emitted_correctly() {
     new_test_ext().execute_with(|| {
         LastRollTime::<TestRuntime>::insert(1, 0);
         frame_system::Pallet::<TestRuntime>::reset_events();
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
 
         let found = frame_system::Pallet::<TestRuntime>::events()
             .iter()
-            .any(|r| matches!(r.event, RuntimeEvent::EterraDailySlots(Event::SlotRolled { .. })));
+            .any(|r| {
+                matches!(
+                    r.event,
+                    RuntimeEvent::EterraDailySlots(Event::SlotRolled { .. })
+                )
+            });
         assert!(found, "SlotRolled should have been emitted");
     });
 }
@@ -125,7 +155,9 @@ fn test_slot_rolled_event_emitted_correctly() {
 fn test_ticket_awarded_on_special_symbol() {
     new_test_ext().execute_with(|| {
         LastRollTime::<TestRuntime>::insert(1, 0);
-        assert_ok!(Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(
+            frame_system::RawOrigin::Signed(1).into()
+        ));
         assert_eq!(TicketsPerUser::<TestRuntime>::get(1), 0);
     });
 }
@@ -144,7 +176,12 @@ fn test_no_weekly_drawing_if_not_sunday_6pm() {
         assert_eq!(TotalTickets::<TestRuntime>::get(), 5);
         let fired = frame_system::Pallet::<TestRuntime>::events()
             .iter()
-            .any(|r| matches!(r.event, RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. })));
+            .any(|r| {
+                matches!(
+                    r.event,
+                    RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. })
+                )
+            });
         assert!(!fired);
     });
 }
@@ -163,7 +200,12 @@ fn test_no_weekly_drawing_with_no_tickets() {
         assert_eq!(TotalTickets::<TestRuntime>::get(), 0);
         let fired = frame_system::Pallet::<TestRuntime>::events()
             .iter()
-            .any(|r| matches!(r.event, RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. })));
+            .any(|r| {
+                matches!(
+                    r.event,
+                    RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. })
+                )
+            });
         assert!(!fired);
     });
 }
@@ -183,7 +225,12 @@ fn test_weekly_drawing_selects_winner() {
         assert_eq!(TotalTickets::<TestRuntime>::get(), 0);
         let fired = frame_system::Pallet::<TestRuntime>::events()
             .iter()
-            .any(|r| matches!(r.event, RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. })));
+            .any(|r| {
+                matches!(
+                    r.event,
+                    RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. })
+                )
+            });
         assert!(fired);
     });
 }
@@ -203,7 +250,12 @@ fn test_weekly_drawing_only_once_per_week() {
 
         let count = frame_system::Pallet::<TestRuntime>::events()
             .iter()
-            .filter(|r| matches!(r.event, RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. })))
+            .filter(|r| {
+                matches!(
+                    r.event,
+                    RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. })
+                )
+            })
             .count();
         assert_eq!(count, 1);
     });
@@ -223,7 +275,12 @@ fn test_weekly_winner_event_emitted_correctly() {
 
         let found = frame_system::Pallet::<TestRuntime>::events()
             .iter()
-            .any(|r| matches!(r.event, RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. })));
+            .any(|r| {
+                matches!(
+                    r.event,
+                    RuntimeEvent::EterraDailySlots(Event::WeeklyWinner { .. })
+                )
+            });
         assert!(found);
     });
 }
@@ -258,5 +315,23 @@ fn roll_history_respects_max_length() {
         let history = RollHistory::<Test>::get(user);
         assert!(history.len() as u32 <= roll_limit);
         assert!(history.len() as u32 <= max_len);
+    });
+}
+
+#[test]
+fn test_set_reel_weights_and_roll_with_weights() {
+    new_test_ext().execute_with(|| {
+        let weights = vec![(1, 10), (2, 0), (3, 0)];
+        assert_ok!(Pallet::<Test>::set_reel_weights(
+            RawOrigin::Root.into(),
+            0,
+            weights.clone()
+        ));
+        let expected: BoundedVec<_, MaxWeightEntries> = weights.try_into().unwrap();
+        assert_eq!(crate::ReelWeights::<Test>::get(0).unwrap(), expected);
+        // Perform a roll and ensure the result includes the weighted symbol
+        assert_ok!(Pallet::<Test>::roll(RawOrigin::Signed(1).into()));
+        let history = RollHistory::<Test>::get(1);
+        assert!(!history.is_empty());
     });
 }

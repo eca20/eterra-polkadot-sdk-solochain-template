@@ -246,6 +246,13 @@ impl Get<u32> for MaxRollsPerRound {
     }
 }
 
+pub struct MaxWeightEntries;
+impl Get<u32> for MaxWeightEntries {
+    fn get() -> u32 {
+        100 // max symbol entries per reel (example)
+    }
+}
+
 impl pallet_eterra::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type NumPlayers = EterraNumPlayers;
@@ -264,11 +271,12 @@ impl pallet_eterra_tcg::Config for Runtime {
 
 impl pallet_eterra_daily_slots::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    type TimeProvider = pallet_timestamp::Pallet<Runtime>; 
+    type TimeProvider = pallet_timestamp::Pallet<Runtime>;
     type MaxSlotLength = MaxSlotLength;
     type MaxOptionsPerSlot = MaxOptionsPerSlot;
     type MaxRollsPerRound = MaxRollsPerRound;
     type MaxRollHistoryLength = MaxRollHistoryLength;
+    type MaxWeightEntries = MaxWeightEntries; // ✅ new
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.

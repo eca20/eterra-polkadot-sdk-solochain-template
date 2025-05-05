@@ -5,8 +5,8 @@
 use frame_support::{pallet_prelude::*, traits::UnixTime};
 use frame_system::pallet_prelude::*;
 use sp_runtime::traits::{Hash, SaturatedConversion};
+use sp_std::vec;
 use sp_std::vec::Vec;
-
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
@@ -24,13 +24,19 @@ pub mod pallet {
         type TimeProvider: UnixTime;
 
         /// How many reels (slots)
-        #[pallet::constant] type MaxSlotLength: Get<u32>;
+        #[pallet::constant]
+        type MaxSlotLength: Get<u32>;
         /// How many symbols per reel
-        #[pallet::constant] type MaxOptionsPerSlot: Get<u32>;
+        #[pallet::constant]
+        type MaxOptionsPerSlot: Get<u32>;
         /// Max rolls allowed per block
-        #[pallet::constant] type MaxRollsPerRound: Get<u32>;
+        #[pallet::constant]
+        type MaxRollsPerRound: Get<u32>;
         /// Maximum number of roll results stored per account
-        #[pallet::constant] type MaxRollHistoryLength: Get<u32>;
+        #[pallet::constant]
+        type MaxRollHistoryLength: Get<u32>;
+        #[pallet::constant]
+        type MaxWeightEntries: Get<u32>;
     }
 
     // ─── STORAGE ────────────────────────────────────────────────────────────────
@@ -45,14 +51,8 @@ pub mod pallet {
     /// (YYYY-day, count_so_far)
     #[pallet::storage]
     #[pallet::getter(fn rolls_today)]
-    pub type RollsToday<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        T::AccountId,
-        (u64, u32),
-        ValueQuery
-    >;
-
+    pub type RollsToday<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, (u64, u32), ValueQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn last_roll_time)]
@@ -63,8 +63,10 @@ pub mod pallet {
     #[pallet::getter(fn rolls_this_block)]
     pub type RollsThisBlock<T: Config> = StorageDoubleMap<
         _,
-        Blake2_128Concat, BlockNumberFor<T>,
-        Blake2_128Concat, T::AccountId,
+        Blake2_128Concat,
+        BlockNumberFor<T>,
+        Blake2_128Concat,
+        T::AccountId,
         u32,
         ValueQuery,
     >;
@@ -92,13 +94,28 @@ pub mod pallet {
         ValueQuery,
     >;
 
+    #[pallet::storage]
+    #[pallet::getter(fn reel_weights)]
+    pub type ReelWeights<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        u32,                                         // reel index
+        BoundedVec<(u32, u32), T::MaxWeightEntries>, // (symbol, weight)
+        OptionQuery,
+    >;
+
     // ─── EVENTS & ERRORS ───────────────────────────────────────────────────────
 
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        SlotRolled { player: T::AccountId, result: Vec<u32> },
-        WeeklyWinner { winner: T::AccountId },
+        SlotRolled {
+            player: T::AccountId,
+            result: Vec<u32>,
+        },
+        WeeklyWinner {
+            winner: T::AccountId,
+        },
     }
 
     #[pallet::error]
@@ -111,26 +128,26 @@ pub mod pallet {
 
     // ─── DISPATCHABLE CALLS ───────────────────────────────────────────────────
 
-   
-// pallets/eterra-daily-slots/src/lib.rs
+    // pallets/eterra-daily-slots/src/lib.rs
 
-#[pallet::call]
+    #[pallet::call]
     impl<T: Config> Pallet<T> {
         #[pallet::call_index(0)]
         #[pallet::weight(10_000)]
         pub fn roll(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
-            let slot_len      = T::MaxSlotLength::get();
-            let options       = T::MaxOptionsPerSlot::get();
-            let max_rolls     = T::MaxRollsPerRound::get();
-            ensure!(slot_len > 0 && options > 0 && max_rolls > 0,
+            let slot_len = T::MaxSlotLength::get();
+            let options = T::MaxOptionsPerSlot::get();
+            let max_rolls = T::MaxRollsPerRound::get();
+            ensure!(
+                slot_len > 0 && options > 0 && max_rolls > 0,
                 Error::<T>::InvalidConfiguration
             );
 
             // ─── DAILY CAP ──────────────────────
             let now_secs = T::TimeProvider::now().as_secs();
-            let day      = now_secs / 86_400;                // integer day since epoch
+            let day = now_secs / 86_400; // integer day since epoch
             let (stored_day, used) = Self::rolls_today(&who);
             let used = if stored_day == day { used } else { 0 };
             ensure!(used < max_rolls, Error::<T>::ExceedRollsPerRound);
@@ -138,13 +155,32 @@ pub mod pallet {
             // ─── DO THE SLOTS ───────────────────
             let mut result = Vec::with_capacity(slot_len as usize);
             for i in 0..slot_len {
+                // Fetch weights from storage for this reel
+                let weights = ReelWeights::<T>::get(i).ok_or(Error::<T>::InvalidConfiguration)?;
+
                 // Create unique input per reel
                 let entropy = (now_secs, &who, i, frame_system::Pallet::<T>::block_number());
                 let hash = T::Hashing::hash_of(&entropy);
 
-                // Use the first byte of the hash to pick a symbol
-                let symbol = (hash.as_ref()[0] as u32) % options;
-                result.push(symbol);
+                // Weighted selection logic
+                let total_weight = weights.iter().map(|(_, w)| *w).sum::<u32>();
+                let rand_byte = hash.as_ref()[0] as u32;
+                let rand_index = rand_byte % total_weight;
+
+                let mut acc = 0;
+                let chosen_symbol = weights
+                    .iter()
+                    .find_map(|(symbol, weight)| {
+                        acc += *weight;
+                        if rand_index < acc {
+                            Some(*symbol)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or(Error::<T>::InvalidConfiguration)?;
+
+                result.push(chosen_symbol);
             }
 
             // ─── UPDATE STATE ───────────────────
@@ -160,11 +196,16 @@ pub mod pallet {
                 TotalTickets::<T>::mutate(|t| *t += tickets);
             }
 
-            Self::deposit_event(Event::SlotRolled { player: who.clone(), result: result.clone() });
+            Self::deposit_event(Event::SlotRolled {
+                player: who.clone(),
+                result: result.clone(),
+            });
 
             // Save the roll result
-            let bounded_result: BoundedVec<_, T::MaxSlotLength> =
-                result.clone().try_into().map_err(|_| Error::<T>::InvalidConfiguration)?;
+            let bounded_result: BoundedVec<_, T::MaxSlotLength> = result
+                .clone()
+                .try_into()
+                .map_err(|_| Error::<T>::InvalidConfiguration)?;
 
             let roll_entry = RollResult::<T> {
                 timestamp: now_secs,
@@ -180,8 +221,24 @@ pub mod pallet {
 
             Ok(())
         }
-    }
 
+        #[pallet::call_index(1)]
+        #[pallet::weight(10_000)]
+        pub fn set_reel_weights(
+            origin: OriginFor<T>,
+            reel: u32,
+            weights: Vec<(u32, u32)>,
+        ) -> DispatchResult {
+            ensure_root(origin)?; // or ensure_signed(origin)? with checks
+
+            let bounded: BoundedVec<_, T::MaxWeightEntries> = weights
+                .try_into()
+                .map_err(|_| Error::<T>::InvalidConfiguration)?;
+
+            ReelWeights::<T>::insert(reel, bounded);
+            Ok(())
+        }
+    }
 
     // ─── INTERNAL ───────────────────────────────────────────────────────────────
 
@@ -189,9 +246,9 @@ pub mod pallet {
         fn perform_weekly_drawing() -> Result<(), Error<T>> {
             let total = TotalTickets::<T>::get();
             if total == 0 {
-                return Err(Error::<T>::NoTicketsAvailable)
+                return Err(Error::<T>::NoTicketsAvailable);
             }
-            let now  = T::TimeProvider::now().as_secs();
+            let now = T::TimeProvider::now().as_secs();
             let seed = T::Hashing::hash_of(&(now, frame_system::Pallet::<T>::block_number()));
             let pick = (seed.as_ref()[0] as u32) % total;
 
@@ -199,7 +256,9 @@ pub mod pallet {
             for (acct, share) in TicketsPerUser::<T>::iter() {
                 cum += share;
                 if pick < cum {
-                    Self::deposit_event(Event::WeeklyWinner { winner: acct.clone() });
+                    Self::deposit_event(Event::WeeklyWinner {
+                        winner: acct.clone(),
+                    });
                     break;
                 }
             }
@@ -214,46 +273,63 @@ pub mod pallet {
 
     // ─── HOOKS ────────────────────────────────────────────────────────────────
 
-use frame_support::weights::Weight;
+    use frame_support::weights::Weight;
 
-#[pallet::hooks]
-impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-    fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
-        // Grab “now” once:
-        let now_secs = T::TimeProvider::now().as_secs();
+    #[pallet::hooks]
+    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
+            // Only on the first block
+            if _n == 1u32.into() {
+                let default_weights = vec![
+                    (0, vec![(0, 5), (1, 3), (2, 2)]),
+                    (1, vec![(0, 1), (1, 1), (2, 8)]),
+                    (2, vec![(0, 4), (1, 4), (2, 2)]),
+                ];
 
-        // How many seconds have elapsed since UNIX epoch in days:
-        let days_since_epoch = now_secs / 86_400;
-        // Adjust so that day_of_week == 0 means Sunday:
-        let day_of_week = (days_since_epoch + 4) % 7;
+                for (reel, weights) in default_weights {
+                    if !ReelWeights::<T>::contains_key(reel) {
+                        let bounded: BoundedVec<_, T::MaxWeightEntries> =
+                            weights.try_into().expect("Hardcoded weights are valid");
+                        ReelWeights::<T>::insert(reel, bounded);
+                    }
+                }
+            }
 
-        // How many seconds into *today* we are:
-        let secs_today = now_secs % 86_400;
+            // Grab “now” once:
+            let now_secs = T::TimeProvider::now().as_secs();
 
-        // Only run the weekly drawing if *both*:
-        //   1) it's Sunday (day_of_week == 0), and
-        //   2) it's at or after 18:00 (18 * 3600 = 64800)
-        let is_sunday = day_of_week == 0;
-        let is_after_6pm = secs_today >= 18 * 3600;
-        if !(is_sunday && is_after_6pm) {
-            // bail out early, no drawing
-            return Weight::from_parts(10_000, 0);
+            // How many seconds have elapsed since UNIX epoch in days:
+            let days_since_epoch = now_secs / 86_400;
+            // Adjust so that day_of_week == 0 means Sunday:
+            let day_of_week = (days_since_epoch + 4) % 7;
+
+            // How many seconds into *today* we are:
+            let secs_today = now_secs % 86_400;
+
+            // Only run the weekly drawing if *both*:
+            //   1) it's Sunday (day_of_week == 0), and
+            //   2) it's at or after 18:00 (18 * 3600 = 64800)
+            let is_sunday = day_of_week == 0;
+            let is_after_6pm = secs_today >= 18 * 3600;
+            if !(is_sunday && is_after_6pm) {
+                // bail out early, no drawing
+                return Weight::from_parts(10_000, 0);
+            }
+
+            // If we’ve already done a drawing in the last 24 h, bail again:
+            let last = LastDrawingTime::<T>::get();
+            if now_secs.saturating_sub(last) < 24 * 3600 {
+                return Weight::from_parts(10_000, 0);
+            }
+
+            // Now we really do a weekly drawing
+            if let Err(e) = Self::perform_weekly_drawing() {
+                log::warn!("(eterra-daily-slots) weekly drawing failed: {:?}", e);
+            }
+
+            Weight::from_parts(10_000, 0)
         }
-
-        // If we’ve already done a drawing in the last 24 h, bail again:
-        let last = LastDrawingTime::<T>::get();
-        if now_secs.saturating_sub(last) < 24 * 3600 {
-            return Weight::from_parts(10_000, 0);
-        }
-
-        // Now we really do a weekly drawing
-        if let Err(e) = Self::perform_weekly_drawing() {
-            log::warn!("(eterra-daily-slots) weekly drawing failed: {:?}", e);
-        }
-
-        Weight::from_parts(10_000, 0)
     }
-}
 }
 
 pub use pallet::*;
