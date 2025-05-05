@@ -4,7 +4,7 @@
 
 use frame_support::{pallet_prelude::*, traits::UnixTime};
 use frame_system::pallet_prelude::*;
-use sp_runtime::traits::{Hash, SaturatedConversion};
+use sp_runtime::traits::Hash;
 use sp_std::vec;
 use sp_std::vec::Vec;
 #[frame_support::pallet]

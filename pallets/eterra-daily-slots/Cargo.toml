@@ -29,6 +29,7 @@ sp-runtime         = { workspace = true }
 [dev-dependencies]
 sp-core = { workspace = true }
 rand = { workspace = true }
+rand_chacha = { workspace = true }
 
 [features]
 default = ["std"]

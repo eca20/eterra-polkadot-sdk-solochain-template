@@ -13,8 +13,8 @@ use frame_support::traits::Hooks;
 use frame_support::BoundedVec;
 use frame_support::{assert_noop, assert_ok};
 use frame_system::RawOrigin;
-use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use std::collections::HashMap; // Optional: use fixed seed for deterministic tests
                                // ─── Helpers ────────────────────────────────────────────────────────────────
 
