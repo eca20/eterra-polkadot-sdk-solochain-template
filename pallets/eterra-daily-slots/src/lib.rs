@@ -157,6 +157,7 @@ pub mod pallet {
             for i in 0..slot_len {
                 // Fetch weights from storage for this reel
                 let weights = ReelWeights::<T>::get(i).ok_or(Error::<T>::InvalidConfiguration)?;
+                log::info!("Using weights for reel {}: {:?}", i, weights);
 
                 // Create unique input per reel
                 let entropy = (now_secs, &who, i, frame_system::Pallet::<T>::block_number());
@@ -164,8 +165,13 @@ pub mod pallet {
 
                 // Weighted selection logic
                 let total_weight = weights.iter().map(|(_, w)| *w).sum::<u32>();
-                let rand_byte = hash.as_ref()[0] as u32;
-                let rand_index = rand_byte % total_weight;
+                let rand_seed = u32::from_le_bytes([
+                    hash.as_ref()[0],
+                    hash.as_ref()[1],
+                    hash.as_ref()[2],
+                    hash.as_ref()[3],
+                ]);
+                let rand_index = rand_seed % total_weight;
 
                 let mut acc = 0;
                 let chosen_symbol = weights
@@ -222,6 +228,8 @@ pub mod pallet {
             Ok(())
         }
 
+        /// This sets the weights for one reel (indexed by `reel`).
+        /// To bias results, ensure all reels (from 0 to MaxSlotLength - 1) are updated.
         #[pallet::call_index(1)]
         #[pallet::weight(10_000)]
         pub fn set_reel_weights(
@@ -232,10 +240,38 @@ pub mod pallet {
             ensure_root(origin)?; // or ensure_signed(origin)? with checks
 
             let bounded: BoundedVec<_, T::MaxWeightEntries> = weights
+                .clone()
                 .try_into()
                 .map_err(|_| Error::<T>::InvalidConfiguration)?;
 
             ReelWeights::<T>::insert(reel, bounded);
+            log::info!(
+                "Set weights for reel {}: {:?}",
+                reel,
+                weights
+            );
+            Ok(())
+        }
+
+        /// This allows a root origin to update multiple reels' weights in one call.
+        #[pallet::call_index(2)]
+        #[pallet::weight(10_000)]
+        pub fn set_all_reel_weights(
+            origin: OriginFor<T>,
+            all_weights: Vec<(u32, Vec<(u32, u32)>)>,
+        ) -> DispatchResult {
+            ensure_root(origin)?;
+
+            for (reel, weights) in all_weights {
+                let bounded: BoundedVec<_, T::MaxWeightEntries> = weights
+                    .clone()
+                    .try_into()
+                    .map_err(|_| Error::<T>::InvalidConfiguration)?;
+
+                ReelWeights::<T>::insert(reel, bounded);
+                log::info!("Set weights for reel {}: {:?}", reel, weights);
+            }
+
             Ok(())
         }
     }
