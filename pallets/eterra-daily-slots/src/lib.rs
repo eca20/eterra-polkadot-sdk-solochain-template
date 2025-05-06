@@ -170,11 +170,20 @@ pub mod pallet {
             let mut result = Vec::with_capacity(slot_len as usize);
             for reel_index in 0..slot_len {
                 // Fetch weights from storage for this reel
-                let weights = ReelWeights::<T>::get(reel_index).ok_or(Error::<T>::InvalidConfiguration)?;
-                info!("[daily_slots] Using weights for reel {}: {:?}", reel_index, weights);
+                let weights =
+                    ReelWeights::<T>::get(reel_index).ok_or(Error::<T>::InvalidConfiguration)?;
+                info!(
+                    "[daily_slots] Using weights for reel {}: {:?}",
+                    reel_index, weights
+                );
 
                 // Create unique input per reel
-                let entropy = (now_secs, &who, reel_index, frame_system::Pallet::<T>::block_number());
+                let entropy = (
+                    now_secs,
+                    &who,
+                    reel_index,
+                    frame_system::Pallet::<T>::block_number(),
+                );
                 let hash = T::Hashing::hash_of(&entropy);
 
                 // Weighted selection logic
@@ -183,7 +192,8 @@ pub mod pallet {
 
                 let selection_threshold = {
                     let seed_bytes = &hash.as_ref()[0..4];
-                    u32::from_le_bytes([seed_bytes[0], seed_bytes[1], seed_bytes[2], seed_bytes[3]]) % total_weight
+                    u32::from_le_bytes([seed_bytes[0], seed_bytes[1], seed_bytes[2], seed_bytes[3]])
+                        % total_weight
                 };
 
                 let mut acc = 0;
@@ -211,8 +221,8 @@ pub mod pallet {
             let ticket_symbol = 7u32;
             let tickets = result.iter().filter(|&&v| v == ticket_symbol).count() as u32;
             if tickets > 0 {
-                TicketsPerUser::<T>::mutate(&who, |t| *t += tickets);
-                TotalTickets::<T>::mutate(|t| *t += tickets);
+                TicketsPerUser::<T>::mutate(&who, |t| *t = t.saturating_add(tickets));
+                TotalTickets::<T>::mutate(|t| *t = t.saturating_add(tickets));
             }
 
             Self::deposit_event(Event::SlotRolled {
@@ -278,17 +288,20 @@ pub mod pallet {
 
     impl<T: Config> Pallet<T> {
         /// Internal helper to update reel weights, converting and inserting into storage.
-        fn update_reel_weights(
-            reel: u32,
-            weights: Vec<(u32, u32)>,
-        ) -> Result<(), Error<T>> {
+        fn update_reel_weights(reel: u32, weights: Vec<(u32, u32)>) -> Result<(), Error<T>> {
+            // Reject empty weight lists
+            if weights.is_empty() {
+                return Err(Error::<T>::InvalidConfiguration);
+            }
+
+            // Clone weights for logging after move into BoundedVec
+            let weights_for_log = weights.clone();
             let bounded: BoundedVec<_, T::MaxWeightEntries> = weights
-                .clone()
                 .try_into()
                 .map_err(|_| Error::<T>::InvalidConfiguration)?;
 
             ReelWeights::<T>::insert(reel, bounded);
-            info!("[daily_slots] Set weights for reel {}: {:?}", reel, weights);
+            info!("[daily_slots] Set weights for reel {}: {:?}", reel, weights_for_log);
             Ok(())
         }
 

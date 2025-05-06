@@ -418,3 +418,72 @@ fn test_outcomes_follow_weights_distribution() {
         }
     });
 }
+
+#[test]
+fn test_roll_fails_without_weights_set() {
+    new_test_ext().execute_with(|| {
+        // Remove weights for reel 0 to simulate missing config
+        crate::ReelWeights::<Test>::remove(0);
+        let result = Pallet::<Test>::roll(RawOrigin::Signed(1).into());
+        assert_noop!(result, Error::<Test>::InvalidConfiguration);
+    });
+}
+
+#[test]
+fn test_set_all_reel_weights_successfully_sets_all() {
+    new_test_ext().execute_with(|| {
+        let weights = vec![(7, 10)];
+        let all: Vec<_> = (0..<Test as Config>::MaxSlotLength::get())
+            .map(|i| (i, weights.clone()))
+            .collect();
+
+        assert_ok!(Pallet::<Test>::set_all_reel_weights(
+            RawOrigin::Root.into(),
+            all.clone()
+        ));
+
+        for (reel, w) in all {
+            let stored = ReelWeights::<Test>::get(reel).unwrap();
+            let expected: BoundedVec<_, MaxWeightEntries> = w.try_into().unwrap();
+            assert_eq!(stored, expected);
+        }
+    });
+}
+
+#[test]
+fn test_set_empty_reel_weights_fails() {
+    new_test_ext().execute_with(|| {
+        let result = Pallet::<Test>::set_reel_weights(RawOrigin::Root.into(), 0, vec![]);
+        assert_noop!(result, Error::<Test>::InvalidConfiguration);
+    });
+}
+
+#[test]
+fn test_set_reel_weights_exceeds_max_entries() {
+    new_test_ext().execute_with(|| {
+        let too_many_weights: Vec<(u32, u32)> = (0..(<Test as Config>::MaxWeightEntries::get() + 1))
+            .map(|i| (i, 1))
+            .collect();
+
+        let result = Pallet::<Test>::set_reel_weights(RawOrigin::Root.into(), 0, too_many_weights);
+        assert_noop!(result, Error::<Test>::InvalidConfiguration);
+    });
+}
+
+#[test]
+fn test_ticket_counter_does_not_overflow() {
+    new_test_ext().execute_with(|| {
+        TicketsPerUser::<Test>::insert(1, u32::MAX - 1);
+        TotalTickets::<Test>::put(u32::MAX - 1);
+
+        for reel in 0..<Test as Config>::MaxSlotLength::get() {
+            let weights = vec![(7, 10)];
+            let bounded: BoundedVec<_, MaxWeightEntries> = weights.try_into().unwrap();
+            ReelWeights::<Test>::insert(reel, bounded);
+        }
+
+        assert_ok!(Pallet::<Test>::roll(RawOrigin::Signed(1).into()));
+        assert_eq!(TicketsPerUser::<Test>::get(1), u32::MAX);
+        assert_eq!(TotalTickets::<Test>::get(), u32::MAX);
+    });
+}
