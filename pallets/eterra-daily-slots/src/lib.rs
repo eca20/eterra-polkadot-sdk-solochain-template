@@ -7,6 +7,12 @@ use frame_system::pallet_prelude::*;
 use sp_runtime::traits::Hash;
 use sp_std::vec;
 use sp_std::vec::Vec;
+
+use log::info;
+
+const SECONDS_PER_DAY: u64 = 86_400;
+const EVENING_THRESHOLD: u64 = 18 * 3600;
+
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
@@ -35,6 +41,7 @@ pub mod pallet {
         /// Maximum number of roll results stored per account
         #[pallet::constant]
         type MaxRollHistoryLength: Get<u32>;
+        /// Number of entries per reel
         #[pallet::constant]
         type MaxWeightEntries: Get<u32>;
     }
@@ -51,16 +58,19 @@ pub mod pallet {
     /// (YYYY-day, count_so_far)
     #[pallet::storage]
     #[pallet::getter(fn rolls_today)]
+    /// Stores the number of rolls a user has performed today, keyed by account.
     pub type RollsToday<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, (u64, u32), ValueQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn last_roll_time)]
+    /// Stores the timestamp of the last roll per user.
     pub type LastRollTime<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, u64, ValueQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn rolls_this_block)]
+    /// Tracks how many rolls a user has done in the current block.
     pub type RollsThisBlock<T: Config> = StorageDoubleMap<
         _,
         Blake2_128Concat,
@@ -73,19 +83,23 @@ pub mod pallet {
 
     #[pallet::storage]
     #[pallet::getter(fn tickets_per_user)]
+    /// Tracks the number of tickets each user has earned.
     pub type TicketsPerUser<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, u32, ValueQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn total_tickets)]
+    /// Total tickets accumulated across all users.
     pub type TotalTickets<T: Config> = StorageValue<_, u32, ValueQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn last_drawing_time)]
+    /// Timestamp of the last weekly drawing.
     pub type LastDrawingTime<T: Config> = StorageValue<_, u64, ValueQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn roll_history)]
+    /// Stores the roll history for each user as a bounded vector.
     pub type RollHistory<T: Config> = StorageMap<
         _,
         Blake2_128Concat,
@@ -96,6 +110,7 @@ pub mod pallet {
 
     #[pallet::storage]
     #[pallet::getter(fn reel_weights)]
+    /// Stores the weights for each reel (indexed by reel index).
     pub type ReelWeights<T: Config> = StorageMap<
         _,
         Blake2_128Concat,
@@ -128,10 +143,9 @@ pub mod pallet {
 
     // ─── DISPATCHABLE CALLS ───────────────────────────────────────────────────
 
-    // pallets/eterra-daily-slots/src/lib.rs
-
     #[pallet::call]
     impl<T: Config> Pallet<T> {
+        /// Roll the slot machine for the caller, producing a set of symbols.
         #[pallet::call_index(0)]
         #[pallet::weight(10_000)]
         pub fn roll(origin: OriginFor<T>) -> DispatchResult {
@@ -147,38 +161,37 @@ pub mod pallet {
 
             // ─── DAILY CAP ──────────────────────
             let now_secs = T::TimeProvider::now().as_secs();
-            let day = now_secs / 86_400; // integer day since epoch
+            let day = now_secs / SECONDS_PER_DAY; // integer day since epoch
             let (stored_day, used) = Self::rolls_today(&who);
             let used = if stored_day == day { used } else { 0 };
             ensure!(used < max_rolls, Error::<T>::ExceedRollsPerRound);
 
             // ─── DO THE SLOTS ───────────────────
             let mut result = Vec::with_capacity(slot_len as usize);
-            for i in 0..slot_len {
+            for reel_index in 0..slot_len {
                 // Fetch weights from storage for this reel
-                let weights = ReelWeights::<T>::get(i).ok_or(Error::<T>::InvalidConfiguration)?;
-                log::info!("Using weights for reel {}: {:?}", i, weights);
+                let weights = ReelWeights::<T>::get(reel_index).ok_or(Error::<T>::InvalidConfiguration)?;
+                info!("[daily_slots] Using weights for reel {}: {:?}", reel_index, weights);
 
                 // Create unique input per reel
-                let entropy = (now_secs, &who, i, frame_system::Pallet::<T>::block_number());
+                let entropy = (now_secs, &who, reel_index, frame_system::Pallet::<T>::block_number());
                 let hash = T::Hashing::hash_of(&entropy);
 
                 // Weighted selection logic
                 let total_weight = weights.iter().map(|(_, w)| *w).sum::<u32>();
-                let rand_seed = u32::from_le_bytes([
-                    hash.as_ref()[0],
-                    hash.as_ref()[1],
-                    hash.as_ref()[2],
-                    hash.as_ref()[3],
-                ]);
-                let rand_index = rand_seed % total_weight;
+                ensure!(total_weight > 0, Error::<T>::InvalidConfiguration);
+
+                let selection_threshold = {
+                    let seed_bytes = &hash.as_ref()[0..4];
+                    u32::from_le_bytes([seed_bytes[0], seed_bytes[1], seed_bytes[2], seed_bytes[3]]) % total_weight
+                };
 
                 let mut acc = 0;
                 let chosen_symbol = weights
                     .iter()
                     .find_map(|(symbol, weight)| {
                         acc += *weight;
-                        if rand_index < acc {
+                        if selection_threshold < acc {
                             Some(*symbol)
                         } else {
                             None
@@ -228,7 +241,7 @@ pub mod pallet {
             Ok(())
         }
 
-        /// This sets the weights for one reel (indexed by `reel`).
+        /// Set the weights for one reel (indexed by `reel`).
         /// To bias results, ensure all reels (from 0 to MaxSlotLength - 1) are updated.
         #[pallet::call_index(1)]
         #[pallet::weight(10_000)]
@@ -239,21 +252,12 @@ pub mod pallet {
         ) -> DispatchResult {
             ensure_root(origin)?; // or ensure_signed(origin)? with checks
 
-            let bounded: BoundedVec<_, T::MaxWeightEntries> = weights
-                .clone()
-                .try_into()
-                .map_err(|_| Error::<T>::InvalidConfiguration)?;
+            Self::update_reel_weights(reel, weights)?;
 
-            ReelWeights::<T>::insert(reel, bounded);
-            log::info!(
-                "Set weights for reel {}: {:?}",
-                reel,
-                weights
-            );
             Ok(())
         }
 
-        /// This allows a root origin to update multiple reels' weights in one call.
+        /// Allows a root origin to update multiple reels' weights in one call.
         #[pallet::call_index(2)]
         #[pallet::weight(10_000)]
         pub fn set_all_reel_weights(
@@ -263,13 +267,7 @@ pub mod pallet {
             ensure_root(origin)?;
 
             for (reel, weights) in all_weights {
-                let bounded: BoundedVec<_, T::MaxWeightEntries> = weights
-                    .clone()
-                    .try_into()
-                    .map_err(|_| Error::<T>::InvalidConfiguration)?;
-
-                ReelWeights::<T>::insert(reel, bounded);
-                log::info!("Set weights for reel {}: {:?}", reel, weights);
+                Self::update_reel_weights(reel, weights)?;
             }
 
             Ok(())
@@ -279,6 +277,21 @@ pub mod pallet {
     // ─── INTERNAL ───────────────────────────────────────────────────────────────
 
     impl<T: Config> Pallet<T> {
+        /// Internal helper to update reel weights, converting and inserting into storage.
+        fn update_reel_weights(
+            reel: u32,
+            weights: Vec<(u32, u32)>,
+        ) -> Result<(), Error<T>> {
+            let bounded: BoundedVec<_, T::MaxWeightEntries> = weights
+                .clone()
+                .try_into()
+                .map_err(|_| Error::<T>::InvalidConfiguration)?;
+
+            ReelWeights::<T>::insert(reel, bounded);
+            info!("[daily_slots] Set weights for reel {}: {:?}", reel, weights);
+            Ok(())
+        }
+
         fn perform_weekly_drawing() -> Result<(), Error<T>> {
             let total = TotalTickets::<T>::get();
             if total == 0 {
@@ -335,18 +348,18 @@ pub mod pallet {
             let now_secs = T::TimeProvider::now().as_secs();
 
             // How many seconds have elapsed since UNIX epoch in days:
-            let days_since_epoch = now_secs / 86_400;
+            let days_since_epoch = now_secs / SECONDS_PER_DAY;
             // Adjust so that day_of_week == 0 means Sunday:
             let day_of_week = (days_since_epoch + 4) % 7;
 
             // How many seconds into *today* we are:
-            let secs_today = now_secs % 86_400;
+            let secs_today = now_secs % SECONDS_PER_DAY;
 
             // Only run the weekly drawing if *both*:
             //   1) it's Sunday (day_of_week == 0), and
-            //   2) it's at or after 18:00 (18 * 3600 = 64800)
+            //   2) it's at or after 18:00 (EVENING_THRESHOLD)
             let is_sunday = day_of_week == 0;
-            let is_after_6pm = secs_today >= 18 * 3600;
+            let is_after_6pm = secs_today >= EVENING_THRESHOLD;
             if !(is_sunday && is_after_6pm) {
                 // bail out early, no drawing
                 return Weight::from_parts(10_000, 0);

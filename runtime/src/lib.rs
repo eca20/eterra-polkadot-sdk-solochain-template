@@ -28,7 +28,6 @@ pub use pallet_balances::Call as BalancesCall;
 pub use pallet_eterra;
 pub use pallet_eterra_daily_slots;
 pub use pallet_eterra_tcg;
-pub use pallet_sudo;
 pub use pallet_timestamp::Call as TimestampCall;
 use scale_info::TypeInfo;
 use sp_runtime::traits::BlockNumberProvider;
@@ -278,11 +277,6 @@ impl pallet_eterra_daily_slots::Config for Runtime {
     type MaxRollsPerRound = MaxRollsPerRound;
     type MaxRollHistoryLength = MaxRollHistoryLength;
     type MaxWeightEntries = MaxWeightEntries; // ✅ new
-}
-
-impl pallet_sudo::Config for Runtime {
-    type RuntimeEvent = RuntimeEvent;
-    type RuntimeCall = RuntimeCall;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
