@@ -13,6 +13,7 @@ members = [
     "pallets/eterra",
     "pallets/eterra-tcg",
     "pallets/eterra-daily-slots",
+    "pallets/eterra-simple-tcg",
     "runtime",
 ]
 resolver = "2"
@@ -91,3 +92,4 @@ rand_chacha = { version = "0.3", features = ["std"] }
 pallet-eterra                            = { path = "pallets/eterra", default-features = false }
 pallet-eterra-tcg                            = { path = "pallets/eterra-tcg", default-features = false }
 pallet-eterra-daily-slots                            = { path = "pallets/eterra-daily-slots", default-features = false }
+pallet-eterra-simple-tcg                            = { path = "pallets/eterra-simple-tcg", default-features = false }

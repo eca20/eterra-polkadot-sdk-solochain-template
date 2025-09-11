@@ -27,7 +27,9 @@ pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_eterra;
 pub use pallet_eterra_daily_slots;
+pub use pallet_eterra_simple_tcg;
 pub use pallet_eterra_tcg;
+
 pub use pallet_timestamp::Call as TimestampCall;
 use scale_info::TypeInfo;
 use sp_runtime::traits::BlockNumberProvider;
@@ -269,6 +271,15 @@ impl pallet_eterra_tcg::Config for Runtime {
     type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
 }
 
+impl pallet_eterra_simple_tcg::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type RandomnessSeed = ConstU64<42>;
+
+    type MaxAttempts = ConstU8<3>; // Set maximum attempts per card to 3
+    type CardsPerPack = ConstU8<5>; // Set number of cards per pack to 5
+    type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
+}
+
 impl pallet_eterra_daily_slots::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type TimeProvider = pallet_timestamp::Pallet<Runtime>;
@@ -329,4 +340,7 @@ mod runtime {
 
     #[runtime::pallet_index(10)]
     pub type EterraDailySlots = pallet_eterra_daily_slots;
+
+    #[runtime::pallet_index(11)]
+    pub type EterraSimpleTCG = pallet_eterra_simple_tcg;
 }
