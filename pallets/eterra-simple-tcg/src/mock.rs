@@ -17,14 +17,14 @@ type Block = frame_system::mocking::MockBlock<Test>;
 frame_support::construct_runtime!(
     pub struct Test {
         System: frame_system,
-        EterraSlots: pallet_eterra_slots,
+        EterraSimpleTCGConfig: pallet_eterra_simple_tcg,
     }
 );
 
 parameter_types! {
     pub const BlockHashCount: u64 = 250;
     pub const MaxAttempts: u8 = 3;
-    pub const CardsPerPack: u8 = 5;
+    pub const CardsPerPack: u8 = 6;
     pub const MaxPacks: u32 = 10;
     pub const RandomnessSeed: u64 = 42;
 }
@@ -66,7 +66,7 @@ impl pallet_eterra_simple_tcg::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type RandomnessSeed = RandomnessSeed;
     type MaxAttempts = ConstU8<3>;
-    type CardsPerPack = ConstU8<5>;
+    type CardsPerPack = ConstU8<6>;
     type MaxPacks = ConstU32<10>;
 }
 

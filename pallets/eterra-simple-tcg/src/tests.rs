@@ -1,5 +1,4 @@
-use crate::pallet::Config as EterraSimpleTCGConfig;
-use crate::{mock::*, ActiveCard, Error, Event, PlayerPacks};
+use crate::{mock::*, Error, Event, PlayerPacks};
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok};
 use log::{debug, Level, Metadata, Record};
@@ -75,7 +74,6 @@ fn test_mint_pack_simple_storage_check() {
 
         // Clear any old data
         PlayerPacks::<Test>::remove(&player);
-        ActiveCard::<Test>::remove(&player);
         System::reset_events();
         System::set_block_number(42); // or any number you prefer
 
@@ -107,6 +105,13 @@ fn test_mint_pack_check_event_directly() {
         // Check that PackMinted event with pack_id=100 was indeed emitted
         System::assert_has_event(
             RuntimeEvent::EterraSimpleTCGConfig(Event::PackMinted {
+                player,
+                pack_id: 100,
+            })
+            .into(),
+        );
+        System::assert_has_event(
+            RuntimeEvent::EterraSimpleTCGConfig(Event::PackCompleted {
                 player,
                 pack_id: 100,
             })
@@ -162,87 +167,47 @@ fn test_mint_pack_storage_and_events() {
         System::assert_has_event(
             RuntimeEvent::EterraSimpleTCGConfig(Event::PackMinted { player, pack_id: 8 }).into(),
         );
-    });
-}
-
-#[test]
-fn test_generate_slot_success() {
-    init_logger();
-    new_test_ext().execute_with(|| {
-        let player = 1;
-
-        debug!("Ensuring fresh state for player {}", player);
-        PlayerPacks::<Test>::remove(&player);
-        ActiveCard::<Test>::remove(&player);
-        System::reset_events();
-        assert!(
-            EterraSimpleTCGConfig::player_packs(player).is_empty(),
-            "Player should start with no packs"
-        );
-
-        debug!(
-            "Minting a pack for player {} before generating a slot.",
-            player
-        );
-        assert_ok!(EterraSimpleTCGConfig::mint_pack(RuntimeOrigin::signed(player)));
-
-        debug!("Running to next block...");
-        run_to_block(frame_system::Pallet::<Test>::block_number() + 1);
-
-        // Check active card
-        let active_card = ActiveCard::<Test>::get(player);
-        assert!(
-            active_card.is_some(),
-            "Expected an active card but found None"
-        );
-
-        debug!("Generate slot for the active card");
-        System::reset_events();
-        assert_ok!(EterraSimpleTCGConfig::generate_slot(RuntimeOrigin::signed(player)));
-
-        run_to_block(frame_system::Pallet::<Test>::block_number() + 1);
-
-        // We only have `SlotGenerated { card_id, values }` now
-        // So let's confirm that event by checking it has the correct type:
-        assert_event_found(
-            |e| {
-                matches!(e, RuntimeEvent::EterraSimpleTCGConfig(Event::SlotGenerated { card_id, values }) 
-                if *card_id >= 0 && values.len() == 4)
-            },
-            "SlotGenerated",
+        System::assert_has_event(
+            RuntimeEvent::EterraSimpleTCGConfig(Event::PackCompleted { player, pack_id: 8 }).into(),
         );
     });
 }
 
 #[test]
-fn test_accept_slot_success() {
-    init_logger();
+fn test_mint_pack_mints_six_finalized_cards_with_required_fields() {
     new_test_ext().execute_with(|| {
         let player = 1;
-
-        debug!("Minting a pack and generating a slot for player {}", player);
-        assert_ok!(EterraSimpleTCGConfig::mint_pack(RuntimeOrigin::signed(player)));
-        run_to_block(System::block_number() + 1);
-
-        // Generate a slot
-        assert_ok!(EterraSimpleTCGConfig::generate_slot(RuntimeOrigin::signed(player)));
-        run_to_block(System::block_number() + 1);
-
-        debug!("Accepting slot...");
+        System::set_block_number(55);
         System::reset_events();
-        assert_ok!(EterraSimpleTCGConfig::accept_slot(RuntimeOrigin::signed(player)));
-        run_to_block(System::block_number() + 1);
 
-        // The event is now `SlotAccepted { card_id }`, no player field
-        assert_event_found(
-            |e| {
-                matches!(e, RuntimeEvent::EterraSimpleTCGConfig(Event::SlotAccepted { card_id })
-                if *card_id >= 0)
-            },
-            "SlotAccepted",
-        );
+        assert_ok!(EterraSimpleTCGConfig::mint_pack(RuntimeOrigin::signed(player)));
+
+        // Verify pack storage
+        let packs = EterraSimpleTCGConfig::player_packs(player);
+        assert_eq!(packs.len(), 1, "One pack expected");
+        let pack = &packs[0];
+        assert_eq!(pack.get_id(), 55);
+        assert!(pack.get_completed(), "Pack should be completed immediately");
+        assert_eq!(pack.get_active_card_index(), 0, "active_card_index should start at 0");
+
+        // Must mint exactly 6 cards
+        let ids = pack.get_card_ids();
+        assert_eq!(ids.len(), 6, "Exactly 6 cards should be minted per pack");
+
+        // Inspect first card's fields
+        let card_id = ids[0];
+        let card = EterraSimpleTCGConfig::cards(card_id).expect("card exists");
+        assert!(card.finalized, "Card should be finalized at mint");
+        assert!(card.slot_values.is_some(), "slot_values should be Some");
+        let (n, e, s, w) = (card.north, card.east, card.south, card.west);
+        for v in [n, e, s, w] {
+            assert!(v >= 1 && v <= 9, "Directional values must be in 1..=9, got {}", v);
+        }
+        let name_bytes = card.name.as_slice();
+        assert!(!name_bytes.is_empty(), "name should be non-empty");
     });
 }
+
 
 #[test]
 fn test_mint_pack_fail_when_max_packs_reached() {
@@ -269,103 +234,6 @@ fn test_mint_pack_fail_when_max_packs_reached() {
     });
 }
 
-#[test]
-fn test_generate_slot_fail_when_no_active_card() {
-    init_logger();
-    new_test_ext().execute_with(|| {
-        let player = 1;
-
-        debug!("Attempt to generate slot with no pack at all");
-        assert_noop!(
-            EterraSimpleTCGConfig::generate_slot(RuntimeOrigin::signed(player)),
-            Error::<Test>::NoPackFound
-        );
-    });
-}
-
-#[test]
-fn test_accept_slot_fail_when_slot_not_rolled() {
-    init_logger();
-    new_test_ext().execute_with(|| {
-        let player = 1;
-
-        debug!("Minting pack but not generating a slot yet");
-        assert_ok!(EterraSimpleTCGConfig::mint_pack(RuntimeOrigin::signed(player)));
-
-        debug!("Try to accept slot before rolling one");
-        let result = EterraSimpleTCGConfig::accept_slot(RuntimeOrigin::signed(player));
-        assert!(
-            result == Err(Error::<Test>::NoActiveCard.into()),
-            "Expected NoActiveCard but got {:?}",
-            result
-        );
-    });
-}
-
-#[test]
-fn test_attempts_removed_after_generating_max_times() {
-    new_test_ext().execute_with(|| {
-        let player = 1;
-
-        // Mint a pack
-        assert_ok!(EterraSimpleTCGConfig::mint_pack(RuntimeOrigin::signed(player)));
-
-        // We want to see which card_id was created.
-        let packs = EterraSimpleTCGConfig::player_packs(player);
-        let last_pack = packs.last().expect("Pack should exist");
-        let card_id = last_pack
-            .get_card_ids()
-            .first()
-            .copied()
-            .expect("Should have at least one card ID in the pack");
-
-        // Check the MaxAttempts
-        let max_attempts: u8 = <Test as EterraSimpleTCGConfigConfig>::MaxAttempts::get();
-
-        // Generate slots until we hit max
-        for _ in 0..max_attempts {
-            assert_ok!(EterraSimpleTCGConfig::generate_slot(RuntimeOrigin::signed(player)));
-        }
-
-        // After final generation, that card should be finalized => attempts removed
-        let attempts_after = EterraSimpleTCGConfig::card_attempts(card_id);
-        assert_eq!(
-            attempts_after, 0,
-            "Expected attempts to be removed after finalization."
-        );
-    });
-}
-
-#[test]
-fn test_attempts_removed_after_accept_slot() {
-    new_test_ext().execute_with(|| {
-        let player = 1;
-
-        // Mint a pack
-        assert_ok!(EterraSimpleTCGConfig::mint_pack(RuntimeOrigin::signed(player)));
-
-        // Grab the first card_id
-        let packs = EterraSimpleTCGConfig::player_packs(player);
-        let last_pack = packs.last().unwrap();
-        let card_id = *last_pack.get_card_ids().first().unwrap();
-
-        // Generate one slot
-        assert_ok!(EterraSimpleTCGConfig::generate_slot(RuntimeOrigin::signed(player)));
-
-        // Should now have attempts = 1
-        let attempts_before = EterraSimpleTCGConfig::card_attempts(card_id);
-        assert_eq!(attempts_before, 1);
-
-        // Accept slot => finalize the card => attempts removed
-        assert_ok!(EterraSimpleTCGConfig::accept_slot(RuntimeOrigin::signed(player)));
-
-        let attempts_after = EterraSimpleTCGConfig::card_attempts(card_id);
-        assert_eq!(
-            attempts_after, 0,
-            "Expected attempts to be removed after finalization."
-        );
-    });
-}
 
 #[test]
 fn test_transfer_card_not_owner_fails() {
@@ -436,32 +304,22 @@ fn test_transfer_card_success() {
         // Log which card ID we’re transferring
         println!("[TEST] Minted card_id: {}", card_id);
 
-        // 3) Finalize the card before transferring
-        System::reset_events(); // Clear old events
-
-        assert_ok!(EterraSimpleTCGConfig::generate_slot(RuntimeOrigin::signed(
-            original_owner
-        )));
-        assert_ok!(EterraSimpleTCGConfig::accept_slot(RuntimeOrigin::signed(
-            original_owner
-        )));
-
-        // 4) Transfer the finalized card to `new_owner`
+        // 3) Transfer the card to `new_owner`
         let result =
             EterraSimpleTCGConfig::transfer_card(RuntimeOrigin::signed(original_owner), card_id, new_owner);
 
         assert_ok!(result);
 
-        // 5) Confirm the card's ownership changed in storage
+        // 4) Confirm the card's ownership changed in storage
         let card_info = EterraSimpleTCGConfig::cards(card_id).expect("Card must still exist");
         println!("[TEST] card_info after transfer: {:?}", card_info);
         assert_eq!(
-            *card_info.get_owner(),
+            card_info.owner,
             new_owner,
             "Storage shows the card owner didn't update!"
         );
 
-        // 6) Attempt to find a CardTransferred event.
+        // 5) Attempt to find a CardTransferred event.
         let events = System::events();
         println!("[TEST] Events after transfer: {:?}", events);
 
@@ -483,5 +341,71 @@ fn test_transfer_card_success() {
         } else {
             println!("[TEST] Found the CardTransferred event as expected!");
         }
+    });
+}
+
+
+#[test]
+fn test_card_ids_sequential_within_pack() {
+    new_test_ext().execute_with(|| {
+        let player = 42;
+        System::set_block_number(123);
+        System::reset_events();
+
+        assert_ok!(EterraSimpleTCGConfig::mint_pack(RuntimeOrigin::signed(player)));
+        let packs = EterraSimpleTCGConfig::player_packs(player);
+        let pack = &packs[0];
+        let ids = pack.get_card_ids();
+        assert_eq!(ids.len(), 6, "pack should contain exactly 6 ids");
+
+        // card_id should increase monotonically as we mint within the pack
+        for i in 1..ids.len() {
+            assert!(ids[i] > ids[i - 1], "card ids should be strictly increasing within a pack");
+        }
+    });
+}
+
+#[test]
+fn test_cards_belong_to_owner_and_fields_within_range() {
+    new_test_ext().execute_with(|| {
+        let player = 7;
+        System::set_block_number(77);
+        System::reset_events();
+
+        assert_ok!(EterraSimpleTCGConfig::mint_pack(RuntimeOrigin::signed(player)));
+        let packs = EterraSimpleTCGConfig::player_packs(player);
+        let pack = &packs[0];
+
+        for &card_id in pack.get_card_ids().iter() {
+            let card = EterraSimpleTCGConfig::cards(card_id).expect("card exists");
+            // Owner and finalization
+            assert_eq!(card.owner, player, "minted card owner should be the minter");
+            assert!(card.finalized, "card must be finalized at mint");
+            assert!(card.slot_values.is_some(), "slot_values must be populated at mint");
+
+            // Bounds for directional stats
+            for v in [card.north, card.east, card.south, card.west] {
+                assert!((1..=9).contains(&v), "directional stat must be in 1..=9, got {}", v);
+            }
+        }
+    });
+}
+
+#[test]
+fn test_card_name_includes_id() {
+    new_test_ext().execute_with(|| {
+        let player = 3;
+        System::set_block_number(19);
+        System::reset_events();
+
+        assert_ok!(EterraSimpleTCGConfig::mint_pack(RuntimeOrigin::signed(player)));
+        let packs = EterraSimpleTCGConfig::player_packs(player);
+        let pack = &packs[0];
+        let first_id = pack.get_card_ids()[0];
+
+        let card = EterraSimpleTCGConfig::cards(first_id).expect("card exists");
+        let expected = format!("Card-{}", first_id).into_bytes();
+        assert_eq!(card.name.as_slice(), expected.as_slice(), "name should be 'Card-<id>'");
+        assert!(card.name.len() <= 64, "bounded name should not exceed 64 bytes");
     });
 }

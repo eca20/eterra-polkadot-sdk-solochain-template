@@ -301,7 +301,10 @@ pub mod pallet {
                 .map_err(|_| Error::<T>::InvalidConfiguration)?;
 
             ReelWeights::<T>::insert(reel, bounded);
-            info!("[daily_slots] Set weights for reel {}: {:?}", reel, weights_for_log);
+            info!(
+                "[daily_slots] Set weights for reel {}: {:?}",
+                reel, weights_for_log
+            );
             Ok(())
         }
 
