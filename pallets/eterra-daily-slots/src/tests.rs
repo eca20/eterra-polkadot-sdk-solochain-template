@@ -5,6 +5,7 @@ use crate::mock::RuntimeEvent;
 use crate::mock::*;
 use crate::ReelWeights;
 use crate::RollsThisBlock;
+use crate::RollsThisWindow;
 use crate::{
     Config, Error, Event, LastDrawingTime, LastRollTime, Pallet, RollHistory, TicketsPerUser,
     TotalTickets,
@@ -12,11 +13,13 @@ use crate::{
 use frame_support::traits::Hooks;
 use frame_support::BoundedVec;
 use frame_support::{assert_noop, assert_ok};
+use frame_system::pallet_prelude::BlockNumberFor;
 use frame_system::RawOrigin;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use std::collections::HashMap; // Optional: use fixed seed for deterministic tests
-                               // ─── Helpers ────────────────────────────────────────────────────────────────
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
 fn set_mock_time_to_sunday_6pm() {
     MockTimeState::set_now(324_000);
@@ -28,6 +31,14 @@ fn roll_n_times<T: crate::pallet::Config>(who: &T::AccountId, n: u32) {
             frame_system::RawOrigin::Signed(who.clone()).into()
         ));
     }
+}
+
+// 6h window at 6s/block → 3_600 blocks
+const BLOCKS_PER_WINDOW: u64 = 3_600;
+
+fn advance_blocks(n: u64) {
+    let b: u64 = frame_system::Pallet::<TestRuntime>::block_number();
+    frame_system::Pallet::<TestRuntime>::set_block_number(b + n);
 }
 
 // ─── Basic Slot Roll Tests ─────────────────────────────────────────────────
@@ -43,7 +54,7 @@ fn test_roll_succeeds_with_valid_config() {
     });
 }
 
-/// You can roll up to 3× in a 24h window, so the second and third rolls still succeed.
+/// You can roll up to 3× per ~6h window, so the second and third rolls still succeed.
 #[test]
 fn test_second_and_third_roll_succeed() {
     new_test_ext().execute_with(|| {
@@ -63,9 +74,9 @@ fn test_second_and_third_roll_succeed() {
 }
 
 #[test]
-fn test_exceed_rolls_per_day() {
+fn test_exceed_rolls_per_window() {
     new_test_ext().execute_with(|| {
-        // allow three rolls
+        // allow three rolls within the same ~6h window
         assert_ok!(Pallet::<TestRuntime>::roll(
             frame_system::RawOrigin::Signed(1).into()
         ));
@@ -75,20 +86,21 @@ fn test_exceed_rolls_per_day() {
         assert_ok!(Pallet::<TestRuntime>::roll(
             frame_system::RawOrigin::Signed(1).into()
         ));
-        // fourth roll in the same 24h window must now fail
+        // fourth roll in the same window must now fail
         let fourth = Pallet::<TestRuntime>::roll(frame_system::RawOrigin::Signed(1).into());
         assert_noop!(fourth, Error::<TestRuntime>::ExceedRollsPerRound);
     });
 }
 
 #[test]
-fn test_roll_succeeds_after_24_hours() {
+fn test_roll_succeeds_after_new_window() {
     new_test_ext().execute_with(|| {
         assert_ok!(Pallet::<TestRuntime>::roll(
             frame_system::RawOrigin::Signed(1).into()
         ));
-        // pretend it was 24h ago:
-        LastRollTime::<TestRuntime>::insert(1, 90_000 - 86_400);
+        // Advance by ~6h worth of blocks (6s block time ⇒ 3600 blocks)
+        let current = frame_system::Pallet::<TestRuntime>::block_number();
+        frame_system::Pallet::<TestRuntime>::set_block_number(current + 3_600u64);
         assert_ok!(Pallet::<TestRuntime>::roll(
             frame_system::RawOrigin::Signed(1).into()
         ));
@@ -365,13 +377,17 @@ fn test_outcomes_follow_weights_distribution() {
                     break;
                 }
 
-                // Clear daily roll count and reset timestamp
+                // Clear per-block dedupe, per-window counter, and reset timestamp/history for this synthetic roll
                 for slot in 0..<Test as Config>::MaxSlotLength::get() {
                     RollsThisBlock::<Test>::remove(user, slot as u64);
                 }
+                RollsThisWindow::<Test>::remove(user);
                 LastRollTime::<Test>::insert(user, 0);
                 RollHistory::<Test>::remove(user);
 
+                // advance block to simulate time passing between rolls
+                let b = frame_system::Pallet::<Test>::block_number();
+                frame_system::Pallet::<Test>::set_block_number(b + 1);
                 assert_ok!(Pallet::<Test>::roll(RawOrigin::Signed(user).into()));
 
                 let result = RollHistory::<Test>::get(user)
@@ -461,7 +477,8 @@ fn test_set_empty_reel_weights_fails() {
 #[test]
 fn test_set_reel_weights_exceeds_max_entries() {
     new_test_ext().execute_with(|| {
-        let too_many_weights: Vec<(u32, u32)> = (0..(<Test as Config>::MaxWeightEntries::get() + 1))
+        let too_many_weights: Vec<(u32, u32)> = (0..(<Test as Config>::MaxWeightEntries::get()
+            + 1))
             .map(|i| (i, 1))
             .collect();
 
@@ -485,5 +502,111 @@ fn test_ticket_counter_does_not_overflow() {
         assert_ok!(Pallet::<Test>::roll(RawOrigin::Signed(1).into()));
         assert_eq!(TicketsPerUser::<Test>::get(1), u32::MAX);
         assert_eq!(TotalTickets::<Test>::get(), u32::MAX);
+    });
+}
+
+#[test]
+fn test_fourth_roll_fails_in_same_window() {
+    new_test_ext().execute_with(|| {
+        // Start at a known block so window math is deterministic
+        frame_system::Pallet::<TestRuntime>::set_block_number(1);
+
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+
+        // Still the same window → fourth must fail
+        let fourth = Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into());
+        assert_noop!(fourth, Error::<TestRuntime>::ExceedRollsPerRound);
+    });
+}
+
+#[test]
+fn test_roll_succeeds_exactly_at_window_boundary() {
+    new_test_ext().execute_with(|| {
+        frame_system::Pallet::<TestRuntime>::set_block_number(1);
+
+        // Exhaust 3 rolls in current window
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+
+        // Advance to the *last block* of the *current* window (still should fail)
+        let b = frame_system::Pallet::<TestRuntime>::block_number();
+        let window_start = b - (b % BLOCKS_PER_WINDOW);
+        let last_in_window = window_start + (BLOCKS_PER_WINDOW - 1); // inclusive last block of this window
+        frame_system::Pallet::<TestRuntime>::set_block_number(last_in_window);
+
+        let should_fail = Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into());
+        assert_noop!(should_fail, Error::<TestRuntime>::ExceedRollsPerRound);
+
+        // Cross the boundary by 1 block → new window → should succeed
+        frame_system::Pallet::<TestRuntime>::set_block_number(last_in_window + 1);
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+    });
+}
+
+#[test]
+fn test_rolls_reset_after_multiple_windows() {
+    new_test_ext().execute_with(|| {
+        frame_system::Pallet::<TestRuntime>::set_block_number(10);
+
+        // Use up the window allowance
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        let fourth = Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into());
+        assert_noop!(fourth, Error::<TestRuntime>::ExceedRollsPerRound);
+
+        // Jump two full windows ahead
+        let b = frame_system::Pallet::<TestRuntime>::block_number();
+        frame_system::Pallet::<TestRuntime>::set_block_number(b + 2 * BLOCKS_PER_WINDOW);
+
+        // Allowance should be fresh again
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+    });
+}
+
+#[test]
+fn test_window_isolated_per_account() {
+    new_test_ext().execute_with(|| {
+        frame_system::Pallet::<TestRuntime>::set_block_number(5);
+
+        // Account 1 uses all rolls
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        let fail1 = Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into());
+        assert_noop!(fail1, Error::<TestRuntime>::ExceedRollsPerRound);
+
+        // Account 2 is unaffected in same window
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(2).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(2).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(2).into()));
+        let fail2 = Pallet::<TestRuntime>::roll(RawOrigin::Signed(2).into());
+        assert_noop!(fail2, Error::<TestRuntime>::ExceedRollsPerRound);
+    });
+}
+
+#[test]
+fn test_advancing_less_than_window_does_not_reset() {
+    new_test_ext().execute_with(|| {
+        frame_system::Pallet::<TestRuntime>::set_block_number(1);
+
+        // Hit the limit
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+        assert_ok!(Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into()));
+
+        // Advance to the *last block* of the *current* window (still same window)
+        let b = frame_system::Pallet::<TestRuntime>::block_number();
+        let window_start = b - (b % BLOCKS_PER_WINDOW);
+        let last_in_window = window_start + (BLOCKS_PER_WINDOW - 1);
+        frame_system::Pallet::<TestRuntime>::set_block_number(last_in_window);
+
+        let fourth = Pallet::<TestRuntime>::roll(RawOrigin::Signed(1).into());
+        assert_noop!(fourth, Error::<TestRuntime>::ExceedRollsPerRound);
     });
 }

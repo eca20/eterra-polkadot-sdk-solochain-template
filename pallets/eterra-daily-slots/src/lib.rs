@@ -13,6 +13,9 @@ use log::info;
 const SECONDS_PER_DAY: u64 = 86_400;
 const EVENING_THRESHOLD: u64 = 18 * 3600;
 
+/// We target ~6 hours per window with 6s block time ⇒ 6h * 3600 / 6 = 3600 blocks.
+const BLOCKS_PER_WINDOW: u64 = 3_600;
+
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
@@ -55,11 +58,12 @@ pub mod pallet {
         pub result: BoundedVec<u32, T::MaxSlotLength>,
     }
 
-    /// (YYYY-day, count_so_far)
+    /// (window_index, count_in_window)
     #[pallet::storage]
-    #[pallet::getter(fn rolls_today)]
-    /// Stores the number of rolls a user has performed today, keyed by account.
-    pub type RollsToday<T: Config> =
+    #[pallet::getter(fn rolls_this_window_for)]
+    /// Stores the number of rolls a user has performed in the current 6-hour window, keyed by account.
+    /// The key value stores (window_index, count_in_window).
+    pub type RollsThisWindow<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, (u64, u32), ValueQuery>;
 
     #[pallet::storage]
@@ -159,12 +163,16 @@ pub mod pallet {
                 Error::<T>::InvalidConfiguration
             );
 
-            // ─── DAILY CAP ──────────────────────
-            let now_secs = T::TimeProvider::now().as_secs();
-            let day = now_secs / SECONDS_PER_DAY; // integer day since epoch
-            let (stored_day, used) = Self::rolls_today(&who);
-            let used = if stored_day == day { used } else { 0 };
+            // ─── ROLL CAP: 3 spins per ~6 hours (block-number based) ────────
+            // We assume ~6s per block; 6 hours ≈ 3600 blocks.
+            let bn_u64: u64 = TryInto::<u64>::try_into(frame_system::Pallet::<T>::block_number()).unwrap_or(0);
+            let window_index = bn_u64 / BLOCKS_PER_WINDOW;
+            let (stored_win, used) = Self::rolls_this_window_for(&who);
+            let used = if stored_win == window_index { used } else { 0 };
             ensure!(used < max_rolls, Error::<T>::ExceedRollsPerRound);
+
+            // Keep `now_secs` for entropy and history timestamps:
+            let now_secs = T::TimeProvider::now().as_secs();
 
             // ─── DO THE SLOTS ───────────────────
             let mut result = Vec::with_capacity(slot_len as usize);
@@ -183,6 +191,7 @@ pub mod pallet {
                     &who,
                     reel_index,
                     frame_system::Pallet::<T>::block_number(),
+                    window_index,
                 );
                 let hash = T::Hashing::hash_of(&entropy);
 
@@ -213,8 +222,8 @@ pub mod pallet {
             }
 
             // ─── UPDATE STATE ───────────────────
-            // bump that user’s count for *this* day
-            RollsToday::<T>::insert(&who, (day, used + 1));
+            // bump that user’s count for *this* window
+            RollsThisWindow::<T>::insert(&who, (window_index, used + 1));
             LastRollTime::<T>::insert(&who, now_secs);
 
             // ─── AWARD TICKETS ──────────────────
