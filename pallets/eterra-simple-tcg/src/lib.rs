@@ -28,12 +28,14 @@ use sp_std::prelude::*;
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
-    use frame_support::traits::ConstU32;
     use frame_system::pallet_prelude::BlockNumberFor;
 
     /// Convenience type aliases for IDs/balance types used in cards.
     pub type CardId = u32;
     pub type Balance = u128;
+
+    // Max number of cards we track per owner (bounded index)
+    pub type OwnedLimit = ConstU32<600>;
 
     const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
@@ -82,18 +84,6 @@ pub mod pallet {
         /// A numeric seed for our randomness.
         #[pallet::constant]
         type RandomnessSeed: Get<u64>;
-
-        /// The maximum times a card can generate slots before it is forced to finalize.
-        #[pallet::constant]
-        type MaxAttempts: Get<u8>;
-
-        /// How many cards are in each newly minted pack.
-        #[pallet::constant]
-        type CardsPerPack: Get<u8>;
-
-        /// The maximum number of packs a single account can hold.
-        #[pallet::constant]
-        type MaxPacks: Get<u32>;
     }
 
     // ------------------
@@ -137,34 +127,6 @@ pub mod pallet {
         }
     }
 
-    /// A "Pack" just references existing cards by their IDs, rather than embedding them.
-    #[derive(Clone, Encode, Decode, Default, PartialEq, TypeInfo, MaxEncodedLen)]
-    pub struct Pack {
-        id: u32,
-        // Store the IDs of the cards that were originally minted in this pack
-        card_ids: BoundedVec<u32, ConstU32<16>>,
-        active_card_index: u8,
-        completed: bool,
-    }
-
-    impl Pack {
-        pub fn get_id(&self) -> u32 {
-            self.id
-        }
-
-        pub fn get_card_ids(&self) -> &BoundedVec<u32, ConstU32<16>> {
-            &self.card_ids
-        }
-
-        pub fn get_active_card_index(&self) -> u8 {
-            self.active_card_index
-        }
-
-        pub fn get_completed(&self) -> bool {
-            self.completed
-        }
-    }
-
     // ------------------
     // Storage
     // ------------------
@@ -179,13 +141,16 @@ pub mod pallet {
     #[pallet::getter(fn cards)]
     pub type Cards<T: Config> = StorageMap<_, Blake2_128Concat, u32, CardInfo<T>, OptionQuery>;
 
-    /// A map from account => list of packs
+    /// Index of cards owned by each account.
     #[pallet::storage]
-    #[pallet::getter(fn player_packs)]
-    pub type PlayerPacks<T: Config> =
-        StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<Pack, T::MaxPacks>, ValueQuery>;
-
-    // (ActiveCard and CardAttempts storage removed)
+    #[pallet::getter(fn owned_cards)]
+    pub type OwnedCards<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedVec<u32, OwnedLimit>,
+        ValueQuery
+    >;
 
     // ------------------
     // Events
@@ -194,10 +159,8 @@ pub mod pallet {
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        /// A new pack was minted for `player` with ID `pack_id`, containing multiple new cards.
-        PackMinted { player: T::AccountId, pack_id: u32 },
-        /// A pack was completed (all cards finalized).
-        PackCompleted { player: T::AccountId, pack_id: u32 },
+        /// A card was minted for `player` with ID `card_id`.
+        CardMinted { player: T::AccountId, card_id: u32 },
         /// A card was transferred from `from` to `to`.
         CardTransferred {
             from: T::AccountId,
@@ -212,14 +175,11 @@ pub mod pallet {
 
     #[pallet::error]
     pub enum Error<T> {
-        /// The user has no pack to operate on.
-        NoPackFound,
-        /// The user’s pack limit is reached.
-        MaxPacksReached,
         /// Card does not exist in storage.
         NoSuchCard,
         /// You do not own the card you’re trying to act upon.
         NotCardOwner,
+        OwnedListFull,
         // --- Match errors ---
         CardNotFinalized,
     }
@@ -230,60 +190,20 @@ pub mod pallet {
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
-        /// Mint a new pack of cards for the caller, up to `MaxPacks`.
-        /// Each card is stored globally in `Cards<T>`.
+        /// Mint a single card for the caller.
         #[pallet::call_index(0)]
         #[pallet::weight(10_000)]
-        pub fn mint_pack(origin: OriginFor<T>) -> DispatchResult {
+        pub fn mint_card(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
-
-            let mut packs = PlayerPacks::<T>::get(&player);
-            ensure!(
-                packs.len() < T::MaxPacks::get() as usize,
-                Error::<T>::MaxPacksReached
-            );
-
-            let pack_id = <frame_system::Pallet<T>>::block_number().saturated_into::<u32>();
-
-            // Build a new pack with references to newly minted card IDs
-            let mut card_ids: BoundedVec<u32, ConstU32<16>> = BoundedVec::default();
-
-            for _ in 0..6u8 {
-                let new_card_id = Self::create_new_card(&player)?;
-                // Attach this card to the pack
-                card_ids
-                    .try_push(new_card_id)
-                    .map_err(|_| Error::<T>::MaxPacksReached)?;
-            }
-
-            let new_pack = Pack {
-                id: pack_id,
-                card_ids,
-                active_card_index: 0,
-                completed: true,
-            };
-
-            packs
-                .try_push(new_pack)
-                .map_err(|_| Error::<T>::MaxPacksReached)?;
-
-            PlayerPacks::<T>::insert(&player, packs);
-
-            Self::deposit_event(Event::PackMinted {
-                player: player.clone(),
-                pack_id,
-            });
-            Self::deposit_event(Event::PackCompleted {
-                player: player.clone(),
-                pack_id,
-            });
+            let card_id = Self::create_new_card(&player)?;
+            Self::deposit_event(Event::CardMinted { player, card_id });
             Ok(())
         }
 
         /// **New**: Transfer a single card from `origin` to `to`.
         /// If that card is also part of a pack, it still references it, but ownership
         /// changes to `to`.
-        #[pallet::call_index(3)]
+        #[pallet::call_index(1)]
         #[pallet::weight(10_000)]
         pub fn transfer_card(
             origin: OriginFor<T>,
@@ -292,13 +212,25 @@ pub mod pallet {
         ) -> DispatchResult {
             let from = ensure_signed(origin)?;
 
-            Cards::<T>::mutate(card_id, |maybe_card| -> DispatchResult {
+            // Update the card owner in main storage (ensures existence and ownership)
+            Cards::<T>::try_mutate(card_id, |maybe_card| -> DispatchResult {
                 let card_info = maybe_card.as_mut().ok_or(Error::<T>::NoSuchCard)?;
                 ensure!(card_info.owner == from, Error::<T>::NotCardOwner);
-
-                // Transfer ownership
                 card_info.owner = to.clone();
+                Ok(())
+            })?;
 
+            // Remove card_id from `from`'s OwnedCards list (if present)
+            OwnedCards::<T>::mutate(&from, |list| {
+                if let Some(pos) = list.iter().position(|&id| id == card_id) {
+                    list.swap_remove(pos);
+                }
+            });
+
+            // Add card_id to `to`'s OwnedCards list (bounded)
+            OwnedCards::<T>::try_mutate(&to, |list| -> DispatchResult {
+                if list.len() as u32 >= <OwnedLimit as frame_support::traits::Get<u32>>::get() { return Err(Error::<T>::OwnedListFull.into()); }
+                list.try_push(card_id).map_err(|_| Error::<T>::OwnedListFull)?;
                 Ok(())
             })?;
 
@@ -354,6 +286,16 @@ pub mod pallet {
             };
 
             Cards::<T>::insert(card_id, new_card_info);
+
+            // Index the new card under the owner
+            OwnedCards::<T>::try_mutate(owner, |list| -> Result<(), DispatchError> {
+                if list.len() as u32 >= <OwnedLimit as frame_support::traits::Get<u32>>::get() {
+                    return Err(Error::<T>::OwnedListFull.into());
+                }
+                list.try_push(card_id).map_err(|_| Error::<T>::OwnedListFull)?;
+                Ok(())
+            })?;
+
             NextCardId::<T>::put(card_id + 1);
 
             Ok(card_id)

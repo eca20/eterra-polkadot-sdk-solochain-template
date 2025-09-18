@@ -22,10 +22,6 @@ frame_support::construct_runtime!(
 );
 
 parameter_types! {
-    pub const BlockHashCount: u64 = 250;
-    pub const MaxAttempts: u8 = 3;
-    pub const CardsPerPack: u8 = 6;
-    pub const MaxPacks: u32 = 10;
     pub const RandomnessSeed: u64 = 42;
 }
 
@@ -65,13 +61,10 @@ impl system::Config for Test {
 impl pallet_eterra_simple_tcg::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type RandomnessSeed = RandomnessSeed;
-    type MaxAttempts = ConstU8<3>;
-    type CardsPerPack = ConstU8<6>;
-    type MaxPacks = ConstU32<10>;
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
-    let mut storage = system::GenesisConfig::<Test>::default()
+    let storage = system::GenesisConfig::<Test>::default()
         .build_storage()
         .unwrap();
     storage.into()
