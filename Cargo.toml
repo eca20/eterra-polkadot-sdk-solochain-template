@@ -90,6 +90,7 @@ rand = { version = "0.9.1", default-features = false, features = ["std"] }
 rand_chacha = { version = "0.3", features = ["std"] }
 # Substrate Gaming Pallets
 pallet-eterra                            = { path = "pallets/eterra", default-features = false }
+pallet-eterra-faucet                           = { path = "pallets/eterra-faucet", default-features = false }
 pallet-eterra-tcg                            = { path = "pallets/eterra-tcg", default-features = false }
 pallet-eterra-daily-slots                            = { path = "pallets/eterra-daily-slots", default-features = false }
 pallet-eterra-simple-tcg                            = { path = "pallets/eterra-simple-tcg", default-features = false }

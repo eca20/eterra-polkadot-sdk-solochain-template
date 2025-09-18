@@ -5224,6 +5224,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-eterra-faucet"
+version = "0.1.0"
+dependencies = [
+ "frame-support",
+ "frame-system",
+ "hex",
+ "log",
+ "parity-scale-codec",
+ "scale-info",
+ "schnorrkel",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
 name = "pallet-eterra-simple-tcg"
 version = "0.1.0"
 dependencies = [
@@ -8374,6 +8391,7 @@ dependencies = [
  "pallet-balances",
  "pallet-eterra",
  "pallet-eterra-daily-slots",
+ "pallet-eterra-faucet",
  "pallet-eterra-simple-tcg",
  "pallet-eterra-tcg",
  "pallet-grandpa",

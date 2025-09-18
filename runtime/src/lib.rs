@@ -20,6 +20,7 @@ use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
 
 use codec::{Decode, Encode};
+use frame_support::parameter_types;
 use frame_support::traits::ConstU64;
 use frame_support::traits::Get;
 use frame_support::traits::{ConstU32, ConstU8};
@@ -27,6 +28,7 @@ pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_eterra;
 pub use pallet_eterra_daily_slots;
+pub use pallet_eterra_faucet;
 pub use pallet_eterra_simple_tcg;
 pub use pallet_eterra_tcg;
 
@@ -255,6 +257,21 @@ impl Get<u32> for MaxWeightEntries {
     }
 }
 
+// === Faucet configuration parameters ===
+use sp_runtime::AccountId32;
+
+/// Dev Alice account (//Alice) public key as AccountId32
+const ALICE: AccountId32 = AccountId32::new([
+    0xd4, 0x35, 0x93, 0xc7, 0x15, 0xfd, 0xd3, 0x1c, 0x61, 0x14, 0x1a, 0xbd, 0x04, 0xa9, 0x9f, 0xd6,
+    0x82, 0x2c, 0x85, 0x58, 0x85, 0x4c, 0xcd, 0xe3, 0x9a, 0x56, 0x84, 0xe7, 0xa5, 0x6d, 0xa2, 0x7d,
+]);
+
+parameter_types! {
+    pub FaucetAccountParam: AccountId = ALICE.into();
+    // Payout is 1000 whole tokens (adjust UNIT to your decimals)
+    pub FaucetPayoutAmount: Balance = 1_000 * UNIT;
+}
+
 impl pallet_eterra::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type NumPlayers = EterraNumPlayers;
@@ -274,10 +291,6 @@ impl pallet_eterra_tcg::Config for Runtime {
 impl pallet_eterra_simple_tcg::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type RandomnessSeed = ConstU64<42>;
-
-    type MaxAttempts = ConstU8<3>; // Set maximum attempts per card to 3
-    type CardsPerPack = ConstU8<5>; // Set number of cards per pack to 5
-    type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
 }
 
 impl pallet_eterra_daily_slots::Config for Runtime {
@@ -288,6 +301,13 @@ impl pallet_eterra_daily_slots::Config for Runtime {
     type MaxRollsPerRound = MaxRollsPerRound;
     type MaxRollHistoryLength = MaxRollHistoryLength;
     type MaxWeightEntries = MaxWeightEntries; // ✅ new
+}
+
+impl pallet_eterra_faucet::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type Currency = Balances;
+    type FaucetAccount = FaucetAccountParam;
+    type PayoutAmount = FaucetPayoutAmount;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
@@ -343,4 +363,7 @@ mod runtime {
 
     #[runtime::pallet_index(11)]
     pub type EterraSimpleTCG = pallet_eterra_simple_tcg;
+
+    #[runtime::pallet_index(12)]
+    pub type EterraFaucet = pallet_eterra_faucet;
 }

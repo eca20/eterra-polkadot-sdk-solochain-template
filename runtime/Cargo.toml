@@ -55,6 +55,8 @@ pallet-eterra                             = { workspace = true }
 pallet-eterra-tcg = { workspace = true }
 pallet-eterra-daily-slots = { workspace = true }
 pallet-eterra-simple-tcg = { workspace = true }
+pallet-eterra-faucet = { workspace = true }
+
 
 [build-dependencies]
 substrate-wasm-builder = { optional = true, workspace = true, default-features = true }
