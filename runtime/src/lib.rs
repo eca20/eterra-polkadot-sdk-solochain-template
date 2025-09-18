@@ -21,9 +21,13 @@ use sp_version::RuntimeVersion;
 
 use codec::{Decode, Encode};
 use frame_support::parameter_types;
+// use frame_support::weights::IdentityFee;  // deleted as per instructions
+use frame_support::traits::ConstU32;
 use frame_support::traits::ConstU64;
+use frame_support::traits::ConstU8;
+
 use frame_support::traits::Get;
-use frame_support::traits::{ConstU32, ConstU8};
+// use frame_support::traits::Contains;  // deleted as per instructions
 pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_eterra;
@@ -306,8 +310,6 @@ impl pallet_eterra_daily_slots::Config for Runtime {
 impl pallet_eterra_faucet::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Currency = Balances;
-    type FaucetAccount = FaucetAccountParam;
-    type PayoutAmount = FaucetPayoutAmount;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.

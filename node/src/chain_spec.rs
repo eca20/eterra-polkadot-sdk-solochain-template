@@ -1,4 +1,4 @@
-use sc_service::ChainType;
+use sc_service::{ChainType, Properties};
 use solochain_template_runtime::{AccountId, Signature, WASM_BINARY};
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_consensus_grandpa::AuthorityId as GrandpaId;
@@ -33,7 +33,17 @@ pub fn authority_keys_from_seed(s: &str) -> (AuraId, GrandpaId) {
     (get_from_seed::<AuraId>(s), get_from_seed::<GrandpaId>(s))
 }
 
+fn chain_properties() -> Properties {
+    let mut props = Properties::new();
+    props.insert("tokenSymbol".into(), "COIN".into());
+    props.insert("tokenDecimals".into(), 12.into());
+    props
+}
+
 pub fn development_config() -> Result<ChainSpec, String> {
+    // Faucet account derived from dev seed
+    let faucet = get_account_id_from_seed::<sr25519::Public>("Faucet");
+
     Ok(ChainSpec::builder(
         WASM_BINARY.ok_or_else(|| "Development wasm not available".to_string())?,
         None,
@@ -41,6 +51,7 @@ pub fn development_config() -> Result<ChainSpec, String> {
     .with_name("Development")
     .with_id("dev")
     .with_chain_type(ChainType::Development)
+    .with_properties(chain_properties())
     .with_genesis_config_patch(testnet_genesis(
         // Initial PoA authorities
         vec![authority_keys_from_seed("Alice")],
@@ -52,13 +63,19 @@ pub fn development_config() -> Result<ChainSpec, String> {
             get_account_id_from_seed::<sr25519::Public>("Bob"),
             get_account_id_from_seed::<sr25519::Public>("Alice//stash"),
             get_account_id_from_seed::<sr25519::Public>("Bob//stash"),
+            faucet.clone(),
         ],
         true,
+        faucet,
+        1_000_000_000_000_000u128,
     ))
     .build())
 }
 
 pub fn local_testnet_config() -> Result<ChainSpec, String> {
+    // Faucet account derived from dev seed
+    let faucet = get_account_id_from_seed::<sr25519::Public>("Faucet");
+
     Ok(ChainSpec::builder(
         WASM_BINARY.ok_or_else(|| "Development wasm not available".to_string())?,
         None,
@@ -66,6 +83,7 @@ pub fn local_testnet_config() -> Result<ChainSpec, String> {
     .with_name("Local Testnet")
     .with_id("local_testnet")
     .with_chain_type(ChainType::Local)
+    .with_properties(chain_properties())
     .with_genesis_config_patch(testnet_genesis(
         // Initial PoA authorities
         vec![
@@ -88,8 +106,11 @@ pub fn local_testnet_config() -> Result<ChainSpec, String> {
             get_account_id_from_seed::<sr25519::Public>("Dave//stash"),
             get_account_id_from_seed::<sr25519::Public>("Eve//stash"),
             get_account_id_from_seed::<sr25519::Public>("Ferdie//stash"),
+            faucet.clone(),
         ],
         true,
+        faucet,
+        1_000_000_000_000_000u128,
     ))
     .build())
 }
@@ -100,6 +121,8 @@ fn testnet_genesis(
     root_key: AccountId,
     endowed_accounts: Vec<AccountId>,
     _enable_println: bool,
+    faucet_account: AccountId,
+    payout_amount: u128,
 ) -> serde_json::Value {
     serde_json::json!({
         "balances": {
@@ -116,5 +139,9 @@ fn testnet_genesis(
             // Assign network admin rights.
             "key": Some(root_key),
         },
+        "eterraFaucet": {
+            "faucetAccount": faucet_account,
+            "payoutAmount": payout_amount
+        }
     })
 }
