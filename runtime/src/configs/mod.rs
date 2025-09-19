@@ -141,15 +141,18 @@ parameter_types! {
 }
 
 // --- Make faucet.claim feeless by customizing OnChargeTransaction ---
-use sp_runtime::traits::{DispatchInfoOf, PostDispatchInfoOf};
 use pallet_transaction_payment::OnChargeTransaction;
+use sp_runtime::traits::{DispatchInfoOf, PostDispatchInfoOf};
 use sp_runtime::transaction_validity::TransactionValidityError;
 
 pub struct FreeFaucetOrCurrencyAdapter;
 
 impl OnChargeTransaction<Runtime> for FreeFaucetOrCurrencyAdapter {
     type Balance = Balance;
-    type LiquidityInfo = <pallet_transaction_payment::FungibleAdapter<Balances, ()> as OnChargeTransaction<Runtime>>::LiquidityInfo;
+    type LiquidityInfo =
+        <pallet_transaction_payment::FungibleAdapter<Balances, ()> as OnChargeTransaction<
+            Runtime,
+        >>::LiquidityInfo;
 
     fn withdraw_fee(
         who: &AccountId,
@@ -159,17 +162,16 @@ impl OnChargeTransaction<Runtime> for FreeFaucetOrCurrencyAdapter {
         fee: Self::Balance,
     ) -> Result<Self::LiquidityInfo, TransactionValidityError> {
         // If the call is the faucet claim, skip withdrawing any fee (including tip).
-        if matches!(call, RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { .. })) {
-            return Ok(Default::default()); // e.g., None for the default LiquidityInfo
+        if matches!(
+            call,
+            RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { .. })
+        ) {
+            return Ok(Default::default());
         }
         // Otherwise delegate to the default adapter.
-        <pallet_transaction_payment::FungibleAdapter<Balances, ()> as OnChargeTransaction<Runtime>>::withdraw_fee(
-            who,
-            call,
-            info,
-            tip,
-            fee,
-        )
+        <pallet_transaction_payment::FungibleAdapter<Balances, ()> as OnChargeTransaction<
+            Runtime,
+        >>::withdraw_fee(who, call, info, tip, fee)
     }
 
     fn correct_and_deposit_fee(
@@ -185,14 +187,9 @@ impl OnChargeTransaction<Runtime> for FreeFaucetOrCurrencyAdapter {
             return Ok(());
         }
         // Otherwise delegate to the default adapter.
-        <pallet_transaction_payment::FungibleAdapter<Balances, ()> as OnChargeTransaction<Runtime>>::correct_and_deposit_fee(
-            who,
-            info,
-            post_info,
-            tip,
-            fee,
-            paid,
-        )
+        <pallet_transaction_payment::FungibleAdapter<Balances, ()> as OnChargeTransaction<
+            Runtime,
+        >>::correct_and_deposit_fee(who, info, post_info, tip, fee, paid)
     }
 }
 

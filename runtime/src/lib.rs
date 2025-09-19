@@ -304,7 +304,16 @@ impl pallet_eterra_daily_slots::Config for Runtime {
     type MaxOptionsPerSlot = MaxOptionsPerSlot;
     type MaxRollsPerRound = MaxRollsPerRound;
     type MaxRollHistoryLength = MaxRollHistoryLength;
-    type MaxWeightEntries = MaxWeightEntries; // ✅ new
+    type MaxWeightEntries = MaxWeightEntries;
+    type Currency = Balances;
+    type RewardPerWin = RewardPerWinAmount; // defined below
+}
+
+pub struct RewardPerWinAmount;
+impl frame_support::traits::Get<Balance> for RewardPerWinAmount {
+    fn get() -> Balance {
+        100 * UNIT
+    }
 }
 
 impl pallet_eterra_faucet::Config for Runtime {

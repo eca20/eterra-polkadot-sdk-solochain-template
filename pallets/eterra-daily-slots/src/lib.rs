@@ -2,13 +2,16 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use frame_support::{pallet_prelude::*, traits::UnixTime};
+use frame_support::{pallet_prelude::*, traits::{UnixTime, Currency}};
 use frame_system::pallet_prelude::*;
 use sp_runtime::traits::Hash;
 use sp_std::vec;
 use sp_std::vec::Vec;
 
 use log::info;
+
+type BalanceOf<T> = 
+    <<T as pallet::Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 
 const SECONDS_PER_DAY: u64 = 86_400;
 const EVENING_THRESHOLD: u64 = 18 * 3600;
@@ -31,6 +34,13 @@ pub mod pallet {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
         /// Time provider
         type TimeProvider: UnixTime;
+
+        /// Currency used for COIN payouts
+        type Currency: Currency<Self::AccountId>;
+
+        /// Amount of COIN rewarded for a win
+        #[pallet::constant]
+        type RewardPerWin: Get<BalanceOf<Self>>;
 
         /// How many reels (slots)
         #[pallet::constant]
@@ -135,6 +145,11 @@ pub mod pallet {
         WeeklyWinner {
             winner: T::AccountId,
         },
+        /// Emitted when a player wins the slot and receives a COIN reward
+        WinRewarded {
+            player: T::AccountId,
+            amount: BalanceOf<T>,
+        },
     }
 
     #[pallet::error]
@@ -232,6 +247,14 @@ pub mod pallet {
             if tickets > 0 {
                 TicketsPerUser::<T>::mutate(&who, |t| *t = t.saturating_add(tickets));
                 TotalTickets::<T>::mutate(|t| *t = t.saturating_add(tickets));
+            }
+
+            // ─── PAYOUT ON WIN ─────────────────
+            if Self::is_win(&result) {
+                let amt = T::RewardPerWin::get();
+                // Mint to the winner (inflationary faucet-style)
+                T::Currency::deposit_creating(&who, amt);
+                Self::deposit_event(Event::WinRewarded { player: who.clone(), amount: amt });
             }
 
             Self::deposit_event(Event::SlotRolled {
@@ -342,6 +365,13 @@ pub mod pallet {
             TotalTickets::<T>::put(0);
             LastDrawingTime::<T>::put(now);
             Ok(())
+        }
+
+        /// A simple win condition: all symbols in the spin are identical (e.g., 7-7-7)
+        fn is_win(result: &[u32]) -> bool {
+            if result.is_empty() { return false; }
+            let first = result[0];
+            result.iter().all(|&x| x == first)
         }
     }
 
