@@ -12,6 +12,7 @@ mod mock;
 mod tests;
 
 use frame_support::{pallet_prelude::*, traits::Get, BoundedVec};
+use frame_support::traits::{Currency, ExistenceRequirement};
 // ===== New: utilities for in-pallet game logic =====
 
 const GRID_DIM: usize = 4;
@@ -84,6 +85,17 @@ pub mod pallet {
         /// A numeric seed for our randomness.
         #[pallet::constant]
         type RandomnessSeed: Get<u64>;
+
+        /// Currency used to charge the mint fee.
+        type Currency: Currency<Self::AccountId>;
+
+        /// Fixed fee to mint a new card (e.g., 100 tokens).
+        #[pallet::constant]
+        type MintFee: Get<<Self::Currency as Currency<Self::AccountId>>::Balance>;
+
+        /// Faucet account that receives the mint fee.
+        #[pallet::constant]
+        type FaucetAccount: Get<Self::AccountId>;
     }
 
     // ------------------
@@ -245,6 +257,16 @@ pub mod pallet {
     impl<T: Config> Pallet<T> {
         /// Create a brand-new card with `owner`.
         fn create_new_card(owner: &T::AccountId) -> Result<u32, DispatchError> {
+            // Charge the mint fee to the caller and send it to the faucet account.
+            // This will fail with an error if the caller has insufficient funds.
+            let fee: <<T as Config>::Currency as Currency<T::AccountId>>::Balance = T::MintFee::get();
+            T::Currency::transfer(
+                owner,
+                &T::FaucetAccount::get(),
+                fee,
+                ExistenceRequirement::KeepAlive,
+            )?;
+
             let card_id = NextCardId::<T>::get();
 
             // Derive pseudo-random bytes from block, owner, seed, and card_id

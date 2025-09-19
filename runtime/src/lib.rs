@@ -25,6 +25,7 @@ use frame_support::parameter_types;
 use frame_support::traits::ConstU32;
 use frame_support::traits::ConstU64;
 use frame_support::traits::ConstU8;
+use frame_support::traits::ConstU128;
 
 use frame_support::traits::Get;
 // use frame_support::traits::Contains;  // deleted as per instructions
@@ -294,7 +295,18 @@ impl pallet_eterra_tcg::Config for Runtime {
 
 impl pallet_eterra_simple_tcg::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    type RandomnessSeed = ConstU64<42>;
+
+    // You already had this:
+    type RandomnessSeed = ConstU64<12345>;
+
+    // NEW: hook up balances as the currency
+    type Currency = Balances;
+
+    // NEW: fixed mint fee of 100 whole tokens (uses your UNIT = base units)
+    type MintFee = ConstU128<{ 100 * UNIT }>;
+
+    // NEW: the faucet account that should receive the fee (Alice via parameter_types!)
+    type FaucetAccount = FaucetAccountParam;
 }
 
 impl pallet_eterra_daily_slots::Config for Runtime {
