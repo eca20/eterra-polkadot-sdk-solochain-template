@@ -35,6 +35,11 @@ pub mod pallet {
     pub type CardId = u32;
     pub type Balance = u128;
 
+    /// Balance type bound to the runtime currency.
+    pub type BalanceOf<T> = <
+        <T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>
+    >::Balance;
+
     // Max number of cards we track per owner (bounded index)
     pub type OwnedLimit = ConstU32<600>;
 
@@ -164,6 +169,28 @@ pub mod pallet {
         ValueQuery
     >;
 
+    /// A map of cards that are up for sale: card_id => price.
+    #[pallet::storage]
+    #[pallet::getter(fn card_prices)]
+    pub type CardPrices<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        CardId,
+        BalanceOf<T>,
+        OptionQuery
+    >;
+
+    /// Optional: index of cards a given owner has listed (bounded by OwnedLimit for simplicity).
+    #[pallet::storage]
+    #[pallet::getter(fn listed_by_owner)]
+    pub type ListedByOwner<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedVec<CardId, OwnedLimit>,
+        ValueQuery
+    >;
+
     // ------------------
     // Events
     // ------------------
@@ -179,6 +206,12 @@ pub mod pallet {
             to: T::AccountId,
             card_id: u32,
         },
+        /// A card was listed for sale by `owner` at `price`.
+        CardListed { owner: T::AccountId, card_id: u32, price: BalanceOf<T> },
+        /// A card was unlisted (by owner or due to transfer).
+        CardUnlisted { owner: T::AccountId, card_id: u32 },
+        /// A card was bought by `buyer` from `seller` for `price`.
+        CardBought { buyer: T::AccountId, seller: T::AccountId, card_id: u32, price: BalanceOf<T> },
     }
 
     // ------------------
@@ -194,6 +227,10 @@ pub mod pallet {
         OwnedListFull,
         // --- Match errors ---
         CardNotFinalized,
+        /// Card is not listed for sale.
+        NotForSale,
+        /// Only the current owner may list/unlist.
+        NotOwner,
     }
 
     // ------------------
@@ -224,29 +261,99 @@ pub mod pallet {
         ) -> DispatchResult {
             let from = ensure_signed(origin)?;
 
-            // Update the card owner in main storage (ensures existence and ownership)
+            // Ensure card exists and belongs to `from`
             Cards::<T>::try_mutate(card_id, |maybe_card| -> DispatchResult {
                 let card_info = maybe_card.as_mut().ok_or(Error::<T>::NoSuchCard)?;
                 ensure!(card_info.owner == from, Error::<T>::NotCardOwner);
-                card_info.owner = to.clone();
                 Ok(())
             })?;
 
-            // Remove card_id from `from`'s OwnedCards list (if present)
-            OwnedCards::<T>::mutate(&from, |list| {
-                if let Some(pos) = list.iter().position(|&id| id == card_id) {
-                    list.swap_remove(pos);
-                }
-            });
+            // Unlist if listed
+            if CardPrices::<T>::contains_key(card_id) {
+                Self::unlist(card_id, &from);
+            }
 
-            // Add card_id to `to`'s OwnedCards list (bounded)
-            OwnedCards::<T>::try_mutate(&to, |list| -> DispatchResult {
-                if list.len() as u32 >= <OwnedLimit as frame_support::traits::Get<u32>>::get() { return Err(Error::<T>::OwnedListFull.into()); }
-                list.try_push(card_id).map_err(|_| Error::<T>::OwnedListFull)?;
-                Ok(())
-            })?;
+            // Perform transfer
+            Self::do_transfer(&from, &to, card_id)?;
 
             Self::deposit_event(Event::CardTransferred { from, to, card_id });
+            Ok(())
+        }
+
+        /// List a card for sale at a fixed `price` (in chain base units).
+        #[pallet::call_index(2)]
+        #[pallet::weight(10_000)]
+        pub fn set_price(origin: OriginFor<T>, card_id: CardId, price: BalanceOf<T>) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            // Verify ownership
+            let is_owner = Cards::<T>::get(card_id)
+                .map(|c| c.owner == who)
+                .ok_or(Error::<T>::NoSuchCard)?;
+            ensure!(is_owner, Error::<T>::NotOwner);
+
+            CardPrices::<T>::insert(card_id, price);
+            ListedByOwner::<T>::try_mutate(&who, |v| -> DispatchResult {
+                if !v.iter().any(|&id| id == card_id) {
+                    if v.len() as u32 >= <OwnedLimit as frame_support::traits::Get<u32>>::get() {
+                        return Err(Error::<T>::OwnedListFull.into());
+                    }
+                    v.try_push(card_id).map_err(|_| Error::<T>::OwnedListFull)?;
+                }
+                Ok(())
+            })?;
+
+            Self::deposit_event(Event::CardListed { owner: who, card_id, price });
+            Ok(())
+        }
+
+        /// Remove a card from sale.
+        #[pallet::call_index(3)]
+        #[pallet::weight(10_000)]
+        pub fn remove_price(origin: OriginFor<T>, card_id: CardId) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            // Verify ownership
+            let is_owner = Cards::<T>::get(card_id)
+                .map(|c| c.owner == who)
+                .ok_or(Error::<T>::NoSuchCard)?;
+            ensure!(is_owner, Error::<T>::NotOwner);
+
+            // Ensure it was listed
+            ensure!(CardPrices::<T>::contains_key(card_id), Error::<T>::NotForSale);
+
+            Self::unlist(card_id, &who);
+            Ok(())
+        }
+
+        /// Buy a listed card at the asking price.
+        #[pallet::call_index(4)]
+        #[pallet::weight(10_000)]
+        pub fn buy_card(origin: OriginFor<T>, card_id: CardId) -> DispatchResult {
+            let buyer = ensure_signed(origin)?;
+
+            // Get price and current owner
+            let price = CardPrices::<T>::get(card_id).ok_or(Error::<T>::NotForSale)?;
+            let seller = Cards::<T>::get(card_id)
+                .map(|c| c.owner)
+                .ok_or(Error::<T>::NoSuchCard)?;
+
+            // Prevent self-buy (optional)
+            ensure!(seller != buyer, Error::<T>::NotOwner);
+
+            // Transfer funds buyer -> seller
+            <T as Config>::Currency::transfer(
+                &buyer,
+                &seller,
+                price,
+                ExistenceRequirement::AllowDeath,
+            )?;
+
+            // Unlist before transfer (so indices are consistent)
+            Self::unlist(card_id, &seller);
+
+            // Transfer ownership seller -> buyer
+            Self::do_transfer(&seller, &buyer, card_id)?;
+
+            Self::deposit_event(Event::CardBought { buyer, seller, card_id, price });
             Ok(())
         }
     }
@@ -321,6 +428,49 @@ pub mod pallet {
             NextCardId::<T>::put(card_id + 1);
 
             Ok(card_id)
+        }
+
+        /// Internal: remove a card from the marketplace listings, updating indices.
+        fn unlist(card_id: CardId, owner: &T::AccountId) {
+            // Remove price entry if any
+            CardPrices::<T>::remove(card_id);
+            // Remove from owner's listed index, if present
+            ListedByOwner::<T>::mutate(owner, |v| {
+                if let Some(pos) = v.iter().position(|&id| id == card_id) {
+                    v.swap_remove(pos);
+                }
+            });
+            // Emit event for UI (best-effort; no error path)
+            Self::deposit_event(Event::CardUnlisted { owner: owner.clone(), card_id });
+        }
+
+        /// Internal: transfer ownership from `from` to `to` and ensure indices are updated.
+        fn do_transfer(from: &T::AccountId, to: &T::AccountId, card_id: CardId) -> Result<(), DispatchError> {
+            // Update the card owner in main storage (ensures existence and ownership)
+            Cards::<T>::try_mutate(card_id, |maybe_card| -> DispatchResult {
+                let card_info = maybe_card.as_mut().ok_or(Error::<T>::NoSuchCard)?;
+                ensure!(card_info.owner == *from, Error::<T>::NotCardOwner);
+                card_info.owner = to.clone();
+                Ok(())
+            })?;
+
+            // Remove card_id from `from`'s OwnedCards list (if present)
+            OwnedCards::<T>::mutate(from, |list| {
+                if let Some(pos) = list.iter().position(|&id| id == card_id) {
+                    list.swap_remove(pos);
+                }
+            });
+
+            // Add card_id to `to`'s OwnedCards list (bounded)
+            OwnedCards::<T>::try_mutate(to, |list| -> DispatchResult {
+                if list.len() as u32 >= <OwnedLimit as frame_support::traits::Get<u32>>::get() {
+                    return Err(Error::<T>::OwnedListFull.into());
+                }
+                list.try_push(card_id).map_err(|_| Error::<T>::OwnedListFull)?;
+                Ok(())
+            })?;
+
+            Ok(())
         }
     }
 }

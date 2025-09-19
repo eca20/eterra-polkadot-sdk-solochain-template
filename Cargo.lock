@@ -5248,6 +5248,7 @@ dependencies = [
  "frame-system",
  "hex",
  "log",
+ "pallet-balances",
  "parity-scale-codec",
  "scale-info",
  "schnorrkel",
