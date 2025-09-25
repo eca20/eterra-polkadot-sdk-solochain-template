@@ -155,3 +155,70 @@ fn eterra_adapter_ai_returns_legal_move_and_applies() {
         assert_eq!(s1.round, 0);
     });
 }
+
+#[test]
+fn adapter_list_actions_respects_max_bound() {
+    use eterra_card_ai_adapter::eterra_adapter::{Hand, HandEntry, State};
+    use pallet_eterra as card;
+
+    let mut ext = crate::mock::new_test_ext();
+    ext.execute_with(|| {
+        let board: card::Board = Default::default();
+        let mk = |n, e, s, w| HandEntry { north: n, east: e, south: s, west: w, used: false };
+        let base = mk(1,1,1,1);
+        let hand0 = Hand { entries: core::array::from_fn(|_| base.clone()) };
+        let hand1 = Hand { entries: core::array::from_fn(|_| base.clone()) };
+        let s = State { board, scores: (5,5), player_turn: 0, round: 0, max_rounds: 10, hands: [hand0, hand1] };
+
+        // With an empty 4x4, maximum distinct actions is 16 cells * 5 unused cards = 80.
+        // We intentionally set MAX lower to ensure the adapter doesn't write past bounds.
+        const MAX: usize = 7; // small cap
+        let mut buf: [Option<eterra_card_ai_adapter::eterra_adapter::Action>; MAX] = core::array::from_fn(|_| None);
+        let n = AdapterShim::list_actions::<MAX>(&s, &mut buf);
+        assert!(n <= MAX, "listed {} actions, exceeds MAX {}", n, MAX);
+        // All populated entries should be Some(...)
+        for i in 0..n { assert!(buf[i].is_some(), "index {} should be populated", i); }
+        // And any remaining slots should be None
+        for i in n..MAX { assert!(buf[i].is_none(), "index {} should remain None", i); }
+    });
+}
+
+#[test]
+fn ai_prefers_capture_when_available_high_difficulty() {
+    use eterra_card_ai_adapter::eterra_adapter::{Adapter, Hand, HandEntry, State};
+    use pallet_eterra as card;
+
+    let mut ext = crate::mock::new_test_ext();
+    ext.execute_with(|| {
+        let mut board: card::Board = Default::default();
+        // Place an opponent card at (1,1) with weak side facing left (so we can capture from (0,1))
+        let opp_card = card::Card { top: 3, right: 3, bottom: 3, left: 2, color: Some(card::Color::Red) };
+        board[1][1] = Some(opp_card);
+
+        // Our hand has one strong-right card: right=5 beats opp.left(2) when we place at (0,1)
+        let strong_left = HandEntry { north: 1, east: 5, south: 1, west: 1, used: false };
+        // Fill remaining entries with dummies
+        let dummy = HandEntry { north: 1, east: 1, south: 1, west: 1, used: false };
+        let hand0 = Hand { entries: [
+            strong_left,
+            dummy.clone(),
+            dummy.clone(),
+            dummy.clone(),
+            dummy.clone(),
+        ] };
+        let hand1 = Hand { entries: core::array::from_fn(|_| dummy.clone()) };
+
+        let s0 = State { board, scores: (5,5), player_turn: 0, round: 0, max_rounds: 10, hands: [hand0, hand1] };
+
+        // Suggest at high difficulty – should favor the capturing move at x=0,y=1 using hand_index=0
+        let a = crate::pallet::Pallet::<crate::mock::Test>::suggest::<AdapterShim>(&s0, 95)
+            .expect("AI should suggest a move");
+
+        // Apply the suggestion using pure helper so we avoid trait mismatch issues
+        let s1 = Adapter::apply_pure(&s0, &a);
+
+        // After a correct capture from (0,1), our score should increase (6,4) and enemy card at (1,1) flips to Blue
+        assert!(s1.scores.0 >= s0.scores.0, "our score should not decrease after capturing opportunity");
+        if let Some(c) = s1.board[1][1].clone() { assert_eq!(c.color, Some(card::Color::Blue)); }
+    });
+}
