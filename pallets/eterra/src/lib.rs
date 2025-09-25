@@ -18,6 +18,8 @@ use sp_runtime::traits::SaturatedConversion;
 pub use types::board::Board;
 pub use types::card::Color;
 pub use types::game::*;
+use sp_std::vec::Vec;
+use frame_support::pallet_prelude::ConstU32;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -32,11 +34,16 @@ pub mod pallet {
     use crate::types::card::Color;
     use crate::types::game::*;
     use crate::types::GameId;
+    use crate::types::card::Card;
+    use crate::types::game::Move;
+    // Alias the simple TCG pallet so we can read card ownership & stats
+    use pallet_eterra_simple_tcg as cards;
+    
     #[pallet::pallet]
     pub struct Pallet<T>(_);
 
     #[pallet::config]
-    pub trait Config: frame_system::Config {
+    pub trait Config: frame_system::Config + cards::pallet::Config {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
         // Exact number of players that can join a single game
         #[pallet::constant]
@@ -45,6 +52,9 @@ pub mod pallet {
         type MaxRounds: Get<u8>;
         #[pallet::constant]
         type BlocksToPlayLimit: Get<u8>;
+        /// Exactly how many cards a submitted hand must contain
+        #[pallet::constant]
+        type HandSize: Get<u32>;
     }
 
     #[pallet::storage]
@@ -81,6 +91,10 @@ pub mod pallet {
             game_id: GameId<T>,
             player: AccountIdOf<T>,
         },
+        HandSubmitted {
+            game_id: GameId<T>,
+            player: AccountIdOf<T>,
+        },
     }
 
     #[pallet::error]
@@ -95,7 +109,42 @@ pub mod pallet {
         CurrentPlayerCannotForceFinishTurn,
         PlayerNotInGame,
         CreatorMustBeInGame,
+        // Hand / deck errors
+        HandSizeInvalid,
+        DuplicateCardInHand,
+        HandAlreadySubmitted,
+        HandNotSubmitted,
+        HandIndexOutOfRange,
+        CardAlreadyUsed,
+        CardDoesNotExist,
+        CardNotOwned,
     }
+
+    /// Limit of cards per hand (defaults to 5 via Config::HandSize)
+    pub type HandLimit = ConstU32<5>;
+
+    /// A single entry in a player's submitted hand
+    #[derive(Encode, Decode, Clone, PartialEq, Eq, TypeInfo, MaxEncodedLen, Debug)]
+    pub struct HandEntry {
+        pub card_id: u32,
+        pub north: u8,
+        pub east: u8,
+        pub south: u8,
+        pub west: u8,
+        pub used: bool,
+    }
+
+    /// Stores each player's hand for a given game.
+    /// Keyed by (game_id, account_id) -> bounded vec of exactly HandSize entries.
+    #[pallet::storage]
+    #[pallet::getter(fn game_hands)]
+    pub type HandsOfGame<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat, GameId<T>,
+        Blake2_128Concat, AccountIdOf<T>,
+        BoundedVec<HandEntry, HandLimit>,
+        OptionQuery
+    >;
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
@@ -246,6 +295,102 @@ pub mod pallet {
                 y: player_move.place_index_y,
             });
 
+            Ok(())
+        }
+
+        /// Submit a 5-card hand for this game. All cards must be owned by the caller.
+        #[pallet::call_index(2)]
+        #[pallet::weight(10_000)]
+        pub fn submit_hand(origin: OriginFor<T>, game_id: GameId<T>, card_ids: Vec<u32>) -> DispatchResult {
+            let who: AccountIdOf<T> = ensure_signed(origin)?;
+
+            // Ensure the game exists and the caller is a player in it
+            let game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
+            ensure!(game.players.contains(&who), Error::<T>::PlayerNotInGame);
+
+            // Enforce exact hand size and uniqueness
+            ensure!(card_ids.len() as u32 == T::HandSize::get(), Error::<T>::HandSizeInvalid);
+            // Check duplicates (O(n^2) but tiny n=5)
+            for i in 0..card_ids.len() {
+                for j in (i+1)..card_ids.len() {
+                    ensure!(card_ids[i] != card_ids[j], Error::<T>::DuplicateCardInHand);
+                }
+            }
+
+            // Prevent resubmission
+            ensure!(HandsOfGame::<T>::get(&game_id, &who).is_none(), Error::<T>::HandAlreadySubmitted);
+
+            // Build hand entries from the cards pallet; validate ownership & existence
+            let mut hand: BoundedVec<HandEntry, HandLimit> = BoundedVec::default();
+            for card_id in card_ids.into_iter() {
+                let info = cards::pallet::Cards::<T>::get(card_id).ok_or(Error::<T>::CardDoesNotExist)?;
+                ensure!(info.owner == who, Error::<T>::CardNotOwned);
+                let entry = HandEntry { card_id, north: info.north, east: info.east, south: info.south, west: info.west, used: false };
+                hand.try_push(entry).map_err(|_| Error::<T>::HandSizeInvalid)?;
+            }
+
+            HandsOfGame::<T>::insert(&game_id, &who, hand);
+            Self::deposit_event(Event::HandSubmitted { game_id, player: who });
+            Ok(())
+        }
+
+        /// Play a card by referencing its index in the submitted hand (0..HandSize-1).
+        #[pallet::call_index(3)]
+        #[pallet::weight(10_000)]
+        pub fn play_from_hand(
+            origin: OriginFor<T>,
+            game_id: GameId<T>,
+            hand_index: u8,
+            x: u8,
+            y: u8,
+        ) -> DispatchResult {
+            let who: AccountIdOf<T> = ensure_signed(origin)?;
+
+            // Load game
+            let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
+
+            // Validate it's the caller's turn and the target cell is open
+            Self::validate_player_turn(&game, &who)?;
+            ensure!(x < 4 && y < 4, Error::<T>::InvalidMove);
+            ensure!(game.board[x as usize][y as usize].is_none(), Error::<T>::CellOccupied);
+
+            // Get caller's hand
+            let mut hand = HandsOfGame::<T>::get(&game_id, &who).ok_or(Error::<T>::HandNotSubmitted)?;
+            let idx = hand_index as usize;
+            ensure!(idx < hand.len(), Error::<T>::HandIndexOutOfRange);
+            ensure!(!hand[idx].used, Error::<T>::CardAlreadyUsed);
+
+            // Build the placed card from the saved stats
+            let current_color = Self::get_current_color(&game, &who);
+            let h = hand[idx].clone();
+            let placed = Card { top: h.north, right: h.east, bottom: h.south, left: h.west, color: None };
+            let mv = Move { place_card: placed, place_index_x: x, place_index_y: y };
+
+            // Place the card and resolve capture logic (mirrors `play`)
+            Self::place_card_on_board(&mut game, &mv, current_color.clone());
+            Self::apply_capture_logic(&mut game, &mv, current_color.clone());
+
+            // Mark card as used and persist the hand
+            hand[idx].used = true;
+            HandsOfGame::<T>::insert(&game_id, &who, hand);
+
+            // Update timing and turn
+            let current_block = <frame_system::Pallet<T>>::block_number();
+            game.last_played_block = current_block;
+            game.next_turn();
+
+            // Emit events and save game
+            let next_player = game.players[game.get_player_turn() as usize].clone();
+            Self::deposit_event(Event::NewTurn { game_id, next_player });
+            GameStorage::<T>::insert(&game_id, game.clone());
+
+            // Check for win condition after saving
+            if let Some(winner) = Self::is_game_won(&game_id, &game) {
+                Self::end_game(&game_id, winner);
+                return Ok(());
+            }
+
+            Self::deposit_event(Event::MovePlayed { game_id, player: who, x, y });
             Ok(())
         }
 

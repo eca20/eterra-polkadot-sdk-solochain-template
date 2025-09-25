@@ -5195,6 +5195,8 @@ dependencies = [
  "frame-system",
  "hex",
  "log",
+ "pallet-balances",
+ "pallet-eterra-simple-tcg",
  "parity-scale-codec",
  "scale-info",
  "sp-core",

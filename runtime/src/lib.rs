@@ -282,6 +282,7 @@ impl pallet_eterra::Config for Runtime {
     type NumPlayers = EterraNumPlayers;
     type MaxRounds = EterraMaxRounds;
     type BlocksToPlayLimit = EterraBlocksToPlayLimit;
+    type HandSize = ConstU32<5>; // <<—— added
 }
 
 impl pallet_eterra_tcg::Config for Runtime {
