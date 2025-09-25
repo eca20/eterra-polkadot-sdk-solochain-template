@@ -1424,3 +1424,194 @@ fn play_from_hand_index_out_of_range_fails() {
         assert_noop!(res, crate::Error::<Test>::HandIndexOutOfRange);
     });
 }
+
+#[test]
+fn submit_hand_fails_for_unknown_game() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let creator = 1u64;
+        // Mint exactly 5 cards so the hand size is valid
+        let card_ids = mint_cards_for(creator, 5);
+
+        // Use a random game id that does not exist in storage
+        let fake_game_id = H256::random();
+
+        // Attempt to submit a hand for a non-existent game should fail fast
+        let res = Eterra::submit_hand(
+            frame_system::RawOrigin::Signed(creator).into(),
+            fake_game_id,
+            card_ids,
+        );
+        assert_noop!(res, crate::Error::<Test>::GameNotFound);
+    });
+}
+
+#[test]
+fn submit_hand_wrong_size_rejected() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, _opponent) = setup_new_game();
+        // Mint 5 cards but submit only 4
+        let cards = mint_cards_for(creator, 5);
+        let mut too_small = cards.clone();
+        too_small.pop();
+        let res = Eterra::submit_hand(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            too_small,
+        );
+        assert_noop!(res, crate::Error::<Test>::HandSizeInvalid);
+
+        // Submit 6 (too many)
+        // Mint one more card
+        let extra = mint_cards_for(creator, 1);
+        let mut too_big = cards.clone();
+        too_big.extend_from_slice(&extra);
+        let res = Eterra::submit_hand(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            too_big,
+        );
+        assert_noop!(res, crate::Error::<Test>::HandSizeInvalid);
+    });
+}
+
+#[test]
+fn submit_hand_rejects_duplicates() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, _opponent) = setup_new_game();
+        let mut cards = mint_cards_for(creator, 5);
+        // Duplicate first id into second slot
+        if cards.len() >= 2 { cards[1] = cards[0]; }
+        let res = Eterra::submit_hand(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            cards,
+        );
+        assert_noop!(res, crate::Error::<Test>::DuplicateCardInHand);
+    });
+}
+
+#[test]
+fn submit_hand_by_non_player_fails() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, _creator, _opponent) = setup_new_game();
+        let rando = 77u64;
+        let ids = mint_cards_for(rando, 5);
+        let res = Eterra::submit_hand(
+            frame_system::RawOrigin::Signed(rando).into(),
+            game_id,
+            ids,
+        );
+        assert_noop!(res, crate::Error::<Test>::PlayerNotInGame);
+    });
+}
+
+#[test]
+fn play_from_hand_not_your_turn_fails() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+        // Submit valid hand for creator
+        let ids = mint_cards_for(creator, 5);
+        assert_ok!(Eterra::submit_hand(frame_system::RawOrigin::Signed(creator).into(), game_id, ids));
+
+        // Ensure it's NOT the creator's turn: if it is, have creator make a normal play to pass turn
+        {
+            let game = Eterra::game_board(game_id).unwrap();
+            let current = game.players[game.player_turn as usize];
+            if current == creator {
+                let m = Move { place_index_x: 0, place_index_y: 0, place_card: Card::new(1,1,1,1) };
+                assert_ok!(Eterra::play(frame_system::RawOrigin::Signed(creator).into(), game_id, m));
+            }
+        }
+
+        // Now it should be opponent's turn; creator attempts to play_from_hand
+        let res = Eterra::play_from_hand(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            0,
+            1,
+            1,
+        );
+        assert_noop!(res, crate::Error::<Test>::NotYourTurn);
+    });
+}
+
+#[test]
+fn play_from_hand_cell_occupied_and_bounds_checked() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+        let ids = mint_cards_for(creator, 5);
+        assert_ok!(Eterra::submit_hand(frame_system::RawOrigin::Signed(creator).into(), game_id, ids));
+
+        // Ensure creator's turn
+        ensure_my_turn(game_id, creator, opponent);
+
+        // Opponent occupies (0,0) first to trigger CellOccupied later
+        {
+            let m = Move { place_index_x: 0, place_index_y: 0, place_card: Card::new(1,1,1,1) };
+            // if it's not opponent's turn yet, make creator play one trivial move to pass
+            let game = Eterra::game_board(game_id).unwrap();
+            if game.players[game.player_turn as usize] != opponent {
+                let m2 = Move { place_index_x: 1, place_index_y: 0, place_card: Card::new(1,1,1,1) };
+                assert_ok!(Eterra::play(frame_system::RawOrigin::Signed(creator).into(), game_id, m2));
+            }
+            assert_ok!(Eterra::play(frame_system::RawOrigin::Signed(opponent).into(), game_id, m));
+        }
+
+        // Bring turn back to creator
+        ensure_my_turn(game_id, creator, opponent);
+
+        // Out of bounds from hand
+        let res = Eterra::play_from_hand(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            0,
+            4, // x out of bounds
+            0,
+        );
+        assert_noop!(res, crate::Error::<Test>::InvalidMove);
+
+        // Cell occupied
+        let res = Eterra::play_from_hand(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            0,
+            0,
+            0,
+        );
+        assert_noop!(res, crate::Error::<Test>::CellOccupied);
+    });
+}
+
+#[test]
+fn transfer_after_submit_does_not_block_play() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+        let ids = mint_cards_for(creator, 5);
+        assert_ok!(Eterra::submit_hand(frame_system::RawOrigin::Signed(creator).into(), game_id, ids.clone()));
+
+        // Transfer the first card to opponent AFTER submission
+        let first = ids[0];
+        assert_ok!(cards::Pallet::<Test>::transfer_card(
+            frame_system::RawOrigin::Signed(creator).into(),
+            first,
+            opponent,
+        ));
+
+        // Ensure it's creator's turn and play from the hand index 0; should still work
+        ensure_my_turn(game_id, creator, opponent);
+        assert_ok!(Eterra::play_from_hand(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            0,
+            0,
+            0,
+        ));
+    });
+}
