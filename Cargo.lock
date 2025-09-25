@@ -1917,6 +1917,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "eterra-card-ai-adapter"
+version = "0.1.0"
+dependencies = [
+ "pallet-eterra",
+ "pallet-eterra-monte-carlo-ai",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-std 8.0.0",
+]
+
+[[package]]
 name = "event-listener"
 version = "2.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5246,8 +5257,10 @@ dependencies = [
 name = "pallet-eterra-monte-carlo-ai"
 version = "0.1.0"
 dependencies = [
+ "eterra-card-ai-adapter",
  "frame-support",
  "frame-system",
+ "pallet-eterra",
  "parity-scale-codec",
  "scale-info",
  "sp-core",
@@ -8409,6 +8422,7 @@ dependencies = [
  "pallet-eterra",
  "pallet-eterra-daily-slots",
  "pallet-eterra-faucet",
+ "pallet-eterra-monte-carlo-ai",
  "pallet-eterra-simple-tcg",
  "pallet-eterra-tcg",
  "pallet-grandpa",

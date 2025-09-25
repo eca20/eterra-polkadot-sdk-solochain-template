@@ -17,6 +17,7 @@ use frame_system::pallet_prelude::BlockNumberFor;
 use sp_runtime::traits::SaturatedConversion;
 pub use types::board::Board;
 pub use types::card::Color;
+pub use types::card::Card;
 pub use types::game::*;
 use sp_std::vec::Vec;
 use frame_support::pallet_prelude::ConstU32;

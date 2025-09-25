@@ -14,7 +14,8 @@ members = [
     "pallets/eterra-tcg",
     "pallets/eterra-daily-slots",
     "pallets/eterra-simple-tcg",
-    "pallets/eterra-monte-carlo-ai",   # 👈 new
+    "pallets/eterra-monte-carlo-ai",
+    "crates/eterra-card-ai-adapter",   
     "runtime",
 ]
 resolver = "2"
@@ -90,10 +91,11 @@ substrate-wasm-builder = { version = "24.0.1", default-features = false }
 rand = { version = "0.9.1", default-features = false, features = ["std"] }
 rand_chacha = { version = "0.3", features = ["std"] }
 # Substrate Gaming Pallets
-pallet-eterra                            = { path = "pallets/eterra", default-features = false }
-pallet-eterra-faucet                           = { path = "pallets/eterra-faucet", default-features = false }
-pallet-eterra-tcg                            = { path = "pallets/eterra-tcg", default-features = false }
-pallet-eterra-daily-slots                            = { path = "pallets/eterra-daily-slots", default-features = false }
-pallet-eterra-simple-tcg                            = { path = "pallets/eterra-simple-tcg", default-features = false }
-pallet-eterra-monte-carlo-ai                           = { path = "pallets/eterra-monte-carlo-ai", default-features = false }
+pallet-eterra                           = { path = "pallets/eterra", default-features = false }
+pallet-eterra-faucet                    = { path = "pallets/eterra-faucet", default-features = false }
+pallet-eterra-tcg                       = { path = "pallets/eterra-tcg", default-features = false }
+pallet-eterra-daily-slots               = { path = "pallets/eterra-daily-slots", default-features = false }
+pallet-eterra-simple-tcg                = { path = "pallets/eterra-simple-tcg", default-features = false }
+pallet-eterra-monte-carlo-ai            = { path = "pallets/eterra-monte-carlo-ai", default-features = false }
+eterra-card-ai-adapter                  = { path = "crates/eterra-card-ai-adapter", default-features = false, features = ["std"] }
 
