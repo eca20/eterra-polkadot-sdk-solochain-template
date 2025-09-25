@@ -5243,6 +5243,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-eterra-monte-carlo-ai"
+version = "0.1.0"
+dependencies = [
+ "frame-support",
+ "frame-system",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
 name = "pallet-eterra-simple-tcg"
 version = "0.1.0"
 dependencies = [
