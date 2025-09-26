@@ -1,5 +1,6 @@
 use frame_support::pallet_prelude::*;
 use scale_info::TypeInfo;
+use crate::Player;
 
 #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone, PartialEq, Eq, Debug)]
 pub struct Card {
@@ -7,7 +8,7 @@ pub struct Card {
     pub right: u8,
     pub bottom: u8,
     pub left: u8,
-    pub color: Option<Color>, // None if not yet assigned
+    pub possession: Option<Player>, // None if not yet assigned
 }
 
 impl Card {
@@ -17,22 +18,19 @@ impl Card {
             right,
             bottom,
             left,
-            color: None,
+            possession: None,
         }
     }
 
-    pub fn with_color(mut self, color: Color) -> Self {
-        self.color = Some(color);
+    pub fn with_possession(mut self, possession: Player) -> Self {
+        self.possession = Some(possession);
         self
     }
 
-    pub fn get_color(&self) -> Option<&Color> {
-        self.color.as_ref()
+    pub fn get_possession(&self) -> Option<&Player> {
+        self.possession.as_ref()
     }
 }
 
 #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone, PartialEq, Eq, Debug)]
-pub enum Color {
-    Blue,
-    Red,
-}
+pub enum Possession { PlayerOne, PlayerTwo }

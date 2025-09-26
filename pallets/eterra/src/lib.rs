@@ -17,7 +17,7 @@ use frame_system::pallet_prelude::BlockNumberFor;
 use sp_runtime::traits::SaturatedConversion;
 use sp_runtime::traits::Hash;
 pub use types::board::Board;
-pub use types::card::Color;
+pub use types::card::Possession as Player; // PlayerOne / PlayerTwo
 pub use types::card::Card;
 pub use types::game::*;
 use sp_std::vec::Vec;
@@ -38,7 +38,7 @@ pub mod pallet {
     pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
 
     use crate::types::board::Board;
-    use crate::types::card::Color;
+    use crate::types::card::Possession as Player;
     use crate::types::game::*;
     use crate::types::GameId;
     use crate::types::card::Card;
@@ -256,7 +256,6 @@ pub mod pallet {
 
             let initial_board: Board = Default::default();
             let initial_scores = (5, 5);
-            let player_colors = (Color::Blue, Color::Red);
 
             let mut game: Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> = Game {
                 state: GameState::Playing,
@@ -270,7 +269,6 @@ pub mod pallet {
                 max_rounds: T::MaxRounds::get(),
                 board: initial_board.clone(),
                 scores: initial_scores,
-                player_colors,
             };
 
             GameModes::<T>::insert(&game_id, game_mode.clone());
@@ -329,14 +327,16 @@ pub mod pallet {
             Self::validate_player_turn(&game, &who)?;
             Self::validate_move(&game, &player_move)?;
 
-            // Get the player's color
-            let current_color = Self::get_current_color(&game, &who);
+            // Determine the current player's index (0 or 1)
+            let player_ix = Self::get_current_player_index(&game, &who);
+
 
             // Place the card on the board
-            Self::place_card_on_board(&mut game, &player_move, current_color.clone());
+            Self::place_card_on_board(&mut game, &player_move, player_ix);
+
 
             // Capture logic
-            Self::apply_capture_logic(&mut game, &player_move, current_color.clone());
+            Self::apply_capture_logic(&mut game, &player_move, player_ix);
 
             // Update the last_played_block to the current block number
             let current_block = <frame_system::Pallet<T>>::block_number();
@@ -473,14 +473,14 @@ pub mod pallet {
             ensure!(!hand[idx].used, Error::<T>::CardAlreadyUsed);
 
             // Build the placed card from the saved stats
-            let current_color = Self::get_current_color(&game, &who);
+            let player_ix = Self::get_current_player_index(&game, &who);
             let h = hand[idx].clone();
-            let placed = Card { top: h.north, right: h.east, bottom: h.south, left: h.west, color: None };
+            let placed = Card { top: h.north, right: h.east, bottom: h.south, left: h.west, possession: None };
             let mv = Move { place_card: placed, place_index_x: x, place_index_y: y };
 
             // Place the card and resolve capture logic (mirrors `play`)
-            Self::place_card_on_board(&mut game, &mv, current_color.clone());
-            Self::apply_capture_logic(&mut game, &mv, current_color.clone());
+            Self::place_card_on_board(&mut game, &mv, player_ix);
+            Self::apply_capture_logic(&mut game, &mv, player_ix);
 
             // Mark card as used and persist the hand
             hand[idx].used = true;
@@ -575,12 +575,16 @@ pub mod pallet {
 // Helper methods
 impl<T: Config> Pallet<T> {
     fn map_card_to_ai(c: &Card) -> ai::Card {
-        let color = match c.color {
-            Some(Color::Blue) => Some(ai::Color::Blue),
-            Some(Color::Red)  => Some(ai::Color::Red),
-            None => None,
-        };
-        ai::Card { top: c.top, right: c.right, bottom: c.bottom, left: c.left, color }
+        ai::Card {
+            top: c.top,
+            right: c.right,
+            bottom: c.bottom,
+            left: c.left,
+            possession: c.possession.as_ref().map(|p| match p {
+                Player::PlayerOne => ai::Possession::PlayerOne,
+                Player::PlayerTwo => ai::Possession::PlayerTwo,
+            }),
+        }
     }
     /// If the next player is the AI in a PvE game, let the AI take its move immediately.
     fn maybe_ai_take_turn(
@@ -613,12 +617,12 @@ impl<T: Config> Pallet<T> {
                             if let Some(cell) = col.get(yi) {
                                 if cell.is_none() {
                                     let h = slot.clone();
-                                    let placed = Card { top: h.north, right: h.east, bottom: h.south, left: h.west, color: None };
+                                    let placed = Card { top: h.north, right: h.east, bottom: h.south, left: h.west, possession: None };
                                     let mv = Move { place_card: placed, place_index_x: x, place_index_y: y };
 
-                                    let current_color = Self::get_current_color(game, &ai_acc);
-                                    Self::place_card_on_board(game, &mv, current_color.clone());
-                                    Self::apply_capture_logic(game, &mv, current_color.clone());
+                                    let player_ix = Self::get_current_player_index(game, &ai_acc);
+                                    Self::place_card_on_board(game, &mv, player_ix);
+                                    Self::apply_capture_logic(game, &mv, player_ix);
 
                                     slot.used = true;
                                     HandsOfGame::<T>::insert(game_id, &ai_acc, ai_hand);
@@ -791,26 +795,22 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    fn get_current_color(
+    fn get_current_player_index(
         game: &Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
         who: &AccountIdOf<T>,
-    ) -> Color {
-        if who == &game.players[0] {
-            game.player_colors.0.clone()
-        } else {
-            game.player_colors.1.clone()
-        }
+    ) -> u8 {
+        if who == &game.players[0] { 0 } else { 1 }
     }
 
     fn place_card_on_board(
         game: &mut Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
         player_move: &Move,
-        current_color: Color,
+        player_ix: u8,
     ) {
         let placed_card = player_move
             .place_card
             .clone()
-            .with_color(current_color.clone());
+            .with_possession(match player_ix { 0 => Player::PlayerOne, _ => Player::PlayerTwo });
         game.board[player_move.place_index_x as usize][player_move.place_index_y as usize] =
             Some(placed_card);
     }
@@ -818,46 +818,49 @@ impl<T: Config> Pallet<T> {
     fn apply_capture_logic(
         game: &mut Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
         player_move: &Move,
-        current_color: Color,
+        player_ix: u8,
     ) {
-        for &(dx, dy, opposing_rank) in &[
-            (0, -1, player_move.place_card.top),   // Top
-            (1, 0, player_move.place_card.right),  // Right
-            (0, 1, player_move.place_card.bottom), // Bottom
-            (-1, 0, player_move.place_card.left),  // Left
+        for &(dx, dy, my_rank) in &[
+            (0, -1, player_move.place_card.top),    // Top
+            (1,  0, player_move.place_card.right),  // Right
+            (0,  1, player_move.place_card.bottom), // Bottom
+            (-1, 0, player_move.place_card.left),   // Left
         ] {
             let nx = player_move.place_index_x as isize + dx;
             let ny = player_move.place_index_y as isize + dy;
-            if nx >= 0 && nx < 4 && ny >= 0 && ny < 4 {
-                if let Some(mut opposing_card) = game.board[nx as usize][ny as usize].clone() {
-                    let rank = match (dx, dy) {
-                        (0, -1) => opposing_card.bottom,
-                        (1, 0) => opposing_card.left,
-                        (0, 1) => opposing_card.top,
-                        (-1, 0) => opposing_card.right,
-                        _ => 0,
-                    };
-                    if opposing_rank > rank {
-                        log::debug!("Captured card at ({}, {})", nx, ny);
+            if nx < 0 || nx >= 4 || ny < 0 || ny >= 4 { continue; }
 
-                        // Update scores
-                        if let Some(color) = opposing_card.color {
-                            if color == game.player_colors.0 {
-                                game.scores.0 = game.scores.0.saturating_sub(1);
-                            } else if color == game.player_colors.1 {
-                                game.scores.1 = game.scores.1.saturating_sub(1);
-                            }
-                        }
-                        if current_color == game.player_colors.0 {
-                            game.scores.0 = game.scores.0.saturating_add(1);
-                        } else {
-                            game.scores.1 = game.scores.1.saturating_add(1);
-                        }
+            let xi = nx as usize;
+            let yi = ny as usize;
 
-                        // Change ownership of the card
-                        opposing_card.color = Some(current_color.clone());
-                        game.board[nx as usize][ny as usize] = Some(opposing_card);
+            if let Some(mut opposing_card) = game.board[xi][yi].clone() {
+                let opp_rank = match (dx, dy) {
+                    (0, -1) => opposing_card.bottom,
+                    (1,  0) => opposing_card.left,
+                    (0,  1) => opposing_card.top,
+                    (-1, 0) => opposing_card.right,
+                    _ => 0,
+                };
+                if my_rank > opp_rank {
+                    // decrement previous owner’s score if any
+                    if let Some(prev) = opposing_card.possession {
+                        match prev {
+                            Player::PlayerOne => { game.scores.0 = game.scores.0.saturating_sub(1); }
+                            Player::PlayerTwo => { game.scores.1 = game.scores.1.saturating_sub(1); }
+                        }
                     }
+                    // assign new possession and increment their score
+                    match player_ix {
+                        0 => {
+                            game.scores.0 = game.scores.0.saturating_add(1);
+                            opposing_card.possession = Some(Player::PlayerOne);
+                        }
+                        _ => {
+                            game.scores.1 = game.scores.1.saturating_add(1);
+                            opposing_card.possession = Some(Player::PlayerTwo);
+                        }
+                    }
+                    game.board[xi][yi] = Some(opposing_card);
                 }
             }
         }

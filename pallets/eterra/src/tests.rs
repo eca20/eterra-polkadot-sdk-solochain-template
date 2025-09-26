@@ -1,7 +1,7 @@
 use crate::pallet;
 use crate::mock::RuntimeEvent;
 use crate::types::game::GameProperties; // Import the GameProperties trait
-use crate::Color;
+use crate::types::card::Possession as Player;
 use crate::GameId;
 use crate::GameStorage;
 use crate::Move;
@@ -16,6 +16,7 @@ use sp_core::H256; // Fix: Import H256
 use sp_runtime::traits::{BlakeTwo256, Hash};
 use std::sync::Once;
 use frame_system::RawOrigin;
+use crate::types::card::Possession;
 
 use pallet_eterra_simple_tcg as cards;
 use cards::pallet as card_pallet;
@@ -181,7 +182,7 @@ fn play_works() {
     new_test_ext().execute_with(|| {
         let (game_id, creator, opponent) = setup_new_game();
 
-        let card = Card::new(5, 3, 2, 4).with_color(Color::Blue);
+        let card = Card::new(5, 3, 2, 4).with_possession(Player::PlayerOne);
 
         // Creator's move
         let creator_move = Move {
@@ -201,7 +202,7 @@ fn play_works() {
             Some(card.clone())
         );
 
-        let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red);
+        let opponent_card = Card::new(2, 4, 5, 3).with_possession(Player::PlayerTwo);
 
         // Opponent's move
         let opponent_move = Move {
@@ -230,7 +231,7 @@ fn card_capture_multiple_directions() {
     new_test_ext().execute_with(|| {
         let (game_id, creator, opponent) = setup_new_game();
 
-        let creator_card = Card::new(3, 5, 2, 1).with_color(Color::Blue);
+        let creator_card = Card::new(3, 5, 2, 1).with_possession(Player::PlayerOne);
 
         // Creator's first move
         let creator_move = Move {
@@ -244,7 +245,7 @@ fn card_capture_multiple_directions() {
             creator_move.clone(),
         ));
 
-        let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red);
+        let opponent_card = Card::new(2, 4, 5, 3).with_possession(Player::PlayerTwo);
 
         // Opponent's move
         let opponent_move = Move {
@@ -258,7 +259,7 @@ fn card_capture_multiple_directions() {
             opponent_move.clone(),
         ));
 
-        let capturing_card = Card::new(6, 6, 3, 3).with_color(Color::Blue);
+        let capturing_card = Card::new(6, 6, 3, 3).with_possession(Player::PlayerOne);
 
         // Creator's capturing move
         let capturing_move = Move {
@@ -275,12 +276,12 @@ fn card_capture_multiple_directions() {
         // Validate board state
         let game = Eterra::game_board(game_id).unwrap(); // Fetch the updated game
         assert_eq!(
-            game.board[0][1].as_ref().unwrap().get_color(),
-            Some(&Color::Blue)
+            game.board[0][1].as_ref().unwrap().get_possession(),
+            Some(&Player::PlayerOne)
         );
         assert_eq!(
-            game.board[0][2].as_ref().unwrap().get_color(),
-            Some(&Color::Blue)
+            game.board[0][2].as_ref().unwrap().get_possession(),
+            Some(&Player::PlayerOne)
         ); // Captured card
     });
 }
@@ -525,22 +526,22 @@ fn capture_cards_in_all_directions() {
             Move {
                 place_index_x: 0,
                 place_index_y: 1,
-                place_card: Card::new(2, 4, 5, 3).with_color(Color::Red),
+                place_card: Card::new(2, 4, 5, 3).with_possession(Player::PlayerTwo),
             }, // Top
             Move {
                 place_index_x: 1,
                 place_index_y: 0,
-                place_card: Card::new(3, 5, 2, 4).with_color(Color::Red),
+                place_card: Card::new(3, 5, 2, 4).with_possession(Player::PlayerTwo),
             }, // Left
             Move {
                 place_index_x: 1,
                 place_index_y: 2,
-                place_card: Card::new(3, 5, 2, 4).with_color(Color::Red),
+                place_card: Card::new(3, 5, 2, 4).with_possession(Player::PlayerTwo),
             }, // Right
             Move {
                 place_index_x: 2,
                 place_index_y: 1,
-                place_card: Card::new(2, 4, 5, 3).with_color(Color::Red),
+                place_card: Card::new(2, 4, 5, 3).with_possession(Player::PlayerTwo),
             }, // Bottom
         ];
 
@@ -566,7 +567,7 @@ fn capture_cards_in_all_directions() {
         }
 
         // Place capturing card in the center
-        let capturing_card = Card::new(6, 6, 6, 6).with_color(Color::Blue);
+        let capturing_card = Card::new(6, 6, 6, 6).with_possession(Player::PlayerOne);
         let capturing_move = Move {
             place_index_x: 1,
             place_index_y: 1,
@@ -586,24 +587,24 @@ fn capture_cards_in_all_directions() {
         // Validate board state
         let updated_game = Eterra::game_board(game_id).unwrap();
         assert_eq!(
-            updated_game.board[1][1].as_ref().unwrap().get_color(),
-            Some(&Color::Blue)
+            updated_game.board[1][1].as_ref().unwrap().get_possession(),
+            Some(&Player::PlayerOne)
         );
         assert_eq!(
-            updated_game.board[0][1].as_ref().unwrap().get_color(),
-            Some(&Color::Blue)
+            updated_game.board[0][1].as_ref().unwrap().get_possession(),
+            Some(&Player::PlayerOne)
         );
         assert_eq!(
-            updated_game.board[1][0].as_ref().unwrap().get_color(),
-            Some(&Color::Blue)
+            updated_game.board[1][0].as_ref().unwrap().get_possession(),
+            Some(&Player::PlayerOne)
         );
         assert_eq!(
-            updated_game.board[1][2].as_ref().unwrap().get_color(),
-            Some(&Color::Blue)
+            updated_game.board[1][2].as_ref().unwrap().get_possession(),
+            Some(&Player::PlayerOne)
         );
         assert_eq!(
-            updated_game.board[2][1].as_ref().unwrap().get_color(),
-            Some(&Color::Blue)
+            updated_game.board[2][1].as_ref().unwrap().get_possession(),
+            Some(&Player::PlayerOne)
         );
     });
 }
@@ -1090,7 +1091,7 @@ fn play_emits_new_turn_event() {
         let (game_id, creator, opponent) = setup_new_game();
 
         // 2. Creator plays first
-        let creator_card = Card::new(5, 3, 2, 4).with_color(Color::Blue);
+        let creator_card = Card::new(5, 3, 2, 4).with_possession(Player::PlayerOne);
         let creator_move = Move {
             place_index_x: 1,
             place_index_y: 1,
@@ -1132,7 +1133,7 @@ fn play_emits_new_turn_event() {
         System::reset_events();
 
         // 5. Opponent plays next
-        let opponent_card = Card::new(2, 4, 5, 3).with_color(Color::Red);
+        let opponent_card = Card::new(2, 4, 5, 3).with_possession(Player::PlayerTwo);
         let opponent_move = Move {
             place_index_x: 1,
             place_index_y: 2,
@@ -1572,7 +1573,7 @@ fn transfer_after_submit_does_not_block_play() {
 mod ai_integration_tests {
     use super::*;
     use crate::mock::*;
-    use crate::{Color, Move, GameStorage};
+    use crate::{Move, GameStorage};
     use frame_support::{assert_ok, assert_noop};
     use sp_core::H256;
     use eterra_card_ai_adapter::eterra_adapter as ai;
@@ -1581,6 +1582,7 @@ mod ai_integration_tests {
     use crate::types::game::GameProperties;
     use frame_system::RawOrigin;
     use crate::HandsOfGame;
+    use crate::types::card::Possession as Player;
 
     // Bring in the mint_cards_for helper
     use super::mint_cards_for;
@@ -1633,9 +1635,10 @@ mod ai_integration_tests {
                 0,
                 0
             ));
-            // After the move: turn should advance away from human, and board updated
+            // After the move: after AI auto-move, turn returns to human and board updated
             let updated = GameStorage::<Test>::get(&game_id).unwrap();
-            assert_ne!(updated.players[updated.player_turn as usize], human, "Turn should advance away from human");
+            assert_eq!(updated.players[updated.player_turn as usize], human, "After AI auto-move, turn returns to human");
+            assert_eq!(updated.round, 1, "Round should advance after human+AI moves");
             // Board at (0,0) should be Some
             assert!(updated.board[0][0].is_some());
         });
@@ -1660,16 +1663,16 @@ mod ai_integration_tests {
             for x in 0..4usize {
                 for y in 0..4usize {
                     if let Some(c) = &game.board[x][y] {
-                        let color = c.get_color().map(|col| match col {
-                            Color::Blue => ai::Color::Blue,
-                            Color::Red => ai::Color::Red,
+                        let possession = c.get_possession().cloned().map(|p| match p {
+                            Player::PlayerOne => ai::Possession::PlayerOne,
+                            Player::PlayerTwo => ai::Possession::PlayerTwo,
                         });
                         board[x][y] = Some(ai::Card {
                             top: c.top,
                             right: c.right,
                             bottom: c.bottom,
                             left: c.left,
-                            color,
+                            possession,
                         });
                     }
                 }
@@ -1752,114 +1755,51 @@ fn multiple_pve_games_have_independent_ai_state() {
             pallet::GameMode::PvE,
         ));
 
+        // AI hands should start with all entries unused
+        let ai_hand_a_initial = HandsOfGame::<Test>::get(&game_id_a, &ai_account).expect("AI hand A exists");
+        let ai_hand_b_initial = HandsOfGame::<Test>::get(&game_id_b, &ai_account).expect("AI hand B exists");
+        assert_eq!(ai_hand_a_initial.iter().filter(|e| e.used).count(), 0, "AI hand A should start unused");
+        assert_eq!(ai_hand_b_initial.iter().filter(|e| e.used).count(), 0, "AI hand B should start unused");
+
         // --- Submit human hands (AI hand was auto-generated at game creation) ---
         let ids1 = mint_cards_for(human1, 5);
         let ids2 = mint_cards_for(human2, 5);
         assert_ok!(Eterra::submit_hand(RawOrigin::Signed(human1).into(), game_id_a, ids1));
         assert_ok!(Eterra::submit_hand(RawOrigin::Signed(human2).into(), game_id_b, ids2));
 
-        // --- Human plays one move in each game to pass the turn to AI ---
+        // --- Human1 plays one move in Game A ---
         assert_ok!(Eterra::play_from_hand(
             RawOrigin::Signed(human1).into(),
             game_id_a, 0, 0, 0,
         ));
+        // After human1 plays, AI in Game A should auto-move once.
+        let g_a_after_h1 = GameStorage::<Test>::get(&game_id_a).unwrap();
+        assert_eq!(g_a_after_h1.players[g_a_after_h1.player_turn as usize], human1, "Turn should be back to human1 after AI auto-move in Game A");
+        let ai_hand_a_after_h1 = HandsOfGame::<Test>::get(&game_id_a, &ai_account).unwrap();
+        let used_a_after_h1 = ai_hand_a_after_h1.iter().filter(|e| e.used).count();
+        assert_eq!(used_a_after_h1, 1, "Game A AI should have used exactly one card after human1's move");
+
+        // Game B AI should still have used none at this point
+        let ai_hand_b_still = HandsOfGame::<Test>::get(&game_id_b, &ai_account).unwrap();
+        let used_b_still = ai_hand_b_still.iter().filter(|e| e.used).count();
+        assert_eq!(used_b_still, 0, "Game B AI should not have moved yet");
+
+        // --- Human2 plays one move in Game B ---
         assert_ok!(Eterra::play_from_hand(
             RawOrigin::Signed(human2).into(),
             game_id_b, 0, 0, 0,
         ));
+        // After human2 plays, AI in Game B should auto-move once.
+        let g_b_after_h2 = GameStorage::<Test>::get(&game_id_b).unwrap();
+        assert_eq!(g_b_after_h2.players[g_b_after_h2.player_turn as usize], human2, "Turn should be back to human2 after AI auto-move in Game B");
+        let ai_hand_b_after_h2 = HandsOfGame::<Test>::get(&game_id_b, &ai_account).unwrap();
+        let used_b_after_h2 = ai_hand_b_after_h2.iter().filter(|e| e.used).count();
+        assert_eq!(used_b_after_h2, 1, "Game B AI should have used exactly one card after human2's move");
 
-        // Ensure it's AI's turn in both games now.
-        let g_a = GameStorage::<Test>::get(&game_id_a).unwrap();
-        let g_b = GameStorage::<Test>::get(&game_id_b).unwrap();
-        assert_eq!(g_a.players[g_a.player_turn as usize], ai_account);
-        assert_eq!(g_b.players[g_b.player_turn as usize], ai_account);
-
-        // Helper to map on-chain game to adapter state
-        let map_state = |game_id: H256| -> ai::State {
-            let g = GameStorage::<Test>::get(&game_id).unwrap();
-            // Map board
-            let mut board: [[Option<ai::Card>; 4]; 4] =
-                core::array::from_fn(|_| core::array::from_fn(|_| None));
-            for x in 0..4usize {
-                for y in 0..4usize {
-                    if let Some(c) = &g.board[x][y] {
-                        let color = c.get_color().map(|col| match col {
-                            Color::Blue => ai::Color::Blue,
-                            Color::Red => ai::Color::Red,
-                        });
-                        board[x][y] = Some(ai::Card {
-                            top: c.top, right: c.right, bottom: c.bottom, left: c.left, color,
-                        });
-                    }
-                }
-            }
-            // Map hands
-            let h0_bv = HandsOfGame::<Test>::get(&game_id, &g.players[0]).expect("p0 hand");
-            let h1_bv = HandsOfGame::<Test>::get(&game_id, &g.players[1]).expect("p1 hand");
-            let to_adapter = |bv: &BoundedVec<crate::pallet::HandEntry, crate::pallet::HandLimit>| -> ai::Hand {
-                let entries: [ai::HandEntry; 5] = core::array::from_fn(|i| {
-                    let he = &bv[i];
-                    ai::HandEntry { north: he.north, east: he.east, south: he.south, west: he.west, used: he.used }
-                });
-                ai::Hand { entries }
-            };
-            let hands = [to_adapter(&h0_bv), to_adapter(&h1_bv)];
-            ai::State {
-                board,
-                scores: g.scores,
-                player_turn: g.player_turn,
-                round: g.round,
-                max_rounds: g.max_rounds,
-                hands,
-            }
-        };
-
-        // --- Ask the MC AI for a suggestion in Game A and play it as the AI account ---
-        let diff = <Test as crate::Config>::AiDifficulty::get();
-        let state_a = map_state(game_id_a);
-        let act_a = mc_ai::Pallet::<Test>::suggest::<ai::Adapter>(&state_a, diff)
-            .expect("AI suggests in game A");
-        // Before we apply in Game A, assert that the *same hand index* is NOT used in Game B.
-        // (Proves no cross-game mutation.)
-        let idx_a = act_a.hand_index as usize;
-        let ai_hand_b_before = HandsOfGame::<Test>::get(&game_id_b, &ai_account).expect("AI hand B");
-        assert!(!ai_hand_b_before[idx_a].used, "Game B AI hand index unexpectedly used");
-
-        // Apply AI move in A
-        assert_ok!(Eterra::play_from_hand(
-            RawOrigin::Signed(ai_account).into(),
-            game_id_a,
-            act_a.hand_index,
-            act_a.x,
-            act_a.y,
-        ));
-        // Verify Game A AI hand marked used at idx_a; Game B still not used at idx_a.
-        let ai_hand_a_after = HandsOfGame::<Test>::get(&game_id_a, &ai_account).expect("AI hand A");
-        let ai_hand_b_after = HandsOfGame::<Test>::get(&game_id_b, &ai_account).expect("AI hand B");
-        assert!(ai_hand_a_after[idx_a].used, "Game A AI hand index not marked used");
-        assert!(!ai_hand_b_after[idx_a].used, "Game B AI hand index was affected by Game A");
-
-        // --- Now do the same in Game B (independently) ---
-        let state_b = map_state(game_id_b);
-        let act_b = mc_ai::Pallet::<Test>::suggest::<ai::Adapter>(&state_b, diff)
-            .expect("AI suggests in game B");
-        let idx_b = act_b.hand_index as usize;
-
-        assert_ok!(Eterra::play_from_hand(
-            RawOrigin::Signed(ai_account).into(),
-            game_id_b,
-            act_b.hand_index,
-            act_b.x,
-            act_b.y,
-        ));
-
-        // Count used entries per game; each should have exactly 1 used by the AI now.
+        // Game A should still show exactly one AI-used card (independent state)
         let ai_hand_a_final = HandsOfGame::<Test>::get(&game_id_a, &ai_account).unwrap();
-        let ai_hand_b_final = HandsOfGame::<Test>::get(&game_id_b, &ai_account).unwrap();
-        let used_a = ai_hand_a_final.iter().filter(|e| e.used).count();
-        let used_b = ai_hand_b_final.iter().filter(|e| e.used).count();
-        assert_eq!(used_a, 1, "Game A should have exactly one AI card used");
-        assert_eq!(used_b, 1, "Game B should have exactly one AI card used");
+        let used_a_final = ai_hand_a_final.iter().filter(|e| e.used).count();
+        assert_eq!(used_a_final, 1, "Game A AI used count should remain 1 and be independent of Game B");
     });
 }
 

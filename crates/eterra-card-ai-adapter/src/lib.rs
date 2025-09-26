@@ -6,21 +6,21 @@ pub mod eterra_adapter {
 
     // Local copies of game types so this adapter has no dependency on pallet-eterra
     #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug)]
-    pub enum Color { Blue, Red }
+    pub enum Possession { PlayerOne, PlayerTwo }
 
-    #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug)]
+    #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug, Default)]
     pub struct Card {
         pub top: u8,
         pub right: u8,
         pub bottom: u8,
         pub left: u8,
-        pub color: Option<Color>,
+        pub possession: Option<Possession>,
     }
 
     pub type Board = [[Option<Card>; 4]; 4];
 
     /// One hand entry (mirrors data needed to place a card)
-    #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug)]
+    #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug, Default)]
     pub struct HandEntry {
         pub north: u8,
         pub east: u8,
@@ -31,7 +31,7 @@ pub mod eterra_adapter {
 
     /// Fixed-size hand (5 entries). If you make HandSize configurable later,
     /// you can rework this to a BoundedVec, but fixed-size is fastest for AI.
-    #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug)]
+    #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug, Default)]
     pub struct Hand {
         pub entries: [HandEntry; 5],
     }
@@ -47,8 +47,21 @@ pub mod eterra_adapter {
         pub hands: [Hand; 2],
     }
 
+    impl Default for State {
+        fn default() -> Self {
+            Self {
+                board: Default::default(),
+                scores: (0, 0),
+                player_turn: 0,
+                round: 0,
+                max_rounds: 0,
+                hands: [Hand::default(), Hand::default()],
+            }
+        }
+    }
+
     /// Play a card from hand at (x,y)
-    #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug)]
+    #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug, Default)]
     pub struct Action {
         pub hand_index: u8, // 0..4
         pub x: u8,          // 0..3
@@ -57,6 +70,10 @@ pub mod eterra_adapter {
 
     /// Adapter gluing your card game rules to the generic Monte-Carlo AI.
     pub struct Adapter;
+
+    impl Default for Adapter {
+        fn default() -> Self { Adapter }
+    }
 
     impl Adapter {
         /// Pure helper: list actions without relying on trait resolution.
@@ -101,11 +118,11 @@ pub mod eterra_adapter {
                 right: he.east,
                 bottom: he.south,
                 left: he.west,
-                color: None,
+                possession: None,
             };
 
-            let placing_color = if g.player_turn == 0 { Color::Blue } else { Color::Red };
-            placed.color = Some(placing_color.clone());
+            let placing_player = if g.player_turn == 0 { Possession::PlayerOne } else { Possession::PlayerTwo };
+            placed.possession = Some(placing_player.clone());
 
             // Place on board
             g.board[a.x as usize][a.y as usize] = Some(placed.clone());
@@ -131,19 +148,19 @@ pub mod eterra_adapter {
                             _ => 0,
                         };
                         if opposing_rank > rank {
-                            if let Some(prev) = opp.color.clone() {
-                                if prev == Color::Blue {
+                            if let Some(prev) = opp.possession.clone() {
+                                if prev == Possession::PlayerOne {
                                     g.scores.0 = g.scores.0.saturating_sub(1);
-                                } else if prev == Color::Red {
+                                } else if prev == Possession::PlayerTwo {
                                     g.scores.1 = g.scores.1.saturating_sub(1);
                                 }
                             }
-                            if placing_color == Color::Blue {
+                            if placing_player == Possession::PlayerOne {
                                 g.scores.0 = g.scores.0.saturating_add(1);
                             } else {
                                 g.scores.1 = g.scores.1.saturating_add(1);
                             }
-                            opp.color = Some(placing_color.clone());
+                            opp.possession = Some(placing_player.clone());
                             g.board[nx as usize][ny as usize] = Some(opp);
                         }
                     }
