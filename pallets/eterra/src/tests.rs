@@ -15,9 +15,14 @@ use log::{Level, Metadata, Record};
 use sp_core::H256; // Fix: Import H256
 use sp_runtime::traits::{BlakeTwo256, Hash};
 use std::sync::Once;
+use frame_system::RawOrigin;
 
 use pallet_eterra_simple_tcg as cards;
 use cards::pallet as card_pallet;
+
+use eterra_card_ai_adapter::eterra_adapter as ai;
+use pallet_eterra_monte_carlo_ai as mc_ai;
+use crate::HandsOfGame;
 
 static INIT: Once = Once::new();
 
@@ -1770,4 +1775,144 @@ mod ai_integration_tests {
             assert!(x < 4 && y < 4, "Board is 4x4");
         });
     }
+}
+
+#[test]
+fn multiple_pve_games_have_independent_ai_state() {
+    new_test_ext().execute_with(|| {
+        // --- Create two separate PvE games (different humans, same AI account) ---
+        let human1: u64 = 1;
+        let human2: u64 = 3;
+        let ai_account: <Test as frame_system::Config>::AccountId =
+            <Test as crate::Config>::AiAccount::get();
+
+        // Game A
+        let current_block_a = <frame_system::Pallet<Test>>::block_number();
+        let game_id_a =
+            sp_runtime::traits::BlakeTwo256::hash_of(&(human1, ai_account, current_block_a));
+        assert_ok!(Eterra::create_game(
+            RawOrigin::Signed(human1).into(),
+            vec![human1, ai_account],
+            pallet::GameMode::PvE,
+        ));
+
+        // Game B
+        let current_block_b = <frame_system::Pallet<Test>>::block_number();
+        let game_id_b =
+            sp_runtime::traits::BlakeTwo256::hash_of(&(human2, ai_account, current_block_b));
+        assert_ok!(Eterra::create_game(
+            RawOrigin::Signed(human2).into(),
+            vec![human2, ai_account],
+            pallet::GameMode::PvE,
+        ));
+
+        // --- Submit human hands (AI hand was auto-generated at game creation) ---
+        let ids1 = mint_cards_for(human1, 5);
+        let ids2 = mint_cards_for(human2, 5);
+        assert_ok!(Eterra::submit_hand(RawOrigin::Signed(human1).into(), game_id_a, ids1));
+        assert_ok!(Eterra::submit_hand(RawOrigin::Signed(human2).into(), game_id_b, ids2));
+
+        // --- Human plays one move in each game to pass the turn to AI ---
+        assert_ok!(Eterra::play_from_hand(
+            RawOrigin::Signed(human1).into(),
+            game_id_a, 0, 0, 0,
+        ));
+        assert_ok!(Eterra::play_from_hand(
+            RawOrigin::Signed(human2).into(),
+            game_id_b, 0, 0, 0,
+        ));
+
+        // Ensure it's AI's turn in both games now.
+        let g_a = GameStorage::<Test>::get(&game_id_a).unwrap();
+        let g_b = GameStorage::<Test>::get(&game_id_b).unwrap();
+        assert_eq!(g_a.players[g_a.player_turn as usize], ai_account);
+        assert_eq!(g_b.players[g_b.player_turn as usize], ai_account);
+
+        // Helper to map on-chain game to adapter state
+        let map_state = |game_id: H256| -> ai::State {
+            let g = GameStorage::<Test>::get(&game_id).unwrap();
+            // Map board
+            let mut board: [[Option<ai::Card>; 4]; 4] =
+                core::array::from_fn(|_| core::array::from_fn(|_| None));
+            for x in 0..4usize {
+                for y in 0..4usize {
+                    if let Some(c) = &g.board[x][y] {
+                        let color = c.get_color().map(|col| match col {
+                            Color::Blue => ai::Color::Blue,
+                            Color::Red => ai::Color::Red,
+                        });
+                        board[x][y] = Some(ai::Card {
+                            top: c.top, right: c.right, bottom: c.bottom, left: c.left, color,
+                        });
+                    }
+                }
+            }
+            // Map hands
+            let h0_bv = HandsOfGame::<Test>::get(&game_id, &g.players[0]).expect("p0 hand");
+            let h1_bv = HandsOfGame::<Test>::get(&game_id, &g.players[1]).expect("p1 hand");
+            let to_adapter = |bv: &BoundedVec<crate::pallet::HandEntry, crate::pallet::HandLimit>| -> ai::Hand {
+                let entries: [ai::HandEntry; 5] = core::array::from_fn(|i| {
+                    let he = &bv[i];
+                    ai::HandEntry { north: he.north, east: he.east, south: he.south, west: he.west, used: he.used }
+                });
+                ai::Hand { entries }
+            };
+            let hands = [to_adapter(&h0_bv), to_adapter(&h1_bv)];
+            ai::State {
+                board,
+                scores: g.scores,
+                player_turn: g.player_turn,
+                round: g.round,
+                max_rounds: g.max_rounds,
+                hands,
+            }
+        };
+
+        // --- Ask the MC AI for a suggestion in Game A and play it as the AI account ---
+        let diff = <Test as crate::Config>::AiDifficulty::get();
+        let state_a = map_state(game_id_a);
+        let act_a = mc_ai::Pallet::<Test>::suggest::<ai::Adapter>(&state_a, diff)
+            .expect("AI suggests in game A");
+        // Before we apply in Game A, assert that the *same hand index* is NOT used in Game B.
+        // (Proves no cross-game mutation.)
+        let idx_a = act_a.hand_index as usize;
+        let ai_hand_b_before = HandsOfGame::<Test>::get(&game_id_b, &ai_account).expect("AI hand B");
+        assert!(!ai_hand_b_before[idx_a].used, "Game B AI hand index unexpectedly used");
+
+        // Apply AI move in A
+        assert_ok!(Eterra::play_from_hand(
+            RawOrigin::Signed(ai_account).into(),
+            game_id_a,
+            act_a.hand_index,
+            act_a.x,
+            act_a.y,
+        ));
+        // Verify Game A AI hand marked used at idx_a; Game B still not used at idx_a.
+        let ai_hand_a_after = HandsOfGame::<Test>::get(&game_id_a, &ai_account).expect("AI hand A");
+        let ai_hand_b_after = HandsOfGame::<Test>::get(&game_id_b, &ai_account).expect("AI hand B");
+        assert!(ai_hand_a_after[idx_a].used, "Game A AI hand index not marked used");
+        assert!(!ai_hand_b_after[idx_a].used, "Game B AI hand index was affected by Game A");
+
+        // --- Now do the same in Game B (independently) ---
+        let state_b = map_state(game_id_b);
+        let act_b = mc_ai::Pallet::<Test>::suggest::<ai::Adapter>(&state_b, diff)
+            .expect("AI suggests in game B");
+        let idx_b = act_b.hand_index as usize;
+
+        assert_ok!(Eterra::play_from_hand(
+            RawOrigin::Signed(ai_account).into(),
+            game_id_b,
+            act_b.hand_index,
+            act_b.x,
+            act_b.y,
+        ));
+
+        // Count used entries per game; each should have exactly 1 used by the AI now.
+        let ai_hand_a_final = HandsOfGame::<Test>::get(&game_id_a, &ai_account).unwrap();
+        let ai_hand_b_final = HandsOfGame::<Test>::get(&game_id_b, &ai_account).unwrap();
+        let used_a = ai_hand_a_final.iter().filter(|e| e.used).count();
+        let used_b = ai_hand_b_final.iter().filter(|e| e.used).count();
+        assert_eq!(used_a, 1, "Game A should have exactly one AI card used");
+        assert_eq!(used_b, 1, "Game B should have exactly one AI card used");
+    });
 }
