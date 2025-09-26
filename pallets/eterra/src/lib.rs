@@ -169,24 +169,49 @@ pub mod pallet {
     impl<T: Config> Pallet<T> {
         #[pallet::call_index(0)]
         #[pallet::weight(10_000)]
-        pub fn create_game(origin: OriginFor<T>, mut players: Vec<AccountIdOf<T>>, game_mode: GameMode) -> DispatchResult {
+        pub fn create_game(
+            origin: OriginFor<T>,
+            mut players: Vec<AccountIdOf<T>>,
+            game_mode: GameMode,
+        ) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
-
-            // If you want to play, you need to specify yourself in the Vec as well
-            ensure!(players.contains(&who), Error::<T>::CreatorMustBeInGame);
 
             // Normalize players vector depending on mode
             match game_mode {
-                GameMode::PvP => { /* keep provided players (must be exactly 2 incl. creator) */ }
+                GameMode::PvP => {
+                    // For PvP, the caller must have included themselves and exactly one opponent.
+                    ensure!(players.contains(&who), Error::<T>::CreatorMustBeInGame);
+                    ensure!(
+                        players.len()
+                            == <u32 as sp_runtime::traits::SaturatedConversion>::saturated_into::<usize>(
+                                T::NumPlayers::get()
+                            ),
+                        Error::<T>::InvalidNumberOfPlayers
+                    );
+                    // Ensure distinct players; also normalize order to [creator, opponent]
+                    // so downstream logic is predictable.
+                    ensure!(players[0] != players[1], Error::<T>::InvalidMove);
+                    if players[0] != who {
+                        // Put creator in slot 0
+                        if players[1] == who {
+                            players.swap(0, 1);
+                        } else {
+                            // Shouldn’t happen because of the contains() check, but be safe.
+                            return Err(Error::<T>::CreatorMustBeInGame.into());
+                        }
+                    }
+                }
                 GameMode::PvE => {
-                    // Force AI as the opponent; ensure vector is [creator, AI]
+                    // For PvE, ignore whatever was passed and force [creator, AI].
                     let ai_acc = T::AiAccount::get();
+                    // Also guard against creator == AI account (shouldn’t happen for sane config).
+                    ensure!(who != ai_acc, Error::<T>::InvalidMove);
                     players = sp_std::vec![who.clone(), ai_acc];
                 }
             }
 
+            // From here on, `players` is normalized for both modes.
             let number_of_players = players.len();
-
             ensure!(
                 number_of_players
                     == <u32 as sp_runtime::traits::SaturatedConversion>::saturated_into::<usize>(
@@ -195,28 +220,23 @@ pub mod pallet {
                 Error::<T>::InvalidNumberOfPlayers
             );
 
-            let creator = who;
+            let creator = players[0].clone();
             let opponent = players[1].clone();
-            // Prevent creating a game with oneself
-            ensure!(creator != opponent, Error::<T>::InvalidMove);
-            let current_block_number = <frame_system::Pallet<T>>::block_number();
 
-            let game_id =
-                T::Hashing::hash_of(&(creator.clone(), opponent.clone(), current_block_number));
+            // Redundant after normalization, but keep as a safety net.
+            ensure!(creator != opponent, Error::<T>::InvalidMove);
+
+            let current_block_number = <frame_system::Pallet<T>>::block_number();
+            let game_id = T::Hashing::hash_of(&(creator.clone(), opponent.clone(), current_block_number));
+
+            // Ensure the game_id isn’t already in use (collision check)
             ensure!(
                 !GameStorage::<T>::contains_key(&game_id),
                 Error::<T>::GameNotFound
             );
 
             let initial_board: Board = Default::default();
-            // Randomly determine the first turn
-            // let first_turn = if sp_io::hashing::blake2_128(&creator.encode())[0] % 2 == 0 {
-            //     creator.clone()
-            // } else {
-            //     opponent.clone()
-            // };
-
-            let initial_scores = (5, 5); // Each player starts with 5 points for their unplayed cards
+            let initial_scores = (5, 5);
             let player_colors = (Color::Blue, Color::Red);
 
             let mut game: Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> = Game {
@@ -235,10 +255,9 @@ pub mod pallet {
             };
 
             GameStorage::<T>::insert(&game_id, game.clone());
-
             GameModes::<T>::insert(&game_id, game_mode.clone());
 
-            // If PvE, create AI hand immediately so UI can render it
+            // If PvE, create AI hand immediately so UI can render it.
             if matches!(game_mode, GameMode::PvE) {
                 let ai_acc = T::AiAccount::get();
                 if HandsOfGame::<T>::get(&game_id, &ai_acc).is_none() {
@@ -248,20 +267,18 @@ pub mod pallet {
                 }
             }
 
-            // Use set_player_turn instead
+            // Randomize starting player
             game.set_player_turn(
                 if sp_io::hashing::blake2_128(&creator.encode())[0] % 2 == 0 {
-                    0 // Player 0 starts
+                    0
                 } else {
-                    1 // Player 1 starts
+                    1
                 },
             );
 
             Self::deposit_event(Event::GameCreated { game_id });
-
             Ok(())
         }
-
         #[pallet::call_index(1)]
         #[pallet::weight(10_000)]
         pub fn play(origin: OriginFor<T>, game_id: GameId<T>, player_move: Move) -> DispatchResult {
