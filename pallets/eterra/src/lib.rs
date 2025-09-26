@@ -820,11 +820,16 @@ impl<T: Config> Pallet<T> {
         player_move: &Move,
         player_ix: u8,
     ) {
+        // For each of the 4 orthogonal directions, compare the placed card's edge
+        // against the opposite edge of the neighboring card. Capture only if:
+        //  - There is a card
+        //  - It is owned by the opponent
+        //  - Our edge strictly beats their opposing edge (ties do NOT capture)
         for &(dx, dy, my_rank) in &[
-            (0, -1, player_move.place_card.top),    // Top
-            (1,  0, player_move.place_card.right),  // Right
-            (0,  1, player_move.place_card.bottom), // Bottom
-            (-1, 0, player_move.place_card.left),   // Left
+            (0, -1, player_move.place_card.top),    // Top: compare vs neighbor's bottom
+            (1,  0, player_move.place_card.right),  // Right: compare vs neighbor's left
+            (0,  1, player_move.place_card.bottom), // Bottom: compare vs neighbor's top
+            (-1, 0, player_move.place_card.left),   // Left: compare vs neighbor's right
         ] {
             let nx = player_move.place_index_x as isize + dx;
             let ny = player_move.place_index_y as isize + dy;
@@ -833,34 +838,63 @@ impl<T: Config> Pallet<T> {
             let xi = nx as usize;
             let yi = ny as usize;
 
-            if let Some(mut opposing_card) = game.board[xi][yi].clone() {
+            if let Some(mut neighbor) = game.board[xi][yi].clone() {
+                // Only attempt to capture if the neighbor is owned by the opponent
+                let is_opponent_owned = match (neighbor.possession.as_ref(), player_ix) {
+                    (Some(Player::PlayerOne), 1) => true,
+                    (Some(Player::PlayerTwo), 0) => true,
+                    _ => false,
+                };
+                if !is_opponent_owned { continue; }
+
+                // Determine neighbor's opposing edge rank based on direction
                 let opp_rank = match (dx, dy) {
-                    (0, -1) => opposing_card.bottom,
-                    (1,  0) => opposing_card.left,
-                    (0,  1) => opposing_card.top,
-                    (-1, 0) => opposing_card.right,
+                    (0, -1) => neighbor.bottom,
+                    (1,  0) => neighbor.left,
+                    (0,  1) => neighbor.top,
+                    (-1, 0) => neighbor.right,
                     _ => 0,
                 };
+
+                log::debug!(
+                    "[CaptureCheck] at ({},{}) vs neighbor ({},{}): my_edge={}, opp_edge={}",
+                    player_move.place_index_x,
+                    player_move.place_index_y,
+                    xi,
+                    yi,
+                    my_rank,
+                    opp_rank
+                );
+
+                // Strictly greater captures; ties do not capture
                 if my_rank > opp_rank {
-                    // decrement previous owner’s score if any
-                    if let Some(prev) = opposing_card.possession {
-                        match prev {
-                            Player::PlayerOne => { game.scores.0 = game.scores.0.saturating_sub(1); }
-                            Player::PlayerTwo => { game.scores.1 = game.scores.1.saturating_sub(1); }
-                        }
+                    // Adjust scores: remove point from previous owner (opponent), give to current
+                    match neighbor.possession.as_ref() {
+                        Some(Player::PlayerOne) => { game.scores.0 = game.scores.0.saturating_sub(1); },
+                        Some(Player::PlayerTwo) => { game.scores.1 = game.scores.1.saturating_sub(1); },
+                        _ => {}
                     }
-                    // assign new possession and increment their score
+
                     match player_ix {
                         0 => {
                             game.scores.0 = game.scores.0.saturating_add(1);
-                            opposing_card.possession = Some(Player::PlayerOne);
+                            neighbor.possession = Some(Player::PlayerOne);
                         }
                         _ => {
                             game.scores.1 = game.scores.1.saturating_add(1);
-                            opposing_card.possession = Some(Player::PlayerTwo);
+                            neighbor.possession = Some(Player::PlayerTwo);
                         }
                     }
-                    game.board[xi][yi] = Some(opposing_card);
+
+                    log::debug!(
+                        "[Captured] neighbor ({},{}) now owned by player {}",
+                        xi,
+                        yi,
+                        player_ix
+                    );
+
+                    // Persist flipped neighbor back to the board
+                    game.board[xi][yi] = Some(neighbor);
                 }
             }
         }
