@@ -60,6 +60,11 @@ persist state:
 ./target/release/solochain-template-node --dev
 ```
 
+The following command starts a single-node chain that persists state:
+```sh
+./target/release/solochain-template-node --chain local
+```
+
 To purge the development chain's state, run the following command:
 
 ```sh

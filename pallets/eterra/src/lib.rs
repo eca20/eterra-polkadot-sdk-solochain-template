@@ -555,12 +555,6 @@ pub mod pallet {
             Ok(())
         }
     }
-    #[pallet::hooks]
-    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-        fn on_finalize(_n: BlockNumberFor<T>) {
-            Self::force_idle_turns();
-        }
-    }
 }
 
 // Helper methods
@@ -709,39 +703,6 @@ impl<T: Config> Pallet<T> {
             let _ = out.try_push(e);
         }
         Some(out)
-    }
-    // Function to force idle turns to be played, preventing zombie games
-    // from a case where both users are not taking turns
-    pub fn force_idle_turns()
-    where
-        BlockNumberFor<T>: From<u32>,
-    {
-        let current_block: BlockNumberFor<T> = <frame_system::Pallet<T>>::block_number();
-
-        // Convert BlocksToPlayLimit safely using saturated_into
-        let blocks_to_wait =
-            BlockNumberFor::<T>::from(T::BlocksToPlayLimit::get().saturated_into::<u32>())
-                * 2u32.into();
-
-        for (game_id, mut game) in GameStorage::<T>::iter() {
-            if game.last_played_block + blocks_to_wait < current_block {
-                let current_player = game.players[game.player_turn as usize].clone();
-                game.next_turn();
-                game.last_played_block = current_block;
-
-                GameStorage::<T>::insert(&game_id, game.clone());
-
-                let next_player = game.players[game.player_turn as usize].clone();
-                Self::deposit_event(Event::TurnForceFinished {
-                    game_id,
-                    player: current_player,
-                });
-                Self::deposit_event(Event::NewTurn {
-                    game_id,
-                    next_player,
-                });
-            }
-        }
     }
 
     fn is_game_won(
