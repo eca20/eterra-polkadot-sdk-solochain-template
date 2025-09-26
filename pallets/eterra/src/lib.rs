@@ -32,6 +32,7 @@ pub mod pallet {
     use frame_support::BoundedVec;
     use frame_system::pallet_prelude::*;
     use sp_runtime::traits::Hash;
+    use sp_runtime::Saturating;
     use sp_std::vec::Vec;
 
     pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
@@ -272,7 +273,6 @@ pub mod pallet {
                 player_colors,
             };
 
-            GameStorage::<T>::insert(&game_id, game.clone());
             GameModes::<T>::insert(&game_id, game_mode.clone());
             // Mark participants as busy with this game
             match game_mode {
@@ -296,15 +296,18 @@ pub mod pallet {
                 }
             }
 
-            // Randomize starting player
-            game.set_player_turn(
-                if sp_io::hashing::blake2_128(&creator.encode())[0] % 2 == 0 {
-                    0
-                } else {
-                    1
-                },
-            );
+            // Set starting player: PvE -> creator always starts; PvP -> keep randomized start
+            if matches!(game_mode, GameMode::PvE) {
+                // players[0] is guaranteed to be the creator after normalization above
+                game.set_player_turn(0);
+            } else {
+                // PvP: randomize starting player based on creator hash
+                game.set_player_turn(
+                    if sp_io::hashing::blake2_128(&creator.encode())[0] % 2 == 0 { 0 } else { 1 }
+                );
+            }
 
+            GameStorage::<T>::insert(&game_id, game.clone());
             Self::deposit_event(Event::GameCreated { game_id });
             Ok(())
         }
@@ -381,6 +384,13 @@ pub mod pallet {
                 x: player_move.place_index_x,
                 y: player_move.place_index_y,
             });
+
+            // If this is a PvE game and it's now the AI's turn, let the AI act immediately.
+            if matches!(GameModes::<T>::get(&game_id), Some(GameMode::PvE)) {
+                if let Some(mut g) = GameStorage::<T>::get(&game_id) {
+                    Self::maybe_ai_take_turn(&game_id, &mut g);
+                }
+            }
 
             Ok(())
         }
@@ -493,6 +503,14 @@ pub mod pallet {
             }
 
             Self::deposit_event(Event::MovePlayed { game_id, player: who, x, y });
+
+            // If this is a PvE game and it's now the AI's turn, let the AI act immediately.
+            if matches!(GameModes::<T>::get(&game_id), Some(GameMode::PvE)) {
+                if let Some(mut g) = GameStorage::<T>::get(&game_id) {
+                    Self::maybe_ai_take_turn(&game_id, &mut g);
+                }
+            }
+
             Ok(())
         }
 
@@ -514,12 +532,11 @@ pub mod pallet {
                 Error::<T>::CurrentPlayerCannotForceFinishTurn
             );
 
-            // Check if the BlocksToPlayLimit has passed
+            // Check if the BlocksToPlayLimit has passed (use saturating math and inclusive deadline)
             let current_block = <frame_system::Pallet<T>>::block_number();
-            ensure!(
-                game.last_played_block + T::BlocksToPlayLimit::get().into() < current_block,
-                Error::<T>::BlocksToPlayLimitNotPassed
-            );
+            let limit: BlockNumberFor<T> = T::BlocksToPlayLimit::get().into();
+            let deadline = game.last_played_block.saturating_add(limit);
+            ensure!(current_block >= deadline, Error::<T>::BlocksToPlayLimitNotPassed);
 
             // Force finish the current turn
             game.next_turn();
@@ -534,11 +551,12 @@ pub mod pallet {
 
             // ✅ Check if game is won after forcing turn
             if let Some(winner) = Self::is_game_won(&game_id, &game) {
+                // End game clears storage and ActiveGameOf markers; early return is fine.
                 Self::end_game(&game_id, winner);
-                return Ok(()); // Stop execution if game is finished
+                return Ok(());
             }
 
-            // Save the updated game state
+            // Persist updated game state before emitting events
             GameStorage::<T>::insert(&game_id, game.clone());
 
             // Emit events
@@ -547,10 +565,7 @@ pub mod pallet {
                 game_id,
                 player: current_player,
             });
-            Self::deposit_event(Event::NewTurn {
-                game_id,
-                next_player,
-            });
+            Self::deposit_event(Event::NewTurn { game_id, next_player });
 
             Ok(())
         }
