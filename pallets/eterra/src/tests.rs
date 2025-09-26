@@ -80,6 +80,28 @@ fn setup_new_game() -> (H256, u64, u64) {
     (game_id, creator, opponent)
 }
 
+/// Helper to setup a new game with the given creator and opponent.
+fn setup_new_game_with(creator: u64, opponent: u64) -> (H256, u64, u64) {
+    // Get the current block number
+    let current_block_number = <frame_system::Pallet<Test>>::block_number();
+    // Calculate game_id using the hashing function
+    let game_id = BlakeTwo256::hash_of(&(creator, opponent, current_block_number));
+    // Create the game with two players
+    assert_ok!(Eterra::create_game(
+        frame_system::RawOrigin::Signed(creator).into(),
+        vec![creator, opponent],
+        pallet::GameMode::PvP,
+    ));
+    log::debug!(
+        "Game created with ID: {:?}, Creator: {}, Opponent: {}, Block: {}",
+        game_id,
+        creator,
+        opponent,
+        current_block_number,
+    );
+    (game_id, creator, opponent)
+}
+
 /// Utility function that advances the current block number by `n` blocks.
 fn run_to_block(n: u64) {
     while System::block_number() < n {
@@ -225,6 +247,7 @@ fn play_works() {
     });
 }
 
+
 #[test]
 fn card_capture_multiple_directions() {
     init_logger();
@@ -283,6 +306,86 @@ fn card_capture_multiple_directions() {
             game.board[0][2].as_ref().unwrap().get_possession(),
             Some(&Player::PlayerOne)
         ); // Captured card
+    });
+}
+
+#[test]
+fn capture_updates_possession_on_valid_adjacent_flips() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        // Helper that sets up a fresh game and ensures it's opponent's turn,
+        // then places opponent card at (ox,oy) and creator (PlayerOne) at (cx,cy),
+        // asserting that the opponent card gets flipped to PlayerOne.
+        let run_case = |creator: u64, opponent: u64,
+                        ox: u8, oy: u8, cx: u8, cy: u8, opp_bottom: u8, opp_left: u8, opp_top: u8, opp_right: u8,
+                        my_top: u8, my_right: u8, my_bottom: u8, my_left: u8| {
+            let (game_id, creator, opponent) = setup_new_game_with(creator, opponent);
+
+            // Ensure opponent plays first so their card's possession = PlayerTwo on-chain.
+            ensure_my_turn(game_id, opponent, creator);
+
+            // Opponent places a card next to the target cell with specified ranks.
+            let opp_card = Card::new(opp_top, opp_right, opp_bottom, opp_left)
+                .with_possession(Player::PlayerTwo);
+            let opp_mv = Move { place_index_x: ox, place_index_y: oy, place_card: opp_card };
+            assert_ok!(Eterra::play(frame_system::RawOrigin::Signed(opponent).into(), game_id, opp_mv));
+
+            // Now it's creator's turn; place the capturing card at (cx,cy).
+            let my_card = Card::new(my_top, my_right, my_bottom, my_left)
+                .with_possession(Player::PlayerOne);
+            let my_mv = Move { place_index_x: cx, place_index_y: cy, place_card: my_card };
+            assert_ok!(Eterra::play(frame_system::RawOrigin::Signed(creator).into(), game_id, my_mv));
+
+            // Verify the neighbor at (ox,oy) was flipped to PlayerOne (creator).
+            let g = Eterra::game_board(game_id).unwrap();
+            let flipped = g.board[ox as usize][oy as usize].as_ref().unwrap().get_possession();
+            assert_eq!(flipped, Some(&Player::PlayerOne), "Expected capture and flip at ({},{})", ox, oy);
+
+            // And the placed card cell should also belong to PlayerOne.
+            let mine = g.board[cx as usize][cy as usize].as_ref().unwrap().get_possession();
+            assert_eq!(mine, Some(&Player::PlayerOne), "Placed card at ({},{}) should belong to PlayerOne", cx, cy);
+        };
+
+        // Four directional cases, each with unique player ids:
+        // 1) Capture "north" neighbor: my TOP > their BOTTOM
+        //    Opponent at (1,0), creator plays at (1,1)
+        run_case(
+            11, 12,  // creator, opponent
+            1, 0,  // opp x,y
+            1, 1,  // my  x,y
+            /* opp bottom */ 3, /* opp left */ 1, /* opp top */ 1, /* opp right */ 1,
+            /* my top   */ 5, /* my right */ 1, /* my bottom */ 1, /* my left  */ 1
+        );
+
+        // 2) Capture "east" neighbor: my RIGHT > their LEFT
+        //    Opponent at (2,1), creator plays at (1,1)
+        run_case(
+            21, 22,
+            2, 1,
+            1, 1,
+            /* opp bottom */ 1, /* opp left */ 3, /* opp top */ 1, /* opp right */ 1,
+            /* my top   */ 1, /* my right */ 5, /* my bottom */ 1, /* my left  */ 1
+        );
+
+        // 3) Capture "south" neighbor: my BOTTOM > their TOP
+        //    Opponent at (1,2), creator plays at (1,1)
+        run_case(
+            31, 32,
+            1, 2,
+            1, 1,
+            /* opp bottom */ 1, /* opp left */ 1, /* opp top */ 3, /* opp right */ 1,
+            /* my top   */ 1, /* my right */ 1, /* my bottom */ 5, /* my left  */ 1
+        );
+
+        // 4) Capture "west" neighbor: my LEFT > their RIGHT
+        //    Opponent at (0,1), creator plays at (1,1)
+        run_case(
+            41, 42,
+            0, 1,
+            1, 1,
+            /* opp bottom */ 1, /* opp left */ 1, /* opp top */ 1, /* opp right */ 3,
+            /* my top   */ 1, /* my right */ 1, /* my bottom */ 1, /* my left  */ 5
+        );
     });
 }
 
