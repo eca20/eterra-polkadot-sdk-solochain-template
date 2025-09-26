@@ -3,9 +3,10 @@ use pallet_balances;
 use pallet_eterra_simple_tcg;
 use frame_support::{
     parameter_types,
-    traits::{ConstU16, ConstU32, Get, Currency},
+    traits::{ConstU16, ConstU32, ConstU64, ConstU8, Get, Currency},
 };
 use frame_system as system;
+use pallet_eterra_monte_carlo_ai as mc_ai;
 use parity_scale_codec::{Decode, Encode}; // Ensure Encode and Decode are imported
 use scale_info::TypeInfo;
 use sp_core::H256; // Ensure H256 is imported
@@ -24,6 +25,7 @@ frame_support::construct_runtime!(
         Balances: pallet_balances,
         Cards: pallet_eterra_simple_tcg,
         Eterra: pallet_eterra,
+        EterraMonteCarloAi: pallet_eterra_monte_carlo_ai,
     }
 );
 
@@ -129,12 +131,28 @@ parameter_types! {
     pub const HandSizeConst: u32 = 5;
 }
 
+parameter_types! {
+    pub const AiDifficultyConst: u8 = 60;
+    pub const AiRandomnessSeedConst: u64 = 12345;
+}
+
 impl pallet_eterra::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type NumPlayers = MockNumPlayers;
     type MaxRounds = MockMaxRounds;
     type BlocksToPlayLimit = MockBlocksToPlayLimit;
     type HandSize = HandSizeConst;
+    type AiAccount = FaucetAccountId;
+    type AiDifficulty = ConstU8<60>;
+}
+
+impl mc_ai::pallet::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type Adapter = eterra_card_ai_adapter::eterra_adapter::Adapter;
+    type MaxActions = ConstU32<64>;
+    type BaseIterations = ConstU32<100>;
+    type MaxPlayoutDepth = ConstU16<16>;
+    type RandomnessSeed = ConstU64<12345>;
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {

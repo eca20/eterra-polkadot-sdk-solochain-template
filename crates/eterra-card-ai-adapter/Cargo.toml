@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 pallet-eterra-monte-carlo-ai = { path = "../../pallets/eterra-monte-carlo-ai", default-features = false }
-pallet-eterra               = { path = "../../pallets/eterra", default-features = false }
 parity-scale-codec          = { workspace = true, default-features = false, features = ["derive","max-encoded-len"] }
 scale-info                  = { workspace = true, default-features = false, features = ["derive"] }
 sp-std                      = { workspace = true, default-features = false }
@@ -14,7 +13,6 @@ sp-std                      = { workspace = true, default-features = false }
 default = ["std"]
 std = [
   "pallet-eterra-monte-carlo-ai/std",
-  "pallet-eterra/std",
   "parity-scale-codec/std",
   "scale-info/std",
   "sp-std/std",

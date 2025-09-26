@@ -26,6 +26,7 @@ use frame_support::traits::ConstU32;
 use frame_support::traits::ConstU64;
 use frame_support::traits::ConstU8;
 use frame_support::traits::ConstU128;
+use frame_support::traits::ConstU16;
 
 use frame_support::traits::Get;
 // use frame_support::traits::Contains;  // deleted as per instructions
@@ -273,6 +274,19 @@ const ALICE: AccountId32 = AccountId32::new([
 
 parameter_types! {
     pub FaucetAccountParam: AccountId = ALICE.into();
+}
+
+// Added parameter_types for AI bot account
+parameter_types! {
+    pub AiBotAccountParam: AccountId = ALICE.into();
+}
+
+pub struct AiBotDifficulty;
+impl Get<u8> for AiBotDifficulty {
+    fn get() -> u8 { 60 }
+}
+
+parameter_types! {
     // Payout is 1000 whole tokens (adjust UNIT to your decimals)
     pub FaucetPayoutAmount: Balance = 1_000 * UNIT;
 }
@@ -283,6 +297,8 @@ impl pallet_eterra::Config for Runtime {
     type MaxRounds = EterraMaxRounds;
     type BlocksToPlayLimit = EterraBlocksToPlayLimit;
     type HandSize = ConstU32<5>; // <<—— added
+    type AiAccount = AiBotAccountParam;
+    type AiDifficulty = ConstU8<60>;
 }
 
 impl pallet_eterra_tcg::Config for Runtime {
@@ -332,6 +348,16 @@ impl frame_support::traits::Get<Balance> for RewardPerWinAmount {
 impl pallet_eterra_faucet::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Currency = Balances;
+}
+
+impl pallet_eterra_monte_carlo_ai::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type Adapter = eterra_card_ai_adapter::eterra_adapter::Adapter;
+    // Limits & tuning params for Monte Carlo search
+    type MaxActions = ConstU32<64>;        // max legal moves enumerated
+    type BaseIterations = ConstU32<200>;   // baseline simulations per suggest() call
+    type MaxPlayoutDepth = ConstU16<16>;   // cut off long playouts
+    type RandomnessSeed = ConstU64<12345>; // deterministic-ish seed for hashing/entropy
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
@@ -390,4 +416,7 @@ mod runtime {
 
     #[runtime::pallet_index(12)]
     pub type EterraFaucet = pallet_eterra_faucet;
+
+    #[runtime::pallet_index(13)]
+    pub type EterraMonteCarloAi = pallet_eterra_monte_carlo_ai;
 }

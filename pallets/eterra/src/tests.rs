@@ -1,3 +1,4 @@
+use crate::pallet;
 use crate::mock::RuntimeEvent;
 use crate::types::game::GameProperties; // Import the GameProperties trait
 use crate::Color;
@@ -8,6 +9,7 @@ use crate::{mock::*, types::card::Card};
 use frame_support::traits::Get;
 use frame_support::traits::Hooks;
 use frame_support::{assert_noop, assert_ok};
+use frame_support::BoundedVec;
 use frame_system::pallet_prelude::BlockNumberFor;
 use log::{Level, Metadata, Record};
 use sp_core::H256; // Fix: Import H256
@@ -52,19 +54,16 @@ pub fn init_logger() {
 fn setup_new_game() -> (H256, u64, u64) {
     let creator = 1;
     let opponent = 2;
-
     // Get the current block number
     let current_block_number = <frame_system::Pallet<Test>>::block_number();
-
     // Calculate game_id using the hashing function
     let game_id = BlakeTwo256::hash_of(&(creator, opponent, current_block_number));
-
     // Create the game with two players
     assert_ok!(Eterra::create_game(
         frame_system::RawOrigin::Signed(creator).into(),
         vec![creator, opponent],
+        pallet::GameMode::PvP,
     ));
-
     log::debug!(
         "Game created with ID: {:?}, Creator: {}, Opponent: {}, Block: {}",
         game_id,
@@ -72,7 +71,6 @@ fn setup_new_game() -> (H256, u64, u64) {
         opponent,
         current_block_number,
     );
-
     (game_id, creator, opponent)
 }
 
@@ -121,6 +119,7 @@ fn create_game_with_same_players_fails() {
         let result = Eterra::create_game(
             frame_system::RawOrigin::Signed(player).into(),
             vec![player, player], // Pass the same player twice
+            pallet::GameMode::PvP,
         );
         assert_noop!(result, crate::Error::<Test>::InvalidMove);
     });
@@ -650,7 +649,7 @@ fn create_game_invalid_number_of_players() {
 
         // Test with zero players
         let result_zero_players =
-            Eterra::create_game(frame_system::RawOrigin::Signed(creator).into(), vec![]);
+            Eterra::create_game(frame_system::RawOrigin::Signed(creator).into(), vec![], pallet::GameMode::PvP);
         assert_noop!(
             result_zero_players,
             crate::Error::<Test>::CreatorMustBeInGame
@@ -660,6 +659,7 @@ fn create_game_invalid_number_of_players() {
         let result_one_player = Eterra::create_game(
             frame_system::RawOrigin::Signed(creator).into(),
             vec![creator],
+            pallet::GameMode::PvP,
         );
         assert_noop!(
             result_one_player,
@@ -670,6 +670,7 @@ fn create_game_invalid_number_of_players() {
         let result_three_players = Eterra::create_game(
             frame_system::RawOrigin::Signed(creator).into(),
             vec![creator, opponent, third_player],
+            pallet::GameMode::PvP,
         );
         assert_noop!(
             result_three_players,
@@ -680,6 +681,7 @@ fn create_game_invalid_number_of_players() {
         let result_two_players = Eterra::create_game(
             frame_system::RawOrigin::Signed(creator).into(),
             vec![creator, opponent],
+            pallet::GameMode::PvP,
         );
         assert_ok!(result_two_players);
     });
@@ -1614,4 +1616,158 @@ fn transfer_after_submit_does_not_block_play() {
             0,
         ));
     });
+}
+#[cfg(test)]
+mod ai_integration_tests {
+    use super::*;
+    use crate::mock::*;
+    use crate::{Color, Move, GameStorage};
+    use frame_support::{assert_ok, assert_noop};
+    use sp_core::H256;
+    use eterra_card_ai_adapter::eterra_adapter as ai;
+    use pallet_eterra_monte_carlo_ai as mc_ai;
+    use crate::types::card::Card;
+    use crate::types::game::GameProperties;
+    use frame_system::RawOrigin;
+    use crate::HandsOfGame;
+
+    // Bring in the mint_cards_for helper
+    use super::mint_cards_for;
+
+    /// Helper to create a new PvE game (human vs AI).
+    fn setup_pve_game() -> (H256, u64, <Test as frame_system::Config>::AccountId) {
+        let human: u64 = 1;
+        let ai_account: <Test as frame_system::Config>::AccountId = <Test as crate::Config>::AiAccount::get();
+        let current_block_number = <frame_system::Pallet<Test>>::block_number();
+        let game_id = sp_runtime::traits::BlakeTwo256::hash_of(&(human, ai_account, current_block_number));
+        assert_ok!(Eterra::create_game(
+            RawOrigin::Signed(human).into(),
+            vec![human, ai_account],
+            pallet::GameMode::PvE,
+        ));
+        (game_id, human, ai_account)
+    }
+
+    #[test]
+    fn pve_game_creation_generates_ai_hand() {
+        new_test_ext().execute_with(|| {
+            let (game_id, human, ai_account) = setup_pve_game();
+            // AI hand is generated and stored in HandsOfGame
+            let ai_hand = HandsOfGame::<Test>::get(&game_id, &ai_account).expect("AI hand exists");
+            assert_eq!(ai_hand.len() as u32, <Test as crate::Config>::HandSize::get());
+        });
+    }
+
+    #[test]
+    fn human_submits_hand_and_plays_one_move_pve() {
+        new_test_ext().execute_with(|| {
+            let (game_id, human, ai_account) = setup_pve_game();
+            // Mint cards and submit hand for human
+            let ids = mint_cards_for(human, 5);
+            assert_ok!(Eterra::submit_hand(
+                RawOrigin::Signed(human).into(),
+                game_id,
+                ids.clone()
+            ));
+            // Ensure it's the human's turn
+            let game = GameStorage::<Test>::get(&game_id).unwrap();
+            let human_idx = if game.players[0] == human { 0 } else { 1 };
+            let ai_idx = 1 - human_idx;
+            assert_eq!(game.players[game.player_turn as usize], human);
+            // Play from hand index 0 at (0,0)
+            assert_ok!(Eterra::play_from_hand(
+                RawOrigin::Signed(human).into(),
+                game_id,
+                0,
+                0,
+                0
+            ));
+            // After the move: turn should advance away from human, and board updated
+            let updated = GameStorage::<Test>::get(&game_id).unwrap();
+            assert_ne!(updated.players[updated.player_turn as usize], human, "Turn should advance away from human");
+            // Board at (0,0) should be Some
+            assert!(updated.board[0][0].is_some());
+        });
+    }
+
+    #[test]
+    fn ai_can_produce_suggestion_from_current_state() {
+        new_test_ext().execute_with(|| {
+            let (game_id, human, ai_account) = setup_pve_game();
+            // Mint cards and submit hand for human
+            let ids = mint_cards_for(human, 5);
+            assert_ok!(Eterra::submit_hand(
+                RawOrigin::Signed(human).into(),
+                game_id,
+                ids.clone()
+            ));
+            // Ensure both hands exist
+            let game = GameStorage::<Test>::get(&game_id).unwrap();
+            // Use the AI adapter to map state explicitly (avoid relying on non-existent EterraState::from_game)
+            // Map board: crate Card -> adapter Card
+            let mut board: [[Option<ai::Card>; 4]; 4] = core::array::from_fn(|_| core::array::from_fn(|_| None));
+            for x in 0..4usize {
+                for y in 0..4usize {
+                    if let Some(c) = &game.board[x][y] {
+                        let color = c.get_color().map(|col| match col {
+                            Color::Blue => ai::Color::Blue,
+                            Color::Red => ai::Color::Red,
+                        });
+                        board[x][y] = Some(ai::Card {
+                            top: c.top,
+                            right: c.right,
+                            bottom: c.bottom,
+                            left: c.left,
+                            color,
+                        });
+                    }
+                }
+            }
+
+            // Map hands from on-chain storage into adapter hands
+            let human_hand_bv = HandsOfGame::<Test>::get(&game_id, &human).expect("human hand (or submit earlier if needed)");
+            let ai_hand_bv = HandsOfGame::<Test>::get(&game_id, &ai_account).expect("AI hand exists");
+
+            assert_eq!(human_hand_bv.len() as u32, <Test as crate::Config>::HandSize::get(), "hand size must equal HandSize");
+            assert_eq!(ai_hand_bv.len() as u32, <Test as crate::Config>::HandSize::get(), "ai hand size must equal HandSize");
+
+            let to_adapter_hand = |bv: &BoundedVec<crate::pallet::HandEntry, crate::pallet::HandLimit>| -> ai::Hand {
+                let entries: [ai::HandEntry; 5] = core::array::from_fn(|i| {
+                    let he = &bv[i];
+                    ai::HandEntry {
+                        north: he.north,
+                        east: he.east,
+                        south: he.south,
+                        west: he.west,
+                        used: he.used,
+                    }
+                });
+                ai::Hand { entries }
+            };
+
+            let hands = [
+                if game.players[0] == human { to_adapter_hand(&human_hand_bv) } else { to_adapter_hand(&ai_hand_bv) },
+                if game.players[1] == ai_account { to_adapter_hand(&ai_hand_bv) } else { to_adapter_hand(&human_hand_bv) },
+            ];
+
+            let state = ai::State {
+                board,
+                scores: game.scores,
+                player_turn: game.player_turn,
+                round: game.round,
+                max_rounds: game.max_rounds,
+                hands,
+            };
+
+            let diff = <Test as crate::Config>::AiDifficulty::get();
+            let suggestion = mc_ai::Pallet::<Test>::suggest::<ai::Adapter>(&state, diff);
+            assert!(suggestion.is_some(), "Monte Carlo AI should produce a suggestion");
+            // The suggestion should be a valid move index (hand_idx, x, y)
+            let a = suggestion.unwrap();
+            let hand_idx = a.hand_index;
+            let (x, y) = (a.x, a.y);
+            assert!(usize::from(hand_idx) < <Test as crate::Config>::HandSize::get() as usize);
+            assert!(x < 4 && y < 4, "Board is 4x4");
+        });
+    }
 }

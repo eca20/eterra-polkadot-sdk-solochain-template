@@ -4,8 +4,20 @@ pub mod eterra_adapter {
     use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
     use scale_info::TypeInfo;
 
-    // Card game pallet
-    use pallet_eterra as card;
+    // Local copies of game types so this adapter has no dependency on pallet-eterra
+    #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug)]
+    pub enum Color { Blue, Red }
+
+    #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug)]
+    pub struct Card {
+        pub top: u8,
+        pub right: u8,
+        pub bottom: u8,
+        pub left: u8,
+        pub color: Option<Color>,
+    }
+
+    pub type Board = [[Option<Card>; 4]; 4];
 
     /// One hand entry (mirrors data needed to place a card)
     #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug)]
@@ -27,7 +39,7 @@ pub mod eterra_adapter {
     /// Compact, cloneable snapshot of game state used by the AI
     #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug)]
     pub struct State {
-        pub board: card::Board,   // 4x4 Option<Card>
+        pub board: Board,   // 4x4 Option<Card>
         pub scores: (u8, u8),     // (p0, p1)
         pub player_turn: u8,      // 0 or 1
         pub round: u8,
@@ -84,7 +96,7 @@ pub mod eterra_adapter {
 
             // Build a placed card from hand entry
             let he = g.hands[g.player_turn as usize].entries[a.hand_index as usize].clone();
-            let mut placed = card::Card {
+            let mut placed = Card {
                 top: he.north,
                 right: he.east,
                 bottom: he.south,
@@ -92,7 +104,7 @@ pub mod eterra_adapter {
                 color: None,
             };
 
-            let placing_color = if g.player_turn == 0 { card::Color::Blue } else { card::Color::Red };
+            let placing_color = if g.player_turn == 0 { Color::Blue } else { Color::Red };
             placed.color = Some(placing_color.clone());
 
             // Place on board
@@ -120,13 +132,13 @@ pub mod eterra_adapter {
                         };
                         if opposing_rank > rank {
                             if let Some(prev) = opp.color.clone() {
-                                if prev == card::Color::Blue {
+                                if prev == Color::Blue {
                                     g.scores.0 = g.scores.0.saturating_sub(1);
-                                } else if prev == card::Color::Red {
+                                } else if prev == Color::Red {
                                     g.scores.1 = g.scores.1.saturating_sub(1);
                                 }
                             }
-                            if placing_color == card::Color::Blue {
+                            if placing_color == Color::Blue {
                                 g.scores.0 = g.scores.0.saturating_add(1);
                             } else {
                                 g.scores.1 = g.scores.1.saturating_add(1);

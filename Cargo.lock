@@ -1920,7 +1920,6 @@ dependencies = [
 name = "eterra-card-ai-adapter"
 version = "0.1.0"
 dependencies = [
- "pallet-eterra",
  "pallet-eterra-monte-carlo-ai",
  "parity-scale-codec",
  "scale-info",
@@ -5202,11 +5201,13 @@ dependencies = [
 name = "pallet-eterra"
 version = "0.1.0"
 dependencies = [
+ "eterra-card-ai-adapter",
  "frame-support",
  "frame-system",
  "hex",
  "log",
  "pallet-balances",
+ "pallet-eterra-monte-carlo-ai",
  "pallet-eterra-simple-tcg",
  "parity-scale-codec",
  "scale-info",
@@ -5257,10 +5258,8 @@ dependencies = [
 name = "pallet-eterra-monte-carlo-ai"
 version = "0.1.0"
 dependencies = [
- "eterra-card-ai-adapter",
  "frame-support",
  "frame-system",
- "pallet-eterra",
  "parity-scale-codec",
  "scale-info",
  "sp-core",
@@ -8409,6 +8408,7 @@ dependencies = [
 name = "solochain-template-runtime"
 version = "0.1.0"
 dependencies = [
+ "eterra-card-ai-adapter",
  "frame-benchmarking",
  "frame-executive",
  "frame-metadata-hash-extension",
