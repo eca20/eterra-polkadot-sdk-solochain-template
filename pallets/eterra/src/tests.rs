@@ -1647,7 +1647,7 @@ mod ai_integration_tests {
         let game_id = sp_runtime::traits::BlakeTwo256::hash_of(&(human, ai_account, current_block_number));
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(human).into(),
-            vec![human, ai_account],
+            vec![human],
             pallet::GameMode::PvE,
         ));
         (game_id, human, ai_account)
@@ -1792,7 +1792,7 @@ fn multiple_pve_games_have_independent_ai_state() {
             sp_runtime::traits::BlakeTwo256::hash_of(&(human1, ai_account, current_block_a));
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(human1).into(),
-            vec![human1, ai_account],
+            vec![human1],
             pallet::GameMode::PvE,
         ));
 
@@ -1802,7 +1802,7 @@ fn multiple_pve_games_have_independent_ai_state() {
             sp_runtime::traits::BlakeTwo256::hash_of(&(human2, ai_account, current_block_b));
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(human2).into(),
-            vec![human2, ai_account],
+            vec![human2],
             pallet::GameMode::PvE,
         ));
 
@@ -1914,5 +1914,67 @@ fn multiple_pve_games_have_independent_ai_state() {
         let used_b = ai_hand_b_final.iter().filter(|e| e.used).count();
         assert_eq!(used_a, 1, "Game A should have exactly one AI card used");
         assert_eq!(used_b, 1, "Game B should have exactly one AI card used");
+    });
+}
+
+#[test]
+fn creator_cannot_start_second_pvp_game_while_active() {
+    new_test_ext().execute_with(|| {
+        let creator: u64 = 1;
+        let opponent_a: u64 = 2;
+        let opponent_b: u64 = 3;
+
+        // First PvP game should succeed.
+        assert_ok!(Eterra::create_game(
+            RawOrigin::Signed(creator).into(),
+            vec![creator, opponent_a],
+            pallet::GameMode::PvP,
+        ));
+
+        // Attempt to start a second PvP game while the first is still active must fail.
+        let res = Eterra::create_game(
+            RawOrigin::Signed(creator).into(),
+            vec![creator, opponent_b],
+            pallet::GameMode::PvP,
+        );
+        assert_noop!(res, crate::Error::<Test>::PlayerAlreadyInGame);
+
+        // Sanity: the opponent who isn't in any game can still start a game with someone else.
+        assert_ok!(Eterra::create_game(
+            RawOrigin::Signed(opponent_b).into(),
+            vec![opponent_b, 4u64],
+            pallet::GameMode::PvP,
+        ));
+    });
+}
+
+#[test]
+fn creator_cannot_start_second_pve_game_while_active() {
+    new_test_ext().execute_with(|| {
+        let human: u64 = 10;
+        let ai_acc: <Test as frame_system::Config>::AccountId = <Test as crate::Config>::AiAccount::get();
+
+        // First PvE game should succeed. (Players vec must include the human/creator.)
+        assert_ok!(Eterra::create_game(
+            RawOrigin::Signed(human).into(),
+            vec![human],
+            pallet::GameMode::PvE,
+        ));
+
+        // Attempt to start a second PvE game for the same human while the first is active must fail.
+        let res = Eterra::create_game(
+            RawOrigin::Signed(human).into(),
+            vec![human],
+            pallet::GameMode::PvE,
+        );
+        assert_noop!(res, crate::Error::<Test>::PlayerAlreadyInGame);
+
+        // Another human should still be able to start their own PvE game concurrently.
+        let other_human: u64 = 11;
+        assert_ok!(Eterra::create_game(
+            RawOrigin::Signed(other_human).into(),
+            vec![other_human],
+            pallet::GameMode::PvE,
+        ));
     });
 }

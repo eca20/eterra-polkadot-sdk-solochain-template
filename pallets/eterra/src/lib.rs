@@ -85,6 +85,11 @@ pub mod pallet {
     #[pallet::getter(fn game_mode_of)]
     pub type GameModes<T: Config> = StorageMap<_, Blake2_128Concat, GameId<T>, GameMode, OptionQuery>;
 
+    #[pallet::storage]
+    #[pallet::getter(fn active_game_of)]
+    /// Tracks if an account is currently in an active game. A player may have at most one.
+    pub type ActiveGameOf<T: Config> = StorageMap<_, Blake2_128Concat, AccountIdOf<T>, GameId<T>, OptionQuery>;
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
@@ -137,6 +142,7 @@ pub mod pallet {
         CardAlreadyUsed,
         CardDoesNotExist,
         CardNotOwned,
+        PlayerAlreadyInGame,
     }
 
     /// Limit of cards per hand (defaults to 5 via Config::HandSize)
@@ -226,6 +232,18 @@ pub mod pallet {
             // Redundant after normalization, but keep as a safety net.
             ensure!(creator != opponent, Error::<T>::InvalidMove);
 
+            // Enforce: a wallet may participate in at most one active game, scoped by mode.
+            match game_mode {
+                GameMode::PvP => {
+                    ensure!(ActiveGameOf::<T>::get(&creator).is_none(), Error::<T>::PlayerAlreadyInGame);
+                    ensure!(ActiveGameOf::<T>::get(&opponent).is_none(), Error::<T>::PlayerAlreadyInGame);
+                }
+                GameMode::PvE => {
+                    // Only the human creator is restricted in PvE; the AI may participate in many games.
+                    ensure!(ActiveGameOf::<T>::get(&creator).is_none(), Error::<T>::PlayerAlreadyInGame);
+                }
+            }
+
             let current_block_number = <frame_system::Pallet<T>>::block_number();
             let game_id = T::Hashing::hash_of(&(creator.clone(), opponent.clone(), current_block_number));
 
@@ -256,6 +274,17 @@ pub mod pallet {
 
             GameStorage::<T>::insert(&game_id, game.clone());
             GameModes::<T>::insert(&game_id, game_mode.clone());
+            // Mark participants as busy with this game
+            match game_mode {
+                GameMode::PvP => {
+                    ActiveGameOf::<T>::insert(&creator, game_id);
+                    ActiveGameOf::<T>::insert(&opponent, game_id);
+                }
+                GameMode::PvE => {
+                    // Only mark the human creator as active; AI is allowed to be in many games simultaneously.
+                    ActiveGameOf::<T>::insert(&creator, game_id);
+                }
+            }
 
             // If PvE, create AI hand immediately so UI can render it.
             if matches!(game_mode, GameMode::PvE) {
@@ -883,13 +912,24 @@ impl<T: Config> Pallet<T> {
     }
 
     fn end_game(game_id: &GameId<T>, winner: Option<T::AccountId>) {
+        // Try to read players before we wipe storage
+        let participants = GameStorage::<T>::get(game_id).map(|g| (
+            g.players.get(0).cloned(),
+            g.players.get(1).cloned(),
+        ));
+
         Self::deposit_event(Event::GameFinished {
             game_id: *game_id,
             winner: winner.clone(),
         });
 
-        log::debug!("Game finished. Winner: {:?}", winner);
+        // Clear active-game markers for both players if present
+        if let Some((p0, p1)) = participants {
+            if let Some(a) = p0 { ActiveGameOf::<T>::remove(&a); }
+            if let Some(b) = p1 { ActiveGameOf::<T>::remove(&b); }
+        }
 
+        // Finally remove the game itself
         GameStorage::<T>::remove(game_id);
     }
 }
