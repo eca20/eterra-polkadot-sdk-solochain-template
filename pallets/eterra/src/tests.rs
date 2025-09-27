@@ -60,6 +60,9 @@ pub fn init_logger() {
 fn setup_new_game() -> (H256, u64, u64) {
     let creator = 1;
     let opponent = 2;
+    // Ensure preset hands for both players
+    ensure_preset_hand(creator);
+    ensure_preset_hand(opponent);
     // Get the current block number
     let current_block_number = <frame_system::Pallet<Test>>::block_number();
     // Calculate game_id using the hashing function
@@ -82,6 +85,9 @@ fn setup_new_game() -> (H256, u64, u64) {
 
 /// Helper to setup a new game with the given creator and opponent.
 fn setup_new_game_with(creator: u64, opponent: u64) -> (H256, u64, u64) {
+    // Ensure preset hands for both players
+    ensure_preset_hand(creator);
+    ensure_preset_hand(opponent);
     // Get the current block number
     let current_block_number = <frame_system::Pallet<Test>>::block_number();
     // Calculate game_id using the hashing function
@@ -100,6 +106,75 @@ fn setup_new_game_with(creator: u64, opponent: u64) -> (H256, u64, u64) {
         current_block_number,
     );
     (game_id, creator, opponent)
+}
+/// Helper: mint exactly HandSize cards for `owner` and set them as the preset hand via pallet call.
+fn ensure_preset_hand(owner: u64) -> Vec<u32> {
+    let hand_size = <Test as crate::Config>::HandSize::get() as usize;
+    let ids = mint_cards_for(owner, hand_size);
+    assert_ok!(Eterra::set_preset_hand(
+        frame_system::RawOrigin::Signed(owner).into(),
+        ids.clone(),
+    ));
+    ids
+}
+#[test]
+fn create_game_fails_without_preset_hand_pvp() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let creator: u64 = 10;
+        let opponent: u64 = 11;
+        // Do NOT set preset hands for either player
+        let res = Eterra::create_game(
+            frame_system::RawOrigin::Signed(creator).into(),
+            vec![creator, opponent],
+            pallet::GameMode::PvP,
+        );
+        assert!(res.is_err(), "Expected create_game to fail when players lack preset hands");
+    });
+}
+
+#[test]
+fn create_game_succeeds_with_preset_hand_pvp() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let creator: u64 = 12;
+        let opponent: u64 = 13;
+        ensure_preset_hand(creator);
+        ensure_preset_hand(opponent);
+        assert_ok!(Eterra::create_game(
+            frame_system::RawOrigin::Signed(creator).into(),
+            vec![creator, opponent],
+            pallet::GameMode::PvP,
+        ));
+    });
+}
+#[test]
+fn create_pve_game_fails_without_preset_hand_for_human() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let human: u64 = 20;
+        // No preset hand for human; AI hand is generated on creation, but human must have preset
+        let res = Eterra::create_game(
+            RawOrigin::Signed(human).into(),
+            vec![human],
+            pallet::GameMode::PvE,
+        );
+        assert!(res.is_err(), "Expected PvE create_game to fail if human lacks preset hand");
+    });
+}
+
+#[test]
+fn create_pve_game_succeeds_with_preset_hand_for_human() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let human: u64 = 21;
+        ensure_preset_hand(human);
+        assert_ok!(Eterra::create_game(
+            RawOrigin::Signed(human).into(),
+            vec![human],
+            pallet::GameMode::PvE,
+        ));
+    });
 }
 
 /// Utility function that advances the current block number by `n` blocks.
@@ -143,10 +218,11 @@ fn ensure_my_turn(game_id: H256, me: u64, other: u64) {
 fn create_game_with_same_players_fails() {
     init_logger();
     new_test_ext().execute_with(|| {
-        let player = 1; // Define `player` explicitly
+        let player = 1;
+        ensure_preset_hand(player);
         let result = Eterra::create_game(
             frame_system::RawOrigin::Signed(player).into(),
-            vec![player, player], // Pass the same player twice
+            vec![player, player],
             pallet::GameMode::PvP,
         );
         assert_noop!(result, crate::Error::<Test>::InvalidMove);
@@ -755,44 +831,24 @@ fn create_game_invalid_number_of_players() {
         let creator = 1;
         let opponent = 2;
         let third_player = 3;
+        ensure_preset_hand(creator);
+        ensure_preset_hand(opponent);
+        ensure_preset_hand(third_player);
 
-        // Test with zero players
-        let result_zero_players =
-            Eterra::create_game(frame_system::RawOrigin::Signed(creator).into(), vec![], pallet::GameMode::PvP);
-        assert_noop!(
-            result_zero_players,
-            crate::Error::<Test>::CreatorMustBeInGame
-        );
+        // 0 players
+        let res = Eterra::create_game(RawOrigin::Signed(creator).into(), vec![], pallet::GameMode::PvP);
+        assert_noop!(res, crate::Error::<Test>::CreatorMustBeInGame);
 
-        // Test with one player
-        let result_one_player = Eterra::create_game(
-            frame_system::RawOrigin::Signed(creator).into(),
-            vec![creator],
-            pallet::GameMode::PvP,
-        );
-        assert_noop!(
-            result_one_player,
-            crate::Error::<Test>::InvalidNumberOfPlayers
-        );
+        // 1 player
+        let res = Eterra::create_game(RawOrigin::Signed(creator).into(), vec![creator], pallet::GameMode::PvP);
+        assert_noop!(res, crate::Error::<Test>::InvalidNumberOfPlayers);
 
-        // Test with three players
-        let result_three_players = Eterra::create_game(
-            frame_system::RawOrigin::Signed(creator).into(),
-            vec![creator, opponent, third_player],
-            pallet::GameMode::PvP,
-        );
-        assert_noop!(
-            result_three_players,
-            crate::Error::<Test>::InvalidNumberOfPlayers
-        );
+        // 3 players
+        let res = Eterra::create_game(RawOrigin::Signed(creator).into(), vec![creator, opponent, third_player], pallet::GameMode::PvP);
+        assert_noop!(res, crate::Error::<Test>::InvalidNumberOfPlayers);
 
-        // Valid two-player game
-        let result_two_players = Eterra::create_game(
-            frame_system::RawOrigin::Signed(creator).into(),
-            vec![creator, opponent],
-            pallet::GameMode::PvP,
-        );
-        assert_ok!(result_two_players);
+        // valid 2 players
+        assert_ok!(Eterra::create_game(RawOrigin::Signed(creator).into(), vec![creator, opponent], pallet::GameMode::PvP));
     });
 }
 
@@ -918,126 +974,55 @@ fn game_winner_is_correctly_emitted() {
 }
 
 #[test]
-fn exceeding_max_moves_emits_error() {
+fn exceeding_max_moves_marks_finished_and_keeps_game_in_storage() {
+    init_logger();
     new_test_ext().execute_with(|| {
         let (game_id, creator, opponent) = setup_new_game();
 
         // 10 valid moves to complete the game
         let moves = vec![
-            (
-                creator,
-                Move {
-                    place_index_x: 0,
-                    place_index_y: 0,
-                    place_card: Card::new(5, 3, 2, 4),
-                },
-            ),
-            (
-                opponent,
-                Move {
-                    place_index_x: 0,
-                    place_index_y: 1,
-                    place_card: Card::new(2, 2, 2, 2),
-                },
-            ),
-            (
-                creator,
-                Move {
-                    place_index_x: 1,
-                    place_index_y: 0,
-                    place_card: Card::new(6, 6, 6, 6),
-                },
-            ),
-            (
-                opponent,
-                Move {
-                    place_index_x: 1,
-                    place_index_y: 1,
-                    place_card: Card::new(3, 3, 3, 3),
-                },
-            ),
-            (
-                creator,
-                Move {
-                    place_index_x: 2,
-                    place_index_y: 0,
-                    place_card: Card::new(4, 3, 4, 3),
-                },
-            ),
-            (
-                opponent,
-                Move {
-                    place_index_x: 2,
-                    place_index_y: 1,
-                    place_card: Card::new(2, 4, 2, 4),
-                },
-            ),
-            (
-                creator,
-                Move {
-                    place_index_x: 3,
-                    place_index_y: 0,
-                    place_card: Card::new(5, 5, 5, 5),
-                },
-            ),
-            (
-                opponent,
-                Move {
-                    place_index_x: 3,
-                    place_index_y: 1,
-                    place_card: Card::new(1, 1, 1, 1),
-                },
-            ),
-            (
-                creator,
-                Move {
-                    place_index_x: 0,
-                    place_index_y: 2,
-                    place_card: Card::new(6, 4, 6, 4),
-                },
-            ),
-            (
-                opponent,
-                Move {
-                    place_index_x: 1,
-                    place_index_y: 2,
-                    place_card: Card::new(2, 2, 2, 2),
-                },
-            ),
+            (creator,  Move { place_index_x: 0, place_index_y: 0, place_card: Card::new(5, 3, 2, 4) }),
+            (opponent, Move { place_index_x: 0, place_index_y: 1, place_card: Card::new(2, 2, 2, 2) }),
+            (creator,  Move { place_index_x: 1, place_index_y: 0, place_card: Card::new(6, 6, 6, 6) }),
+            (opponent, Move { place_index_x: 1, place_index_y: 1, place_card: Card::new(3, 3, 3, 3) }),
+            (creator,  Move { place_index_x: 2, place_index_y: 0, place_card: Card::new(4, 3, 4, 3) }),
+            (opponent, Move { place_index_x: 2, place_index_y: 1, place_card: Card::new(2, 4, 2, 4) }),
+            (creator,  Move { place_index_x: 3, place_index_y: 0, place_card: Card::new(5, 5, 5, 5) }),
+            (opponent, Move { place_index_x: 3, place_index_y: 1, place_card: Card::new(1, 1, 1, 1) }),
+            (creator,  Move { place_index_x: 0, place_index_y: 2, place_card: Card::new(6, 4, 6, 4) }),
+            (opponent, Move { place_index_x: 1, place_index_y: 2, place_card: Card::new(2, 2, 2, 2) }),
         ];
 
         // Play all 10 moves
-        for (player, player_move) in moves.iter() {
+        for (player, mv) in moves.iter() {
             assert_ok!(Eterra::play(
                 frame_system::RawOrigin::Signed(*player).into(),
                 game_id,
-                player_move.clone(),
+                mv.clone(),
             ));
         }
 
-        // Attempt an 11th move
-        let extra_move = Move {
-            place_index_x: 2,
-            place_index_y: 2,
-            place_card: Card::new(5, 5, 5, 5),
-        };
-        let result = Eterra::play(
-            frame_system::RawOrigin::Signed(creator).into(),
-            game_id,
-            extra_move,
-        );
+        // GameFinished must be emitted
+        let events = frame_system::Pallet::<Test>::events();
+        let finished_emitted = events.iter().any(|record| match &record.event {
+            RuntimeEvent::Eterra(crate::Event::GameFinished { game_id: eid, .. }) => *eid == game_id,
+            _ => false,
+        });
+        assert!(finished_emitted, "Expected GameFinished event after 10th move");
 
-        // Assert that the play fails with an error indicating the game has ended
-        assert_noop!(result, crate::Error::<Test>::GameNotFound);
+        // Finished game must remain in storage and be marked Finished
+        let stored = GameStorage::<Test>::get(&game_id).expect("Finished game should remain in storage");
+        match stored.state {
+            crate::types::game::GameState::Finished { .. } => {},
+            _ => panic!("Expected game state to be Finished"),
+        }
 
-        // Verify that the game has already finished and removed from storage
-        let game = GameStorage::<Test>::get(&game_id);
-        assert!(
-            game.is_none(),
-            "Game should have been removed after completion."
-        );
+        // Sanity: round reached max_rounds and 10 cells are occupied
+        let max_rounds = <Test as crate::Config>::MaxRounds::get();
+        assert_eq!(stored.round, max_rounds, "Round should equal MaxRounds after completion");
 
-        log::info!("Exceeding max moves correctly emits an error and prevents further plays.");
+        let occupied: usize = stored.board.iter().flatten().filter(|c| c.is_some()).count();
+        assert_eq!(occupied, 10, "Exactly 10 cells should be occupied after 10 moves");
     });
 }
 
@@ -1280,16 +1265,16 @@ fn debug_game_rounds_and_termination() {
     init_logger();
     new_test_ext().execute_with(|| {
         let (game_id, creator, opponent) = setup_new_game();
-        let max_rounds = <Test as crate::Config>::MaxRounds::get();
-        let mut expected_round = 0;
+        let max_rounds: u8 = <Test as crate::Config>::MaxRounds::get();
+        let mut expected_round: u8 = 0;
 
         log::info!("Starting game with max rounds: {}", max_rounds);
 
-        // Play a full game up to max_rounds
-        for i in 0..(max_rounds * 2) {
+        // Play a full game (2 moves per round).
+        for i in 0..(max_rounds as usize * 2) {
             let current_player = if i % 2 == 0 { creator } else { opponent };
             let card = Card::new(5, 3, 2, 4);
-            let player_move = Move {
+            let mv = Move {
                 place_index_x: (i % 4) as u8,
                 place_index_y: ((i / 4) % 4) as u8,
                 place_card: card,
@@ -1299,60 +1284,59 @@ fn debug_game_rounds_and_termination() {
                 "Turn {}: Player {} placing at ({}, {})",
                 i + 1,
                 current_player,
-                player_move.place_index_x,
-                player_move.place_index_y
+                mv.place_index_x,
+                mv.place_index_y
             );
 
             assert_ok!(Eterra::play(
                 frame_system::RawOrigin::Signed(current_player).into(),
                 game_id,
-                player_move.clone(),
+                mv.clone(),
             ));
 
-            // Check round progression before game removal
+            // After every pair of moves, round should increment while the game is active.
             if i % 2 == 1 {
-                expected_round += 1;
-
+                expected_round = expected_round.saturating_add(1);
                 if let Some(game) = GameStorage::<Test>::get(&game_id) {
-                    assert_eq!(game.round, expected_round);
+                    assert_eq!(
+                        game.round, expected_round,
+                        "round should advance after each pair of moves"
+                    );
                     log::info!("✅ Current round: {} / {}", game.round, max_rounds);
                 } else {
-                    log::warn!("⚠️ Game removed from storage, likely finished.");
-                    break;
+                    panic!("Game unexpectedly missing from storage before completion");
                 }
             }
         }
 
-        // Ensure `GameFinished` event was emitted
+        // Ensure `GameFinished` event was emitted.
         let events = frame_system::Pallet::<Test>::events();
         let game_finished_event_found = events.iter().any(|record| match record.event {
             RuntimeEvent::Eterra(crate::Event::GameFinished {
                 game_id: event_game_id,
-                winner: event_winner,
+                winner: _,
             }) => {
-                log::info!(
-                    "🎉 GameFinished Event Found: Game ID {:?}, Winner: {:?}",
-                    event_game_id,
-                    event_winner
-                );
+                log::info!("🎉 GameFinished Event Found for {:?}", event_game_id);
                 event_game_id == game_id
             }
             _ => false,
         });
+        assert!(game_finished_event_found, "❌ Expected GameFinished event was NOT found!");
 
-        assert!(
-            game_finished_event_found,
-            "❌ Expected GameFinished event was NOT found!"
-        );
+        // Finished game should remain stored and be marked Finished.
+        let stored = GameStorage::<Test>::get(&game_id)
+            .expect("Finished game should remain in storage");
+        match stored.state {
+            crate::types::game::GameState::Finished { .. } => {}
+            _ => panic!("Expected game state to be Finished"),
+        }
 
-        // Ensure the game is removed from storage
-        let game = GameStorage::<Test>::get(&game_id);
-        assert!(
-            game.is_none(),
-            "❌ Game should have been removed after completion."
-        );
+        // Sanity checks.
+        assert_eq!(stored.round, max_rounds, "Round should equal MaxRounds after completion");
+        let occupied = stored.board.iter().flatten().filter(|c| c.is_some()).count();
+        assert_eq!(occupied, 10, "Exactly 10 cells should be occupied after 10 moves");
 
-        log::info!("✅ Game successfully completed and removed from storage.");
+        log::info!("✅ Game completed, remains stored, and is marked Finished.");
     });
 }
 
@@ -1361,18 +1345,12 @@ fn debug_game_rounds_and_termination() {
 fn submit_hand_rejects_unowned_card() {
     init_logger();
     new_test_ext().execute_with(|| {
-        let (game_id, creator, opponent) = setup_new_game();
-        // creator owns 5 cards, opponent owns 1 card
+        let creator = 1;
+        let opponent = 2;
         let mut creator_cards = mint_cards_for(creator, 5);
         let opp_cards = mint_cards_for(opponent, 1);
-        // Replace one creator card with opponent's card id
         creator_cards[0] = opp_cards[0];
-
-        let res = Eterra::submit_hand(
-            frame_system::RawOrigin::Signed(creator).into(),
-            game_id,
-            creator_cards,
-        );
+        let res = Eterra::set_preset_hand(RawOrigin::Signed(creator).into(), creator_cards);
         assert_noop!(res, crate::Error::<Test>::CardNotOwned);
     });
 }
@@ -1507,45 +1485,31 @@ fn submit_hand_fails_for_unknown_game() {
 fn submit_hand_wrong_size_rejected() {
     init_logger();
     new_test_ext().execute_with(|| {
-        let (game_id, creator, _opponent) = setup_new_game();
-        // Mint 5 cards but submit only 4
+        let creator = 1;
         let cards = mint_cards_for(creator, 5);
+
         let mut too_small = cards.clone();
         too_small.pop();
-        let res = Eterra::submit_hand(
-            frame_system::RawOrigin::Signed(creator).into(),
-            game_id,
-            too_small,
-        );
+        let res = Eterra::set_preset_hand(RawOrigin::Signed(creator).into(), too_small);
         assert_noop!(res, crate::Error::<Test>::HandSizeInvalid);
 
-        // Submit 6 (too many)
-        // Mint one more card
         let extra = mint_cards_for(creator, 1);
         let mut too_big = cards.clone();
         too_big.extend_from_slice(&extra);
-        let res = Eterra::submit_hand(
-            frame_system::RawOrigin::Signed(creator).into(),
-            game_id,
-            too_big,
-        );
+        let res = Eterra::set_preset_hand(RawOrigin::Signed(creator).into(), too_big);
         assert_noop!(res, crate::Error::<Test>::HandSizeInvalid);
     });
 }
+
 
 #[test]
 fn submit_hand_rejects_duplicates() {
     init_logger();
     new_test_ext().execute_with(|| {
-        let (game_id, creator, _opponent) = setup_new_game();
+        let creator = 1;
         let mut cards = mint_cards_for(creator, 5);
-        // Duplicate first id into second slot
         if cards.len() >= 2 { cards[1] = cards[0]; }
-        let res = Eterra::submit_hand(
-            frame_system::RawOrigin::Signed(creator).into(),
-            game_id,
-            cards,
-        );
+        let res = Eterra::set_preset_hand(RawOrigin::Signed(creator).into(), cards);
         assert_noop!(res, crate::Error::<Test>::DuplicateCardInHand);
     });
 }
@@ -1675,6 +1639,7 @@ fn transfer_after_submit_does_not_block_play() {
 #[cfg(test)]
 mod ai_integration_tests {
     use super::*;
+    use super::ensure_preset_hand;
     use crate::mock::*;
     use crate::{Move, GameStorage};
     use frame_support::{assert_ok, assert_noop};
@@ -1694,6 +1659,8 @@ mod ai_integration_tests {
     fn setup_pve_game() -> (H256, u64, <Test as frame_system::Config>::AccountId) {
         let human: u64 = 1;
         let ai_account: <Test as frame_system::Config>::AccountId = <Test as crate::Config>::AiAccount::get();
+        // Ensure human has a preset hand before creating PvE game
+        ensure_preset_hand(human);
         let current_block_number = <frame_system::Pallet<Test>>::block_number();
         let game_id = sp_runtime::traits::BlakeTwo256::hash_of(&(human, ai_account, current_block_number));
         assert_ok!(Eterra::create_game(
@@ -1837,6 +1804,8 @@ fn multiple_pve_games_have_independent_ai_state() {
         let human2: u64 = 3;
         let ai_account: <Test as frame_system::Config>::AccountId =
             <Test as crate::Config>::AiAccount::get();
+        ensure_preset_hand(human1);
+        ensure_preset_hand(human2);
 
         // Game A
         let current_block_a = <frame_system::Pallet<Test>>::block_number();
@@ -1912,6 +1881,9 @@ fn creator_cannot_start_second_pvp_game_while_active() {
         let creator: u64 = 1;
         let opponent_a: u64 = 2;
         let opponent_b: u64 = 3;
+        ensure_preset_hand(creator);
+        ensure_preset_hand(opponent_a);
+        ensure_preset_hand(opponent_b);
 
         // First PvP game should succeed.
         assert_ok!(Eterra::create_game(
@@ -1942,6 +1914,7 @@ fn creator_cannot_start_second_pve_game_while_active() {
     new_test_ext().execute_with(|| {
         let human: u64 = 10;
         let ai_acc: <Test as frame_system::Config>::AccountId = <Test as crate::Config>::AiAccount::get();
+        ensure_preset_hand(human);
 
         // First PvE game should succeed. (Players vec must include the human/creator.)
         assert_ok!(Eterra::create_game(
@@ -1960,6 +1933,7 @@ fn creator_cannot_start_second_pve_game_while_active() {
 
         // Another human should still be able to start their own PvE game concurrently.
         let other_human: u64 = 11;
+        ensure_preset_hand(other_human);
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(other_human).into(),
             vec![other_human],

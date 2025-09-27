@@ -29,6 +29,7 @@ use pallet_eterra_monte_carlo_ai as mc_ai; // reserved for future use
 #[frame_support::pallet]
 pub mod pallet {
     use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
+    use frame_support::pallet_prelude::ConstU32;
     use frame_support::BoundedVec;
     use frame_system::pallet_prelude::*;
     use sp_runtime::traits::Hash;
@@ -91,6 +92,17 @@ pub mod pallet {
     /// Tracks if an account is currently in an active game. A player may have at most one.
     pub type ActiveGameOf<T: Config> = StorageMap<_, Blake2_128Concat, AccountIdOf<T>, GameId<T>, OptionQuery>;
 
+    /// Recent games for each player (most-recent first, bounded).
+    #[pallet::storage]
+    #[pallet::getter(fn player_games)]
+    pub type PlayerGames<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        AccountIdOf<T>,
+        BoundedVec<GameId<T>, ConstU32<10>>, // keep last 10
+        ValueQuery
+    >;
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
@@ -144,6 +156,7 @@ pub mod pallet {
         CardDoesNotExist,
         CardNotOwned,
         PlayerAlreadyInGame,
+        PresetHandMissing,
     }
 
     /// Limit of cards per hand (defaults to 5 via Config::HandSize)
@@ -172,6 +185,17 @@ pub mod pallet {
         OptionQuery
     >;
 
+    /// The player's current hand configuration (card IDs only). This is editable by the user in the UI.
+    #[pallet::storage]
+    #[pallet::getter(fn current_hand_of)]
+    pub type CurrentHandOf<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        AccountIdOf<T>,
+        BoundedVec<u32, HandLimit>, // exactly HandLimit entries expected by the UI flow
+        OptionQuery
+    >;
+
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         #[pallet::call_index(0)]
@@ -182,6 +206,9 @@ pub mod pallet {
             game_mode: GameMode,
         ) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
+
+            // Require the creator to have a current hand before starting a game
+            ensure!(CurrentHandOf::<T>::contains_key(&who), Error::<T>::PresetHandMissing);
 
             // Normalize players vector depending on mode
             match game_mode {
@@ -283,6 +310,25 @@ pub mod pallet {
                     ActiveGameOf::<T>::insert(&creator, game_id);
                 }
             }
+
+            // Update per-player recent game lists (most-recent first, dedup, prune to 10)
+            let mut push_recent = |acct: &AccountIdOf<T>| {
+                PlayerGames::<T>::mutate(acct, |list| {
+                    if let Some(pos) = list.iter().position(|g| *g == game_id) {
+                        list.remove(pos);
+                    }
+                    // Try to insert at the front; if full, pop last first
+                    if list.len() as u32 >= <ConstU32<10> as sp_runtime::traits::Get<u32>>::get() {
+                        let _ = list.pop();
+                    }
+                    // Insert at front by rebuilding (BoundedVec has no direct insert at 0)
+                    let mut tmp = list.to_vec();
+                    tmp.insert(0, game_id);
+                    *list = BoundedVec::try_from(tmp).expect("<= 10; qed");
+                });
+            };
+            push_recent(&creator);
+            push_recent(&opponent);
 
             // If PvE, create AI hand immediately so UI can render it.
             if matches!(game_mode, GameMode::PvE) {
@@ -395,7 +441,8 @@ pub mod pallet {
             Ok(())
         }
 
-        /// Submit a 5-card hand for this game. All cards must be owned by the caller.
+        /// Submit your current 5-card hand for this game. The submitted hand is always loaded from your current hand configuration.
+        /// The `card_ids` argument is ignored and exists for ABI compatibility only.
         #[pallet::call_index(2)]
         #[pallet::weight(10_000)]
         pub fn submit_hand(origin: OriginFor<T>, game_id: GameId<T>, card_ids: Vec<u32>) -> DispatchResult {
@@ -405,21 +452,23 @@ pub mod pallet {
             let game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
             ensure!(game.players.contains(&who), Error::<T>::PlayerNotInGame);
 
-            // Enforce exact hand size and uniqueness
-            ensure!(card_ids.len() as u32 == T::HandSize::get(), Error::<T>::HandSizeInvalid);
-            // Check duplicates (O(n^2) but tiny n=5)
-            for i in 0..card_ids.len() {
-                for j in (i+1)..card_ids.len() {
-                    ensure!(card_ids[i] != card_ids[j], Error::<T>::DuplicateCardInHand);
+            // Prevent resubmission for this game
+            ensure!(HandsOfGame::<T>::get(&game_id, &who).is_none(), Error::<T>::HandAlreadySubmitted);
+
+            // Load the caller's current hand configuration and snapshot it into the game
+            let current_ids = CurrentHandOf::<T>::get(&who).ok_or(Error::<T>::PresetHandMissing)?;
+            ensure!(current_ids.len() as u32 == T::HandSize::get(), Error::<T>::HandSizeInvalid);
+
+            // Validate uniqueness (defense in depth)
+            for i in 0..current_ids.len() {
+                for j in (i + 1)..current_ids.len() {
+                    ensure!(current_ids[i] != current_ids[j], Error::<T>::DuplicateCardInHand);
                 }
             }
 
-            // Prevent resubmission
-            ensure!(HandsOfGame::<T>::get(&game_id, &who).is_none(), Error::<T>::HandAlreadySubmitted);
-
             // Build hand entries from the cards pallet; validate ownership & existence
             let mut hand: BoundedVec<HandEntry, HandLimit> = BoundedVec::default();
-            for card_id in card_ids.into_iter() {
+            for &card_id in current_ids.iter() {
                 let info = cards::pallet::Cards::<T>::get(card_id).ok_or(Error::<T>::CardDoesNotExist)?;
                 ensure!(info.owner == who, Error::<T>::CardNotOwned);
                 let entry = HandEntry { card_id, north: info.north, east: info.east, south: info.south, west: info.west, used: false };
@@ -568,6 +617,44 @@ pub mod pallet {
             Self::deposit_event(Event::NewTurn { game_id, next_player });
 
             Ok(())
+        }
+
+        /// Save/update your "current hand" (card IDs only) that the UI will use for future games.
+        /// The hand must contain exactly `HandSize` unique cards owned by the caller.
+        #[pallet::call_index(5)]
+        #[pallet::weight(10_000)]
+        pub fn set_current_hand(origin: OriginFor<T>, card_ids: Vec<u32>) -> DispatchResult {
+            let who: AccountIdOf<T> = ensure_signed(origin)?;
+
+            // Enforce exact hand size and uniqueness
+            ensure!(card_ids.len() as u32 == T::HandSize::get(), Error::<T>::HandSizeInvalid);
+            for i in 0..card_ids.len() {
+                for j in (i + 1)..card_ids.len() {
+                    ensure!(card_ids[i] != card_ids[j], Error::<T>::DuplicateCardInHand);
+                }
+            }
+
+            // Validate ownership and that each card exists
+            for &card_id in &card_ids {
+                let info = cards::pallet::Cards::<T>::get(card_id).ok_or(Error::<T>::CardDoesNotExist)?;
+                ensure!(info.owner == who, Error::<T>::CardNotOwned);
+            }
+
+            // Persist as a bounded vec
+            let current: BoundedVec<u32, HandLimit> = card_ids
+                .clone()
+                .try_into()
+                .map_err(|_| Error::<T>::HandSizeInvalid)?;
+
+            CurrentHandOf::<T>::insert(&who, current);
+            Ok(())
+        }
+
+        /// Deprecated alias for backwards compatibility. Calls `set_current_hand`.
+        #[pallet::call_index(6)]
+        #[pallet::weight(10_000)]
+        pub fn set_preset_hand(origin: OriginFor<T>, card_ids: Vec<u32>) -> DispatchResult {
+            Self::set_current_hand(origin, card_ids)
         }
     }
 }
@@ -925,24 +1012,26 @@ impl<T: Config> Pallet<T> {
     }
 
     fn end_game(game_id: &GameId<T>, winner: Option<T::AccountId>) {
-        // Try to read players before we wipe storage
-        let participants = GameStorage::<T>::get(game_id).map(|g| (
-            g.players.get(0).cloned(),
-            g.players.get(1).cloned(),
-        ));
+        // Read and update game in storage to persist final state
+        if let Some(mut g) = GameStorage::<T>::get(game_id) {
+            // Emit before we change pointers
+            Self::deposit_event(Event::GameFinished { game_id: *game_id, winner: winner.clone() });
 
-        Self::deposit_event(Event::GameFinished {
-            game_id: *game_id,
-            winner: winner.clone(),
-        });
+            // Clear active-game markers for human participants
+            if let Some(a) = g.players.get(0).cloned() { ActiveGameOf::<T>::remove(&a); }
+            if let Some(b) = g.players.get(1).cloned() { ActiveGameOf::<T>::remove(&b); }
 
-        // Clear active-game markers for both players if present
-        if let Some((p0, p1)) = participants {
-            if let Some(a) = p0 { ActiveGameOf::<T>::remove(&a); }
-            if let Some(b) = p1 { ActiveGameOf::<T>::remove(&b); }
+            // Map AccountId winner to player index (0/1) to match GameState::Finished { winner: Option<u8> }
+            let winner_ix: Option<u8> = match winner.as_ref() {
+                Some(acc) if *acc == g.players[0] => Some(0),
+                Some(acc) if *acc == g.players[1] => Some(1),
+                _ => None,
+            };
+            g.state = GameState::Finished { winner: winner_ix };
+            GameStorage::<T>::insert(game_id, g);
+        } else {
+            // If the game wasn't found (should not happen), still emit the event
+            Self::deposit_event(Event::GameFinished { game_id: *game_id, winner });
         }
-
-        // Finally remove the game itself
-        GameStorage::<T>::remove(game_id);
     }
 }
