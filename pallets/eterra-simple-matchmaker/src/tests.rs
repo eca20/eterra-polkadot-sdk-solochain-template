@@ -7,8 +7,9 @@ use frame_support::{assert_noop, assert_ok, traits::OnFinalize};
 use sp_runtime::DispatchError;
 use frame_system::pallet_prelude::BlockNumberFor;
 
-use crate::mock;
-use crate::mock::{new_test_ext, RuntimeEvent, RuntimeOrigin as SystemOrigin, Test, Matchmaker};
+use crate::mock::{
+    new_test_ext, RuntimeEvent, RuntimeOrigin as SystemOrigin, Test, Matchmaker, set_has_hand, clear_all_hands
+};
 
 fn last_event() -> RuntimeEvent {
     frame_system::Pallet::<Test>::events()
@@ -35,6 +36,7 @@ fn filter_matchmaker(events: &[RuntimeEvent]) -> Vec<RuntimeEvent> {
 #[test]
 fn join_queue_emits_event_and_persists() {
     new_test_ext().execute_with(|| {
+        set_has_hand(1, true);
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(1)));
         // Event
         let ev = last_event();
@@ -50,6 +52,7 @@ fn join_queue_emits_event_and_persists() {
 #[test]
 fn join_queue_rejects_duplicates() {
     new_test_ext().execute_with(|| {
+        set_has_hand(1, true);
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(1)));
         assert_noop!(
             Matchmaker::join_queue(SystemOrigin::signed(1)),
@@ -63,11 +66,14 @@ fn queue_capacity_enforced() {
     new_test_ext().execute_with(|| {
         // QueueCapacityConst is defined in mock.rs; fill it completely.
         for who in 1..=mock::QueueCapacityConst::get() as u64 {
+            set_has_hand(who, true);
             assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(who)));
         }
-        // One more should fail
+        // One more should fail (ensure the overflow player also has a preset hand so we hit QueueFull, not NoPresetHand)
+        let overflow = mock::QueueCapacityConst::get() as u64 + 1;
+        set_has_hand(overflow, true);
         assert_noop!(
-            Matchmaker::join_queue(SystemOrigin::signed(mock::QueueCapacityConst::get() as u64 + 1)),
+            Matchmaker::join_queue(SystemOrigin::signed(overflow)),
             Error::<Test>::QueueFull
         );
     });
@@ -76,6 +82,7 @@ fn queue_capacity_enforced() {
 #[test]
 fn leave_queue_works_and_emits() {
     new_test_ext().execute_with(|| {
+        set_has_hand(1, true);
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(1)));
         assert_ok!(Matchmaker::leave_queue(SystemOrigin::signed(1)));
 
@@ -100,6 +107,24 @@ fn leave_queue_when_not_queued_fails() {
     });
 }
 
+#[test]
+fn join_queue_requires_current_hand() {
+    new_test_ext().execute_with(|| {
+        // Ensure clean slate (no one has a hand)
+        clear_all_hands();
+
+        // Without a hand -> should fail
+        assert_noop!(
+            Matchmaker::join_queue(SystemOrigin::signed(1)),
+            Error::<Test>::NoPresetHand
+        );
+
+        // Give account 1 a hand -> should succeed
+        set_has_hand(1, true);
+        assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(1)));
+    });
+}
+
 #[cfg(any(feature = "dev_tests_with_try_match"))]
 #[test]
 fn try_match_noop_with_fewer_than_two() {
@@ -107,6 +132,7 @@ fn try_match_noop_with_fewer_than_two() {
         // 0 players
         assert_ok!(Matchmaker::try_match(SystemOrigin::signed(99)));
         // 1 player
+        set_has_hand(1, true);
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(1)));
         assert_ok!(Matchmaker::try_match(SystemOrigin::signed(99)));
         // No MatchFormed or Matched events
@@ -124,8 +150,11 @@ fn try_match_noop_with_fewer_than_two() {
 fn try_match_forms_two_and_removes_from_head_fifo() {
     new_test_ext().execute_with(|| {
         // Join three to check FIFO (1,2 should be matched; 3 remains)
+        set_has_hand(1, true);
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(1)));
+        set_has_hand(2, true);
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(2)));
+        set_has_hand(3, true);
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(3)));
 
         assert_ok!(Matchmaker::try_match(SystemOrigin::signed(99)));
@@ -149,6 +178,7 @@ fn multiple_try_match_calls_form_multiple_pairs_in_fifo_order() {
     new_test_ext().execute_with(|| {
         // 1..=6 -> expect pairs (1,2), (3,4); then 5,6 remain until next call.
         for who in 1..=6 {
+            set_has_hand(who, true);
             assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(who)));
         }
 
@@ -181,6 +211,7 @@ fn leaving_middle_preserves_order() {
     new_test_ext().execute_with(|| {
         // queue: [1,2,3,4]
         for who in 1..=4 {
+            set_has_hand(who, true);
             assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(who)));
         }
         // 2 leaves -> [1,3,4]
@@ -202,6 +233,7 @@ fn leaving_middle_preserves_order() {
 #[test]
 fn rejoin_after_leave_is_allowed() {
     new_test_ext().execute_with(|| {
+        set_has_hand(10, true);
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(10)));
         assert_ok!(Matchmaker::leave_queue(SystemOrigin::signed(10)));
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(10)));
@@ -238,6 +270,7 @@ fn finalize_blocks_does_not_break_queue() {
     new_test_ext().execute_with(|| {
         // Add some players
         for who in 1..=3 {
+            set_has_hand(who, true);
             assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(who)));
         }
         // Simulate two blocks

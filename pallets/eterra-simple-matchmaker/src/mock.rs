@@ -58,19 +58,41 @@ impl system::Config for Test {
     type PostTransactions = ();       // no post-transactions hooks in mock
 }
 
-// --- Mock HandProvider that always returns "has hand" for any account ---
-pub struct AlwaysHasHand;
-impl pallet_matchmaker::CurrentHandProvider<AccountId> for AlwaysHasHand {
-    fn has_current_hand(_who: &AccountId) -> bool {
-        true
+// --- Controllable HandProvider for tests ---
+// We keep a per-test thread-local set of accounts that "have" a hand.
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+
+thread_local! {
+    static TL_HAND_SET: RefCell<BTreeSet<AccountId>> = RefCell::new(BTreeSet::new());
+}
+
+/// Test-only provider: consults a thread-local set to determine if an account has a hand.
+pub struct MockHandProvider;
+impl pallet_matchmaker::CurrentHandProvider<AccountId> for MockHandProvider {
+    fn has_current_hand(who: &AccountId) -> bool {
+        TL_HAND_SET.with(|s| s.borrow().contains(who))
     }
+}
+
+/// Helper: mark/unmark an account as having a hand in this test thread.
+pub fn set_has_hand(who: AccountId, has: bool) {
+    TL_HAND_SET.with(|s| {
+        let mut s = s.borrow_mut();
+        if has { s.insert(who); } else { s.remove(&who); }
+    });
+}
+
+/// Helper: clear all "has hand" flags (called by new_test_ext).
+pub fn clear_all_hands() {
+    TL_HAND_SET.with(|s| s.borrow_mut().clear());
 }
 
 impl pallet_matchmaker::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type PlayersPerMatch = PlayersPerMatchConst;
     type QueueCapacity = QueueCapacityConst;
-    type HandProvider = AlwaysHasHand;
+    type HandProvider = MockHandProvider;
 }
 
 construct_runtime!(
@@ -89,6 +111,7 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
     let t = system::GenesisConfig::<Test>::default().build_storage().unwrap();
     let mut ext = sp_io::TestExternalities::new(t);
     ext.execute_with(|| {
+        clear_all_hands();
         System::set_block_number(1);
     });
     ext
