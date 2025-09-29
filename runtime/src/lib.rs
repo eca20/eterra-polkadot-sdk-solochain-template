@@ -287,6 +287,10 @@ impl Get<u8> for AiBotDifficulty {
 }
 
 parameter_types! {
+    pub const QueueCapacity: u32 = 1024;
+}
+
+parameter_types! {
     // Payout is 1000 whole tokens (adjust UNIT to your decimals)
     pub FaucetPayoutAmount: Balance = 1_000 * UNIT;
 }
@@ -337,6 +341,12 @@ impl pallet_eterra_daily_slots::Config for Runtime {
     type Currency = Balances;
     type RewardPerWin = RewardPerWinAmount; // defined below
 }
+
+impl pallet_eterra_simple_matchmaker::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type QueueCapacity = QueueCapacity;
+}
+
 
 pub struct RewardPerWinAmount;
 impl frame_support::traits::Get<Balance> for RewardPerWinAmount {
@@ -419,4 +429,7 @@ mod runtime {
 
     #[runtime::pallet_index(13)]
     pub type EterraMonteCarloAi = pallet_eterra_monte_carlo_ai;
+
+    #[runtime::pallet_index(14)]
+    pub type EterraSimpleMatchMaker = pallet_eterra_simple_matchmaker;
 }

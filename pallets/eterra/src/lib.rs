@@ -545,13 +545,14 @@ pub mod pallet {
             Self::deposit_event(Event::NewTurn { game_id, next_player });
             GameStorage::<T>::insert(&game_id, game.clone());
 
+            Self::deposit_event(Event::MovePlayed { game_id, player: who, x, y });
+
             // Check for win condition after saving
             if let Some(winner) = Self::is_game_won(&game_id, &game) {
                 Self::end_game(&game_id, winner);
                 return Ok(());
             }
 
-            Self::deposit_event(Event::MovePlayed { game_id, player: who, x, y });
 
             // If this is a PvE game and it's now the AI's turn, let the AI act immediately.
             if matches!(GameModes::<T>::get(&game_id), Some(GameMode::PvE)) {
