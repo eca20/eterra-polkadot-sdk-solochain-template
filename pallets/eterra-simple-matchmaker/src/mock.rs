@@ -58,10 +58,19 @@ impl system::Config for Test {
     type PostTransactions = ();       // no post-transactions hooks in mock
 }
 
+// --- Mock HandProvider that always returns "has hand" for any account ---
+pub struct AlwaysHasHand;
+impl pallet_matchmaker::CurrentHandProvider<AccountId> for AlwaysHasHand {
+    fn has_current_hand(_who: &AccountId) -> bool {
+        true
+    }
+}
+
 impl pallet_matchmaker::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type PlayersPerMatch = PlayersPerMatchConst;
     type QueueCapacity = QueueCapacityConst;
+    type HandProvider = AlwaysHasHand;
 }
 
 construct_runtime!(

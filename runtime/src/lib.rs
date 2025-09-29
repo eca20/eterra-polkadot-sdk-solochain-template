@@ -274,11 +274,13 @@ const ALICE: AccountId32 = AccountId32::new([
 
 parameter_types! {
     pub FaucetAccountParam: AccountId = ALICE.into();
-}
-
-// Added parameter_types for AI bot account
-parameter_types! {
     pub AiBotAccountParam: AccountId = ALICE.into();
+
+    pub const PlayersPerMatchConst: u32 = 2;
+    pub const QueueCapacityConst: u32 = 1024;
+
+    // Payout is 1000 whole tokens (adjust UNIT to your decimals)
+    pub FaucetPayoutAmount: Balance = 1_000 * UNIT;
 }
 
 pub struct AiBotDifficulty;
@@ -286,14 +288,6 @@ impl Get<u8> for AiBotDifficulty {
     fn get() -> u8 { 60 }
 }
 
-parameter_types! {
-    pub const QueueCapacity: u32 = 1024;
-}
-
-parameter_types! {
-    // Payout is 1000 whole tokens (adjust UNIT to your decimals)
-    pub FaucetPayoutAmount: Balance = 1_000 * UNIT;
-}
 
 impl pallet_eterra::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
@@ -342,9 +336,19 @@ impl pallet_eterra_daily_slots::Config for Runtime {
     type RewardPerWin = RewardPerWinAmount; // defined below
 }
 
-impl pallet_eterra_simple_matchmaker::Config for Runtime {
+impl eterra_simple_matchmaker::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    type QueueCapacity = QueueCapacity;
+    type PlayersPerMatch = PlayersPerMatchConst;
+    type QueueCapacity = QueueCapacityConst;
+    type HandProvider = (); // uses the impl above
+}
+
+impl eterra_simple_matchmaker::CurrentHandProvider<AccountId> for () {
+    fn has_current_hand(who: &AccountId) -> bool {
+        // Delegate to your game/cards pallet storage:
+        // Adjust the path to your pallet module and types.
+        eterra::CurrentHandOf::<Runtime>::contains_key(who)
+    }
 }
 
 

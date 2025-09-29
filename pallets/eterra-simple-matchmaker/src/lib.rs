@@ -6,6 +6,14 @@ use frame_support::{dispatch::DispatchResult, pallet_prelude::*, traits::Get};
 use frame_system::pallet_prelude::*;
 use sp_std::prelude::*;
 
+/// A lightweight bridge to verify that an account has configured a Current Hand
+/// in the cards/game pallet. The runtime implements this by delegating to the
+/// other pallet's storage (e.g. `eterra::CurrentHandOf`).
+pub trait CurrentHandProvider<AccountId> {
+    /// Returns true iff the account has a non-None current hand configured.
+    fn has_current_hand(who: &AccountId) -> bool;
+}
+
 #[cfg(test)]
 mod mock;
 
@@ -25,6 +33,9 @@ pub mod pallet {
         /// Capacity of the matchmaking queue.
         #[pallet::constant]
         type QueueCapacity: Get<u32>;
+        /// A runtime hook used to check whether a player has a preset hand.
+        /// Implement this in the runtime by delegating to your game/cards pallet.
+        type HandProvider: super::CurrentHandProvider<Self::AccountId>;
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
     }
 
@@ -67,6 +78,8 @@ pub mod pallet {
         AlreadyQueued,
         NotQueued,
         BadCapacity,
+        /// Player attempted to queue without having a preset hand configured.
+        NoPresetHand,
     }
 
     #[pallet::call]
@@ -78,6 +91,8 @@ pub mod pallet {
             let cap = T::QueueCapacity::get();
             ensure!(cap > 1, Error::<T>::BadCapacity);
             ensure!(InQueue::<T>::contains_key(&who) == false, Error::<T>::AlreadyQueued);
+            // Require that the player has configured a Current Hand in the game/cards pallet.
+            ensure!(T::HandProvider::has_current_hand(&who), Error::<T>::NoPresetHand);
 
             Head::<T>::mutate(|head| {
                 Tail::<T>::mutate(|tail| -> DispatchResult {
