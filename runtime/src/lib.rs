@@ -37,6 +37,9 @@ pub use pallet_eterra_daily_slots;
 pub use pallet_eterra_faucet;
 pub use pallet_eterra_simple_tcg;
 pub use pallet_eterra_tcg;
+pub use pallet_eterra_simple_matchmaker;
+
+pub struct HandProviderAdapter;
 
 pub use pallet_timestamp::Call as TimestampCall;
 use scale_info::TypeInfo;
@@ -276,11 +279,12 @@ parameter_types! {
     pub FaucetAccountParam: AccountId = ALICE.into();
     pub AiBotAccountParam: AccountId = ALICE.into();
 
-    pub const PlayersPerMatchConst: u32 = 2;
+    pub const PlayersPerMatchConst: u8 = 2;
     pub const QueueCapacityConst: u32 = 1024;
 
     // Payout is 1000 whole tokens (adjust UNIT to your decimals)
     pub FaucetPayoutAmount: Balance = 1_000 * UNIT;
+
 }
 
 pub struct AiBotDifficulty;
@@ -306,6 +310,21 @@ impl pallet_eterra_tcg::Config for Runtime {
     type MaxAttempts = ConstU8<3>; // Set maximum attempts per card to 3
     type CardsPerPack = ConstU8<5>; // Set number of cards per pack to 5
     type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
+}
+
+impl pallet_eterra_simple_matchmaker::CurrentHandProvider<AccountId> for HandProviderAdapter {
+    fn has_current_hand(who: &AccountId) -> bool {
+        // Delegate to your game/cards pallet storage:
+        // Adjust the path to your pallet module and types.
+        pallet_eterra::CurrentHandOf::<Runtime>::contains_key(who)
+    }
+}
+
+impl pallet_eterra_simple_matchmaker::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type PlayersPerMatch = PlayersPerMatchConst;
+    type QueueCapacity = QueueCapacityConst;
+    type HandProvider = HandProviderAdapter; // uses the impl above
 }
 
 impl pallet_eterra_simple_tcg::Config for Runtime {
@@ -335,22 +354,6 @@ impl pallet_eterra_daily_slots::Config for Runtime {
     type Currency = Balances;
     type RewardPerWin = RewardPerWinAmount; // defined below
 }
-
-impl eterra_simple_matchmaker::Config for Runtime {
-    type RuntimeEvent = RuntimeEvent;
-    type PlayersPerMatch = PlayersPerMatchConst;
-    type QueueCapacity = QueueCapacityConst;
-    type HandProvider = (); // uses the impl above
-}
-
-impl eterra_simple_matchmaker::CurrentHandProvider<AccountId> for () {
-    fn has_current_hand(who: &AccountId) -> bool {
-        // Delegate to your game/cards pallet storage:
-        // Adjust the path to your pallet module and types.
-        eterra::CurrentHandOf::<Runtime>::contains_key(who)
-    }
-}
-
 
 pub struct RewardPerWinAmount;
 impl frame_support::traits::Get<Balance> for RewardPerWinAmount {

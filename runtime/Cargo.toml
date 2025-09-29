@@ -55,6 +55,7 @@ pallet-eterra                             = { workspace = true }
 pallet-eterra-tcg = { workspace = true }
 pallet-eterra-daily-slots = { workspace = true }
 pallet-eterra-simple-tcg = { workspace = true }
+pallet-eterra-simple-matchmaker = { workspace = true }
 pallet-eterra-faucet = { workspace = true }
 pallet-eterra-monte-carlo-ai = { workspace = true }
 eterra-card-ai-adapter = { path = "../crates/eterra-card-ai-adapter", default-features = false }
@@ -89,6 +90,7 @@ std = [
 	"pallet-transaction-payment/std",
 
   "pallet-eterra/std",
+   "pallet-eterra-simple-matchmaker/std",
 
 	"sp-api/std",
 	"sp-block-builder/std",
