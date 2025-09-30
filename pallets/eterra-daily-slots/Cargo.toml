@@ -27,6 +27,7 @@ sp-std             = { workspace = true }
 sp-runtime         = { workspace = true }
 
 [dev-dependencies]
+pallet-balances = { workspace = true, default-features = true, features = ["std"] }
 sp-core = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }

@@ -5210,6 +5210,7 @@ dependencies = [
  "log",
  "pallet-balances",
  "pallet-eterra-monte-carlo-ai",
+ "pallet-eterra-simple-matchmaker",
  "pallet-eterra-simple-tcg",
  "parity-scale-codec",
  "scale-info",
@@ -5227,6 +5228,7 @@ dependencies = [
  "frame-system",
  "hex",
  "log",
+ "pallet-balances",
  "pallet-timestamp",
  "parity-scale-codec",
  "rand 0.9.2",
@@ -5260,8 +5262,10 @@ dependencies = [
 name = "pallet-eterra-monte-carlo-ai"
 version = "0.1.0"
 dependencies = [
+ "eterra-card-ai-adapter",
  "frame-support",
  "frame-system",
+ "pallet-eterra",
  "parity-scale-codec",
  "scale-info",
  "sp-core",

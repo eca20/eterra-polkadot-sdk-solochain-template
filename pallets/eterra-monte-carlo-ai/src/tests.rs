@@ -99,13 +99,12 @@ fn nim_terminal_has_no_suggestion() {
 
 #[test]
 fn eterra_adapter_ai_returns_legal_move_and_applies() {
-    use eterra_card_ai_adapter::eterra_adapter::{Adapter, Hand, HandEntry, State};
-    use pallet_eterra as card;
+    use eterra_card_ai_adapter::eterra_adapter::{Adapter, Hand, HandEntry, State, Board};
 
     let mut ext = crate::mock::new_test_ext();
     ext.execute_with(|| {
         // Start from an empty 4x4 board and equal scores 5–5, like your game does.
-        let board: card::Board = Default::default();
+        let board: Board = Default::default();
 
         // Helper to build a hand entry
         let mk = |n, e, s, w| HandEntry {
@@ -158,12 +157,11 @@ fn eterra_adapter_ai_returns_legal_move_and_applies() {
 
 #[test]
 fn adapter_list_actions_respects_max_bound() {
-    use eterra_card_ai_adapter::eterra_adapter::{Hand, HandEntry, State};
-    use pallet_eterra as card;
+    use eterra_card_ai_adapter::eterra_adapter::{Hand, HandEntry, State, Board};
 
     let mut ext = crate::mock::new_test_ext();
     ext.execute_with(|| {
-        let board: card::Board = Default::default();
+        let board: Board = Default::default();
         let mk = |n, e, s, w| HandEntry { north: n, east: e, south: s, west: w, used: false };
         let base = mk(1,1,1,1);
         let hand0 = Hand { entries: core::array::from_fn(|_| base.clone()) };
@@ -185,14 +183,13 @@ fn adapter_list_actions_respects_max_bound() {
 
 #[test]
 fn ai_prefers_capture_when_available_high_difficulty() {
-    use eterra_card_ai_adapter::eterra_adapter::{Adapter, Hand, HandEntry, State};
-    use pallet_eterra as card;
+    use eterra_card_ai_adapter::eterra_adapter::{Adapter, Hand, HandEntry, State, Board, Card as ACard, Possession as Possession};
 
     let mut ext = crate::mock::new_test_ext();
     ext.execute_with(|| {
-        let mut board: card::Board = Default::default();
+        let mut board: Board = Default::default();
         // Place an opponent card at (1,1) with weak side facing left (so we can capture from (0,1))
-        let opp_card = card::Card { top: 3, right: 3, bottom: 3, left: 2, color: Some(card::Color::Red) };
+        let opp_card = ACard { top: 3, right: 3, bottom: 3, left: 2, possession: Some(eterra_card_ai_adapter::eterra_adapter::Possession::PlayerTwo) };
         board[1][1] = Some(opp_card);
 
         // Our hand has one strong-right card: right=5 beats opp.left(2) when we place at (0,1)
@@ -219,6 +216,6 @@ fn ai_prefers_capture_when_available_high_difficulty() {
 
         // After a correct capture from (0,1), our score should increase (6,4) and enemy card at (1,1) flips to Blue
         assert!(s1.scores.0 >= s0.scores.0, "our score should not decrease after capturing opportunity");
-        if let Some(c) = s1.board[1][1].clone() { assert_eq!(c.color, Some(card::Color::Blue)); }
+        if let Some(c) = s1.board[1][1].clone() { assert_eq!(c.possession, Some(eterra_card_ai_adapter::eterra_adapter::Possession::PlayerOne)); }
     });
 }

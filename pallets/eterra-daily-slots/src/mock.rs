@@ -6,14 +6,16 @@ use crate::Config;
 use frame_support::BoundedVec;
 use frame_support::{
     construct_runtime, parameter_types,
-    traits::{ConstU16, ConstU32, Everything, UnixTime},
+    traits::{ConstU16, ConstU32, ConstU128, Everything, UnixTime},
 };
 use frame_system as system;
+use pallet_balances as balances;
 use sp_core::H256;
 use sp_runtime::traits::{BlakeTwo256, IdentityLookup};
 use sp_runtime::BuildStorage;
 use std::cell::Cell;
 use std::time::Duration;
+use frame_system::RawOrigin;
 
 // =====================================================
 // 🕰️ Mock Time Provider
@@ -51,6 +53,7 @@ impl MockTimeState {
 construct_runtime!(
     pub enum Test {
         System: system,
+        Balances: pallet_balances,
         EterraDailySlots: pallet_eterra_daily_slots,
     }
 );
@@ -58,6 +61,15 @@ construct_runtime!(
 type UncheckedExtrinsic = system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = system::mocking::MockBlock<Test>;
 pub type TestRuntime = Test;
+
+// =====================================================
+// 💰 Balances setup
+// =====================================================
+pub type Balance = u128;
+
+parameter_types! {
+    pub const ExistentialDeposit: Balance = 1;
+}
 
 // =====================================================
 // ⚙ frame_system::Config for TestRuntime
@@ -83,7 +95,7 @@ impl system::Config for Test {
     type PalletInfo = PalletInfo; // missing
 
     // balances-like
-    type AccountData = ();
+    type AccountData = balances::AccountData<Balance>;
     type OnNewAccount = ();
     type OnKilledAccount = ();
 
@@ -106,6 +118,25 @@ impl system::Config for Test {
 }
 
 // =====================================================
+// ⚙ pallet_balances::Config for TestRuntime
+// =====================================================
+impl pallet_balances::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type Balance = Balance;
+    type DustRemoval = ();
+    type ExistentialDeposit = ExistentialDeposit;
+    type AccountStore = System;
+    type MaxLocks = ConstU32<50>;
+    type MaxReserves = ConstU32<50>;
+    type ReserveIdentifier = [u8; 8];
+    type WeightInfo = ();
+    type RuntimeHoldReason = ();
+    type FreezeIdentifier = ();
+    type MaxFreezes = ();
+    type RuntimeFreezeReason = ();
+}
+
+// =====================================================
 // ⚙ pallet_eterra_daily_slots::Config for TestRuntime
 // =====================================================
 parameter_types! {
@@ -124,6 +155,8 @@ impl pallet_eterra_daily_slots::Config for Test {
     type MaxRollsPerRound = MaxRollsPerRound;
     type MaxRollHistoryLength = MaxRollHistoryLength;
     type MaxWeightEntries = MaxWeightEntries;
+    type Currency = Balances;
+    type RewardPerWin = ConstU128<1_000>;
 }
 
 // =====================================================
@@ -144,6 +177,15 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
     ext.execute_with(|| {
         MockTimeState::set_now(90_000);
         frame_system::Pallet::<Test>::set_block_number(1);
+
+        // Seed some balances for test accounts
+        for who in 1u64..=10 {
+            let _ = balances::Pallet::<Test>::force_set_balance(
+                RuntimeOrigin::root(),
+                who,
+                1_000_000_000_000u128,
+            );
+        }
 
         // Clear storage
         let _ = crate::LastRollTime::<TestRuntime>::clear(u32::MAX, None);

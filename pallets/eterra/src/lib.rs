@@ -23,6 +23,8 @@ pub use types::game::*;
 use sp_std::vec::Vec;
 use frame_support::pallet_prelude::ConstU32;
 use frame_support::BoundedVec;
+use parity_scale_codec::Encode;
+
 use eterra_card_ai_adapter::eterra_adapter as ai;
 use pallet_eterra_monte_carlo_ai as mc_ai; // reserved for future use
 
@@ -662,6 +664,85 @@ pub mod pallet {
 
 // Helper methods
 impl<T: Config> Pallet<T> {
+
+    /// Create a PvP game between two accounts without a signed origin.
+    /// Intended to be called from the matchmaking pallet via the `GameCreator` trait.
+    fn do_create_pvp_game(
+        a: &AccountIdOf<T>,
+        b: &AccountIdOf<T>,
+    ) -> Result<GameId<T>, sp_runtime::DispatchError> {
+        use sp_runtime::traits::SaturatedConversion;
+
+        // Sanity checks
+        ensure!(a != b, Error::<T>::InvalidMove);
+        ensure!(T::NumPlayers::get() == 2, Error::<T>::InvalidNumberOfPlayers);
+
+        // Both players must have a preset/current hand (defense in depth; the matchmaker checks this too)
+        ensure!(CurrentHandOf::<T>::contains_key(a), Error::<T>::PresetHandMissing);
+        ensure!(CurrentHandOf::<T>::contains_key(b), Error::<T>::PresetHandMissing);
+
+        // Neither is currently in another game
+        ensure!(ActiveGameOf::<T>::get(a).is_none(), Error::<T>::PlayerAlreadyInGame);
+        ensure!(ActiveGameOf::<T>::get(b).is_none(), Error::<T>::PlayerAlreadyInGame);
+
+        // Create a deterministic game id from (a,b,block)
+        let current_block_number = <frame_system::Pallet<T>>::block_number();
+        let game_id = T::Hashing::hash_of(&(a.clone(), b.clone(), current_block_number));
+
+        // Collision check (extremely unlikely)
+        ensure!(!GameStorage::<T>::contains_key(&game_id), Error::<T>::GameNotFound);
+
+        // Build initial game struct
+        let initial_board: Board = Default::default();
+        let initial_scores = (5, 5);
+        let players_vec = sp_std::vec![a.clone(), b.clone()];
+
+        let mut game: Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> = Game {
+            state: GameState::Playing,
+            last_played_block: current_block_number,
+            players: players_vec
+                .clone()
+                .try_into()
+                .map_err(|_| Error::<T>::InternalError)?,
+            player_turn: 0,
+            round: 0,
+            max_rounds: T::MaxRounds::get(),
+            board: initial_board.clone(),
+            scores: initial_scores,
+        };
+
+        // Mark this as a PvP game and set active game markers
+        GameModes::<T>::insert(&game_id, GameMode::PvP);
+        ActiveGameOf::<T>::insert(a, game_id);
+        ActiveGameOf::<T>::insert(b, game_id);
+
+        // Push into recent lists for each player (most-recent first, bounded to 10)
+        let mut push_recent = |acct: &AccountIdOf<T>| {
+            PlayerGames::<T>::mutate(acct, |list| {
+                if let Some(pos) = list.iter().position(|g| *g == game_id) {
+                    list.remove(pos);
+                }
+                if list.len() as u32 >= <ConstU32<10> as sp_runtime::traits::Get<u32>>::get() {
+                    let _ = list.pop();
+                }
+                let mut tmp = list.to_vec();
+                tmp.insert(0, game_id);
+                *list = BoundedVec::try_from(tmp).expect("<= 10; qed");
+            });
+        };
+        push_recent(a);
+        push_recent(b);
+
+        // Randomize starting player using `a` as seed (keep behavior similar to create_game PvP)
+        game.set_player_turn(
+            if sp_io::hashing::blake2_128(&a.encode())[0] % 2 == 0 { 0 } else { 1 }
+        );
+
+        GameStorage::<T>::insert(&game_id, game.clone());
+        Self::deposit_event(Event::GameCreated { game_id });
+
+        Ok(game_id)
+    }
     fn map_card_to_ai(c: &Card) -> ai::Card {
         ai::Card {
             top: c.top,
@@ -1034,5 +1115,18 @@ impl<T: Config> Pallet<T> {
             // If the game wasn't found (should not happen), still emit the event
             Self::deposit_event(Event::GameFinished { game_id: *game_id, winner });
         }
+    }
+
+}
+
+// Expose GameCreator for the matchmaker pallet
+impl<T: Config> pallet_eterra_simple_matchmaker::GameCreator<AccountIdOf<T>> for Pallet<T> {
+    type GameId = GameId<T>;
+
+    fn create_from_matchmaking(
+        a: &AccountIdOf<T>,
+        b: &AccountIdOf<T>,
+    ) -> Result<GameId<T>, sp_runtime::DispatchError> {
+        Self::do_create_pvp_game(a, b)
     }
 }

@@ -325,6 +325,7 @@ impl pallet_eterra_simple_matchmaker::Config for Runtime {
     type PlayersPerMatch = PlayersPerMatchConst;
     type QueueCapacity = QueueCapacityConst;
     type HandProvider = HandProviderAdapter; // uses the impl above
+    type GameCreator     = pallet_eterra::Pallet<Runtime>;
 }
 
 impl pallet_eterra_simple_tcg::Config for Runtime {

@@ -14,6 +14,18 @@ pub trait CurrentHandProvider<AccountId> {
     fn has_current_hand(who: &AccountId) -> bool;
 }
 
+/// A callback interface the runtime/game pallet implements so the matchmaker
+/// can create a game the moment two players are matched.
+pub trait GameCreator<AccountId> {
+    /// The concrete GameId type of the game pallet.
+    type GameId;
+    /// Create a new game for the given players. Implemented in the game pallet.
+    fn create_from_matchmaking(
+        p1: &AccountId,
+        p2: &AccountId,
+    ) -> Result<Self::GameId, sp_runtime::DispatchError>;
+}
+
 #[cfg(test)]
 mod mock;
 
@@ -36,6 +48,8 @@ pub mod pallet {
         /// A runtime hook used to check whether a player has a preset hand.
         /// Implement this in the runtime by delegating to your game/cards pallet.
         type HandProvider: super::CurrentHandProvider<Self::AccountId>;
+        /// Hook to the game pallet that actually creates a game once two players are matched.
+        type GameCreator: super::GameCreator<Self::AccountId>;
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
     }
 
@@ -186,6 +200,8 @@ pub mod pallet {
                         break;
                     }
                 };
+                // Ask the game pallet to create a game for this pair. If it fails we still emit Matched.
+                let _ = T::GameCreator::create_from_matchmaking(&a, &b);
                 Self::deposit_event(Event::Matched { players: [a.clone(), b.clone()] });
             }
             Ok(())

@@ -12,6 +12,7 @@ use sp_core::H256;
 use sp_runtime::{
     traits::{BlakeTwo256, IdentityLookup},
     BuildStorage,
+    DispatchError,
 };
 
 // --- Base types for the mock runtime ---
@@ -88,11 +89,27 @@ pub fn clear_all_hands() {
     TL_HAND_SET.with(|s| s.borrow_mut().clear());
 }
 
+// --- Test-only GameCreator implementation for () ---
+impl pallet_matchmaker::GameCreator<AccountId> for () {
+    // Adjust the associated type and signature below to match the trait in your pallet.
+    // Using a dummy GameId of u32 for tests.
+    type GameId = u32;
+
+    fn create_from_matchmaking(
+        _a: &AccountId,
+        _b: &AccountId,
+    ) -> Result<Self::GameId, DispatchError> {
+        // In tests, we don't actually create a game. Return a fixed ID.
+        Ok(0)
+    }
+}
+
 impl pallet_matchmaker::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type PlayersPerMatch = PlayersPerMatchConst;
     type QueueCapacity = QueueCapacityConst;
     type HandProvider = MockHandProvider;
+    type GameCreator = ();
 }
 
 construct_runtime!(
