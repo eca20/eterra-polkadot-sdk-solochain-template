@@ -6,16 +6,16 @@ use crate::Config;
 use frame_support::BoundedVec;
 use frame_support::{
     construct_runtime, parameter_types,
-    traits::{ConstU16, ConstU32, ConstU128, Everything, UnixTime},
+    traits::{ConstU128, ConstU16, ConstU32, Everything, UnixTime},
 };
 use frame_system as system;
+use frame_system::RawOrigin;
 use pallet_balances as balances;
 use sp_core::H256;
 use sp_runtime::traits::{BlakeTwo256, IdentityLookup};
 use sp_runtime::BuildStorage;
 use std::cell::Cell;
 use std::time::Duration;
-use frame_system::RawOrigin;
 
 // =====================================================
 // 🕰️ Mock Time Provider

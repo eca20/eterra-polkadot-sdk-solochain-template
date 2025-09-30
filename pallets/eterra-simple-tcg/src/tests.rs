@@ -32,7 +32,10 @@ fn mint_card_charges_fee_and_mints() {
         assert_eq!(bob_after, bob_before - 100);
 
         // Event
-        System::assert_has_event(RuntimeEvent::EterraSimpleTCGConfig(TcgEvent::CardMinted { player: BOB, card_id }));
+        System::assert_has_event(RuntimeEvent::EterraSimpleTCGConfig(TcgEvent::CardMinted {
+            player: BOB,
+            card_id,
+        }));
     });
 }
 
@@ -44,16 +47,32 @@ fn set_and_remove_price_updates_storage_and_events() {
         let id = EterraSimpleTCGConfig::owned_cards(BOB)[0];
 
         // List for sale
-        assert_ok!(EterraSimpleTCGConfig::set_price(RuntimeOrigin::signed(BOB), id, 500));
+        assert_ok!(EterraSimpleTCGConfig::set_price(
+            RuntimeOrigin::signed(BOB),
+            id,
+            500
+        ));
         assert_eq!(EterraSimpleTCGConfig::card_prices(id), Some(500));
         assert!(EterraSimpleTCGConfig::listed_by_owner(BOB).contains(&id));
-        System::assert_has_event(RuntimeEvent::EterraSimpleTCGConfig(TcgEvent::CardListed { owner: BOB, card_id: id, price: 500 }));
+        System::assert_has_event(RuntimeEvent::EterraSimpleTCGConfig(TcgEvent::CardListed {
+            owner: BOB,
+            card_id: id,
+            price: 500,
+        }));
 
         // Unlist
-        assert_ok!(EterraSimpleTCGConfig::remove_price(RuntimeOrigin::signed(BOB), id));
+        assert_ok!(EterraSimpleTCGConfig::remove_price(
+            RuntimeOrigin::signed(BOB),
+            id
+        ));
         assert_eq!(EterraSimpleTCGConfig::card_prices(id), None);
         assert!(!EterraSimpleTCGConfig::listed_by_owner(BOB).contains(&id));
-        System::assert_has_event(RuntimeEvent::EterraSimpleTCGConfig(TcgEvent::CardUnlisted { owner: BOB, card_id: id }));
+        System::assert_has_event(RuntimeEvent::EterraSimpleTCGConfig(
+            TcgEvent::CardUnlisted {
+                owner: BOB,
+                card_id: id,
+            },
+        ));
     });
 }
 
@@ -64,11 +83,19 @@ fn transfer_card_auto_unlists() {
         // Bob mints and lists
         assert_ok!(EterraSimpleTCGConfig::mint_card(RuntimeOrigin::signed(BOB)));
         let id = EterraSimpleTCGConfig::owned_cards(BOB)[0];
-        assert_ok!(EterraSimpleTCGConfig::set_price(RuntimeOrigin::signed(BOB), id, 777));
+        assert_ok!(EterraSimpleTCGConfig::set_price(
+            RuntimeOrigin::signed(BOB),
+            id,
+            777
+        ));
         assert!(EterraSimpleTCGConfig::card_prices(id).is_some());
 
         // Transfer to Alice; should unlist
-        assert_ok!(EterraSimpleTCGConfig::transfer_card(RuntimeOrigin::signed(BOB), id, ALICE));
+        assert_ok!(EterraSimpleTCGConfig::transfer_card(
+            RuntimeOrigin::signed(BOB),
+            id,
+            ALICE
+        ));
         let card = EterraSimpleTCGConfig::cards(id).unwrap();
         assert_eq!(card.owner, ALICE);
         assert!(EterraSimpleTCGConfig::owned_cards(ALICE).contains(&id));
@@ -86,15 +113,24 @@ fn buy_card_transfers_funds_and_ownership_then_unlists() {
         System::set_block_number(1);
 
         // Seller Alice mints, lists at 200
-        assert_ok!(EterraSimpleTCGConfig::mint_card(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(EterraSimpleTCGConfig::mint_card(RuntimeOrigin::signed(
+            ALICE
+        )));
         let id = EterraSimpleTCGConfig::owned_cards(ALICE)[0];
-        assert_ok!(EterraSimpleTCGConfig::set_price(RuntimeOrigin::signed(ALICE), id, 200));
+        assert_ok!(EterraSimpleTCGConfig::set_price(
+            RuntimeOrigin::signed(ALICE),
+            id,
+            200
+        ));
 
         let alice_before = Balances::free_balance(ALICE);
         let bob_before = Balances::free_balance(BOB);
 
         // Bob buys
-        assert_ok!(EterraSimpleTCGConfig::buy_card(RuntimeOrigin::signed(BOB), id));
+        assert_ok!(EterraSimpleTCGConfig::buy_card(
+            RuntimeOrigin::signed(BOB),
+            id
+        ));
 
         // Ownership moved to Bob
         let card = EterraSimpleTCGConfig::cards(id).unwrap();
@@ -113,7 +149,12 @@ fn buy_card_transfers_funds_and_ownership_then_unlists() {
         assert_eq!(bob_after, bob_before - 200);
 
         // Event emitted
-        System::assert_has_event(RuntimeEvent::EterraSimpleTCGConfig(TcgEvent::CardBought { buyer: BOB, seller: ALICE, card_id: id, price: 200 }));
+        System::assert_has_event(RuntimeEvent::EterraSimpleTCGConfig(TcgEvent::CardBought {
+            buyer: BOB,
+            seller: ALICE,
+            card_id: id,
+            price: 200,
+        }));
     });
 }
 
@@ -121,8 +162,13 @@ fn buy_card_transfers_funds_and_ownership_then_unlists() {
 fn buy_card_fails_if_not_listed() {
     new_test_ext().execute_with(|| {
         System::set_block_number(1);
-        assert_ok!(EterraSimpleTCGConfig::mint_card(RuntimeOrigin::signed(ALICE)));
+        assert_ok!(EterraSimpleTCGConfig::mint_card(RuntimeOrigin::signed(
+            ALICE
+        )));
         let id = EterraSimpleTCGConfig::owned_cards(ALICE)[0];
-        assert_noop!(EterraSimpleTCGConfig::buy_card(RuntimeOrigin::signed(BOB), id), Error::<Test>::NotForSale);
+        assert_noop!(
+            EterraSimpleTCGConfig::buy_card(RuntimeOrigin::signed(BOB), id),
+            Error::<Test>::NotForSale
+        );
     });
 }

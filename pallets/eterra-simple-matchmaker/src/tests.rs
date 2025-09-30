@@ -4,11 +4,12 @@
 use super::*;
 
 use frame_support::{assert_noop, assert_ok, traits::OnFinalize};
-use sp_runtime::DispatchError;
 use frame_system::pallet_prelude::BlockNumberFor;
+use sp_runtime::DispatchError;
 
 use crate::mock::{
-    new_test_ext, RuntimeEvent, RuntimeOrigin as SystemOrigin, Test, Matchmaker, set_has_hand, clear_all_hands, created_games
+    clear_all_hands, created_games, new_test_ext, set_has_hand, Matchmaker, RuntimeEvent,
+    RuntimeOrigin as SystemOrigin, Test,
 };
 
 fn last_event() -> RuntimeEvent {
@@ -42,7 +43,11 @@ fn join_queue_emits_event_and_persists() {
         let ev = last_event();
         if let RuntimeEvent::Matchmaker(inner) = ev {
             let s = format!("{:?}", inner);
-            assert!(s.contains("Queue") || s.contains("Join") || s.contains("Queued"), "unexpected matchmaker event: {:?}", inner);
+            assert!(
+                s.contains("Queue") || s.contains("Join") || s.contains("Queued"),
+                "unexpected matchmaker event: {:?}",
+                inner
+            );
         } else {
             panic!("unexpected event section: {:?}", ev);
         }
@@ -90,7 +95,11 @@ fn leave_queue_works_and_emits() {
         let ev = last_event();
         if let RuntimeEvent::Matchmaker(inner) = ev {
             let s = format!("{:?}", inner);
-            assert!(s.contains("Left") || s.contains("Pop"), "unexpected matchmaker event: {:?}", inner);
+            assert!(
+                s.contains("Left") || s.contains("Pop"),
+                "unexpected matchmaker event: {:?}",
+                inner
+            );
         } else {
             panic!("unexpected event section: {:?}", ev);
         }
@@ -161,14 +170,15 @@ fn try_match_forms_two_and_removes_from_head_fifo() {
 
         // Expect MatchFormed or Matched with [1,2]
         let evs = take_events();
-        let formed = evs.into_iter().find_map(|ev| {
-            match ev {
+        let formed = evs
+            .into_iter()
+            .find_map(|ev| match ev {
                 RuntimeEvent::Matchmaker(Event::<Test>::MatchFormed { players })
                 | RuntimeEvent::Matchmaker(Event::<Test>::Matched { players }) => Some(players),
                 _ => None,
-            }
-        }).expect("match event expected");
-        assert_eq!(formed, vec![1,2]);
+            })
+            .expect("match event expected");
+        assert_eq!(formed, vec![1, 2]);
     });
 }
 
@@ -184,24 +194,26 @@ fn multiple_try_match_calls_form_multiple_pairs_in_fifo_order() {
 
         assert_ok!(Matchmaker::try_match(SystemOrigin::signed(7)));
         // First formed: 1,2
-        let first_pair = filter_matchmaker(&take_events()).into_iter().find_map(|ev| {
-            match ev {
+        let first_pair = filter_matchmaker(&take_events())
+            .into_iter()
+            .find_map(|ev| match ev {
                 RuntimeEvent::Matchmaker(Event::<Test>::MatchFormed { players })
                 | RuntimeEvent::Matchmaker(Event::<Test>::Matched { players }) => Some(players),
                 _ => None,
-            }
-        }).expect("first MatchFormed");
-        assert_eq!(first_pair, vec![1,2]);
+            })
+            .expect("first MatchFormed");
+        assert_eq!(first_pair, vec![1, 2]);
 
         assert_ok!(Matchmaker::try_match(SystemOrigin::signed(7)));
-        let second_pair = filter_matchmaker(&take_events()).into_iter().find_map(|ev| {
-            match ev {
+        let second_pair = filter_matchmaker(&take_events())
+            .into_iter()
+            .find_map(|ev| match ev {
                 RuntimeEvent::Matchmaker(Event::<Test>::MatchFormed { players })
                 | RuntimeEvent::Matchmaker(Event::<Test>::Matched { players }) => Some(players),
                 _ => None,
-            }
-        }).expect("second MatchFormed");
-        assert_eq!(second_pair, vec![3,4]);
+            })
+            .expect("second MatchFormed");
+        assert_eq!(second_pair, vec![3, 4]);
     });
 }
 
@@ -219,14 +231,15 @@ fn leaving_middle_preserves_order() {
         // match -> should pair (1,3), leaving [4]
         assert_ok!(Matchmaker::try_match(SystemOrigin::signed(99)));
 
-        let formed = filter_matchmaker(&take_events()).into_iter().find_map(|ev| {
-            match ev {
+        let formed = filter_matchmaker(&take_events())
+            .into_iter()
+            .find_map(|ev| match ev {
                 RuntimeEvent::Matchmaker(Event::<Test>::MatchFormed { players })
                 | RuntimeEvent::Matchmaker(Event::<Test>::Matched { players }) => Some(players),
                 _ => None,
-            }
-        }).expect("MatchFormed");
-        assert_eq!(formed, vec![1,3]);
+            })
+            .expect("MatchFormed");
+        assert_eq!(formed, vec![1, 3]);
     });
 }
 
@@ -275,9 +288,8 @@ fn finalize_blocks_does_not_break_queue() {
         }
         // Simulate two blocks
         frame_system::Pallet::<Test>::set_block_number(1);
-        <Matchmaker as frame_support::traits::Hooks<BlockNumberFor<Test>>>::on_finalize(1); 
+        <Matchmaker as frame_support::traits::Hooks<BlockNumberFor<Test>>>::on_finalize(1);
         frame_system::Pallet::<Test>::set_block_number(2);
         <Matchmaker as frame_support::traits::Hooks<BlockNumberFor<Test>>>::on_finalize(2);
-
-});
+    });
 }

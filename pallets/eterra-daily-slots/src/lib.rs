@@ -2,7 +2,10 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use frame_support::{pallet_prelude::*, traits::{UnixTime, Currency}};
+use frame_support::{
+    pallet_prelude::*,
+    traits::{Currency, UnixTime},
+};
 use frame_system::pallet_prelude::*;
 use sp_runtime::traits::Hash;
 use sp_std::vec;
@@ -10,7 +13,7 @@ use sp_std::vec::Vec;
 
 use log::info;
 
-type BalanceOf<T> = 
+type BalanceOf<T> =
     <<T as pallet::Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 
 const SECONDS_PER_DAY: u64 = 86_400;
@@ -180,7 +183,8 @@ pub mod pallet {
 
             // ─── ROLL CAP: 3 spins per ~6 hours (block-number based) ────────
             // We assume ~6s per block; 6 hours ≈ 3600 blocks.
-            let bn_u64: u64 = TryInto::<u64>::try_into(frame_system::Pallet::<T>::block_number()).unwrap_or(0);
+            let bn_u64: u64 =
+                TryInto::<u64>::try_into(frame_system::Pallet::<T>::block_number()).unwrap_or(0);
             let window_index = bn_u64 / BLOCKS_PER_WINDOW;
             let (stored_win, used) = Self::rolls_this_window_for(&who);
             let used = if stored_win == window_index { used } else { 0 };
@@ -254,7 +258,10 @@ pub mod pallet {
                 let amt = T::RewardPerWin::get();
                 // Mint to the winner (inflationary faucet-style)
                 T::Currency::deposit_creating(&who, amt);
-                Self::deposit_event(Event::WinRewarded { player: who.clone(), amount: amt });
+                Self::deposit_event(Event::WinRewarded {
+                    player: who.clone(),
+                    amount: amt,
+                });
             }
 
             Self::deposit_event(Event::SlotRolled {
@@ -369,7 +376,9 @@ pub mod pallet {
 
         /// A simple win condition: all symbols in the spin are identical (e.g., 7-7-7)
         fn is_win(result: &[u32]) -> bool {
-            if result.is_empty() { return false; }
+            if result.is_empty() {
+                return false;
+            }
             let first = result[0];
             result.iter().all(|&x| x == first)
         }

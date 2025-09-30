@@ -1,5 +1,5 @@
 use crate::types::board::Board;
-use crate::types::card::{Card};
+use crate::types::card::Card;
 use frame_support::BoundedVec;
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen}; // For Encode, Decode, MaxEncodedLen
 use scale_info::TypeInfo; // For TypeInfo
@@ -41,7 +41,7 @@ where
     pub round: u8,                             // Current round number
     pub max_rounds: u8,                        // Maximum number of rounds
     pub board: Board,
-    pub scores: (u8, u8),              // Scores for each player
+    pub scores: (u8, u8), // Scores for each player
 }
 
 impl<Account, BlockNumber, NumPlayers> GameProperties<Account, NumPlayers>

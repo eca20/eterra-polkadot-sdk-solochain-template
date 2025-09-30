@@ -12,27 +12,27 @@ mod types;
 
 pub use crate::types::GameId;
 use frame_support::ensure;
-use frame_support::traits::Get;
-use frame_system::pallet_prelude::BlockNumberFor;
-use sp_runtime::traits::SaturatedConversion;
-use sp_runtime::traits::Hash;
-pub use types::board::Board;
-pub use types::card::Possession as Player; // PlayerOne / PlayerTwo
-pub use types::card::Card;
-pub use types::game::*;
-use sp_std::vec::Vec;
 use frame_support::pallet_prelude::ConstU32;
+use frame_support::traits::Get;
 use frame_support::BoundedVec;
+use frame_system::pallet_prelude::BlockNumberFor;
 use parity_scale_codec::Encode;
+use sp_runtime::traits::Hash;
+use sp_runtime::traits::SaturatedConversion;
+use sp_std::vec::Vec;
+pub use types::board::Board;
+pub use types::card::Card;
+pub use types::card::Possession as Player; // PlayerOne / PlayerTwo
+pub use types::game::*;
 
 use eterra_card_ai_adapter::eterra_adapter as ai;
 use pallet_eterra_monte_carlo_ai as mc_ai; // reserved for future use
 
 #[frame_support::pallet]
 pub mod pallet {
-    use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
     use frame_support::pallet_prelude::ConstU32;
     use frame_support::BoundedVec;
+    use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
     use frame_system::pallet_prelude::*;
     use sp_runtime::traits::Hash;
     use sp_runtime::Saturating;
@@ -41,16 +41,16 @@ pub mod pallet {
     pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
 
     use crate::types::board::Board;
+    use crate::types::card::Card;
     use crate::types::card::Possession as Player;
+    use crate::types::game::Move;
     use crate::types::game::*;
     use crate::types::GameId;
-    use crate::types::card::Card;
-    use crate::types::game::Move;
     // Alias the simple TCG pallet so we can read card ownership & stats
-    use pallet_eterra_simple_tcg as cards;
     use eterra_card_ai_adapter::eterra_adapter as ai;
-    use pallet_eterra_monte_carlo_ai as mc_ai; // reserved for future use
-    
+    use pallet_eterra_monte_carlo_ai as mc_ai;
+    use pallet_eterra_simple_tcg as cards; // reserved for future use
+
     #[pallet::pallet]
     pub struct Pallet<T>(_);
 
@@ -83,16 +83,21 @@ pub mod pallet {
     >;
 
     #[derive(Encode, Decode, Clone, PartialEq, Eq, TypeInfo, MaxEncodedLen, Debug)]
-    pub enum GameMode { PvP, PvE }
+    pub enum GameMode {
+        PvP,
+        PvE,
+    }
 
     #[pallet::storage]
     #[pallet::getter(fn game_mode_of)]
-    pub type GameModes<T: Config> = StorageMap<_, Blake2_128Concat, GameId<T>, GameMode, OptionQuery>;
+    pub type GameModes<T: Config> =
+        StorageMap<_, Blake2_128Concat, GameId<T>, GameMode, OptionQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn active_game_of)]
     /// Tracks if an account is currently in an active game. A player may have at most one.
-    pub type ActiveGameOf<T: Config> = StorageMap<_, Blake2_128Concat, AccountIdOf<T>, GameId<T>, OptionQuery>;
+    pub type ActiveGameOf<T: Config> =
+        StorageMap<_, Blake2_128Concat, AccountIdOf<T>, GameId<T>, OptionQuery>;
 
     /// Recent games for each player (most-recent first, bounded).
     #[pallet::storage]
@@ -102,7 +107,7 @@ pub mod pallet {
         Blake2_128Concat,
         AccountIdOf<T>,
         BoundedVec<GameId<T>, ConstU32<10>>, // keep last 10
-        ValueQuery
+        ValueQuery,
     >;
 
     #[pallet::event]
@@ -181,10 +186,12 @@ pub mod pallet {
     #[pallet::getter(fn game_hands)]
     pub type HandsOfGame<T: Config> = StorageDoubleMap<
         _,
-        Blake2_128Concat, GameId<T>,
-        Blake2_128Concat, AccountIdOf<T>,
+        Blake2_128Concat,
+        GameId<T>,
+        Blake2_128Concat,
+        AccountIdOf<T>,
         BoundedVec<HandEntry, HandLimit>,
-        OptionQuery
+        OptionQuery,
     >;
 
     /// The player's current hand configuration (card IDs only). This is editable by the user in the UI.
@@ -195,7 +202,7 @@ pub mod pallet {
         Blake2_128Concat,
         AccountIdOf<T>,
         BoundedVec<u32, HandLimit>, // exactly HandLimit entries expected by the UI flow
-        OptionQuery
+        OptionQuery,
     >;
 
     #[pallet::call]
@@ -210,7 +217,10 @@ pub mod pallet {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
 
             // Require the creator to have a current hand before starting a game
-            ensure!(CurrentHandOf::<T>::contains_key(&who), Error::<T>::PresetHandMissing);
+            ensure!(
+                CurrentHandOf::<T>::contains_key(&who),
+                Error::<T>::PresetHandMissing
+            );
 
             // Normalize players vector depending on mode
             match game_mode {
@@ -219,9 +229,9 @@ pub mod pallet {
                     ensure!(players.contains(&who), Error::<T>::CreatorMustBeInGame);
                     ensure!(
                         players.len()
-                            == <u32 as sp_runtime::traits::SaturatedConversion>::saturated_into::<usize>(
-                                T::NumPlayers::get()
-                            ),
+                            == <u32 as sp_runtime::traits::SaturatedConversion>::saturated_into::<
+                                usize,
+                            >(T::NumPlayers::get()),
                         Error::<T>::InvalidNumberOfPlayers
                     );
                     // Ensure distinct players; also normalize order to [creator, opponent]
@@ -265,17 +275,27 @@ pub mod pallet {
             // Enforce: a wallet may participate in at most one active game, scoped by mode.
             match game_mode {
                 GameMode::PvP => {
-                    ensure!(ActiveGameOf::<T>::get(&creator).is_none(), Error::<T>::PlayerAlreadyInGame);
-                    ensure!(ActiveGameOf::<T>::get(&opponent).is_none(), Error::<T>::PlayerAlreadyInGame);
+                    ensure!(
+                        ActiveGameOf::<T>::get(&creator).is_none(),
+                        Error::<T>::PlayerAlreadyInGame
+                    );
+                    ensure!(
+                        ActiveGameOf::<T>::get(&opponent).is_none(),
+                        Error::<T>::PlayerAlreadyInGame
+                    );
                 }
                 GameMode::PvE => {
                     // Only the human creator is restricted in PvE; the AI may participate in many games.
-                    ensure!(ActiveGameOf::<T>::get(&creator).is_none(), Error::<T>::PlayerAlreadyInGame);
+                    ensure!(
+                        ActiveGameOf::<T>::get(&creator).is_none(),
+                        Error::<T>::PlayerAlreadyInGame
+                    );
                 }
             }
 
             let current_block_number = <frame_system::Pallet<T>>::block_number();
-            let game_id = T::Hashing::hash_of(&(creator.clone(), opponent.clone(), current_block_number));
+            let game_id =
+                T::Hashing::hash_of(&(creator.clone(), opponent.clone(), current_block_number));
 
             // Ensure the game_id isn’t already in use (collision check)
             ensure!(
@@ -349,7 +369,11 @@ pub mod pallet {
             } else {
                 // PvP: randomize starting player based on creator hash
                 game.set_player_turn(
-                    if sp_io::hashing::blake2_128(&creator.encode())[0] % 2 == 0 { 0 } else { 1 }
+                    if sp_io::hashing::blake2_128(&creator.encode())[0] % 2 == 0 {
+                        0
+                    } else {
+                        1
+                    },
                 );
             }
 
@@ -378,10 +402,8 @@ pub mod pallet {
             // Determine the current player's index (0 or 1)
             let player_ix = Self::get_current_player_index(&game, &who);
 
-
             // Place the card on the board
             Self::place_card_on_board(&mut game, &player_move, player_ix);
-
 
             // Capture logic
             Self::apply_capture_logic(&mut game, &player_move, player_ix);
@@ -447,7 +469,11 @@ pub mod pallet {
         /// The `card_ids` argument is ignored and exists for ABI compatibility only.
         #[pallet::call_index(2)]
         #[pallet::weight(10_000)]
-        pub fn submit_hand(origin: OriginFor<T>, game_id: GameId<T>, card_ids: Vec<u32>) -> DispatchResult {
+        pub fn submit_hand(
+            origin: OriginFor<T>,
+            game_id: GameId<T>,
+            card_ids: Vec<u32>,
+        ) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
 
             // Ensure the game exists and the caller is a player in it
@@ -455,30 +481,51 @@ pub mod pallet {
             ensure!(game.players.contains(&who), Error::<T>::PlayerNotInGame);
 
             // Prevent resubmission for this game
-            ensure!(HandsOfGame::<T>::get(&game_id, &who).is_none(), Error::<T>::HandAlreadySubmitted);
+            ensure!(
+                HandsOfGame::<T>::get(&game_id, &who).is_none(),
+                Error::<T>::HandAlreadySubmitted
+            );
 
             // Load the caller's current hand configuration and snapshot it into the game
             let current_ids = CurrentHandOf::<T>::get(&who).ok_or(Error::<T>::PresetHandMissing)?;
-            ensure!(current_ids.len() as u32 == T::HandSize::get(), Error::<T>::HandSizeInvalid);
+            ensure!(
+                current_ids.len() as u32 == T::HandSize::get(),
+                Error::<T>::HandSizeInvalid
+            );
 
             // Validate uniqueness (defense in depth)
             for i in 0..current_ids.len() {
                 for j in (i + 1)..current_ids.len() {
-                    ensure!(current_ids[i] != current_ids[j], Error::<T>::DuplicateCardInHand);
+                    ensure!(
+                        current_ids[i] != current_ids[j],
+                        Error::<T>::DuplicateCardInHand
+                    );
                 }
             }
 
             // Build hand entries from the cards pallet; validate ownership & existence
             let mut hand: BoundedVec<HandEntry, HandLimit> = BoundedVec::default();
             for &card_id in current_ids.iter() {
-                let info = cards::pallet::Cards::<T>::get(card_id).ok_or(Error::<T>::CardDoesNotExist)?;
+                let info =
+                    cards::pallet::Cards::<T>::get(card_id).ok_or(Error::<T>::CardDoesNotExist)?;
                 ensure!(info.owner == who, Error::<T>::CardNotOwned);
-                let entry = HandEntry { card_id, north: info.north, east: info.east, south: info.south, west: info.west, used: false };
-                hand.try_push(entry).map_err(|_| Error::<T>::HandSizeInvalid)?;
+                let entry = HandEntry {
+                    card_id,
+                    north: info.north,
+                    east: info.east,
+                    south: info.south,
+                    west: info.west,
+                    used: false,
+                };
+                hand.try_push(entry)
+                    .map_err(|_| Error::<T>::HandSizeInvalid)?;
             }
 
             HandsOfGame::<T>::insert(&game_id, &who, hand);
-            Self::deposit_event(Event::HandSubmitted { game_id, player: who.clone() });
+            Self::deposit_event(Event::HandSubmitted {
+                game_id,
+                player: who.clone(),
+            });
 
             // PvE: submitting player is always the human. Generate AI hand right away,
             // and if it's AI's turn (e.g., AI won first move), let it act immediately.
@@ -515,10 +562,14 @@ pub mod pallet {
             // Validate it's the caller's turn and the target cell is open
             Self::validate_player_turn(&game, &who)?;
             ensure!(x < 4 && y < 4, Error::<T>::InvalidMove);
-            ensure!(game.board[x as usize][y as usize].is_none(), Error::<T>::CellOccupied);
+            ensure!(
+                game.board[x as usize][y as usize].is_none(),
+                Error::<T>::CellOccupied
+            );
 
             // Get caller's hand
-            let mut hand = HandsOfGame::<T>::get(&game_id, &who).ok_or(Error::<T>::HandNotSubmitted)?;
+            let mut hand =
+                HandsOfGame::<T>::get(&game_id, &who).ok_or(Error::<T>::HandNotSubmitted)?;
             let idx = hand_index as usize;
             ensure!(idx < hand.len(), Error::<T>::HandIndexOutOfRange);
             ensure!(!hand[idx].used, Error::<T>::CardAlreadyUsed);
@@ -526,8 +577,18 @@ pub mod pallet {
             // Build the placed card from the saved stats
             let player_ix = Self::get_current_player_index(&game, &who);
             let h = hand[idx].clone();
-            let placed = Card { top: h.north, right: h.east, bottom: h.south, left: h.west, possession: None };
-            let mv = Move { place_card: placed, place_index_x: x, place_index_y: y };
+            let placed = Card {
+                top: h.north,
+                right: h.east,
+                bottom: h.south,
+                left: h.west,
+                possession: None,
+            };
+            let mv = Move {
+                place_card: placed,
+                place_index_x: x,
+                place_index_y: y,
+            };
 
             // Place the card and resolve capture logic (mirrors `play`)
             Self::place_card_on_board(&mut game, &mv, player_ix);
@@ -544,17 +605,24 @@ pub mod pallet {
 
             // Emit events and save game
             let next_player = game.players[game.get_player_turn() as usize].clone();
-            Self::deposit_event(Event::NewTurn { game_id, next_player });
+            Self::deposit_event(Event::NewTurn {
+                game_id,
+                next_player,
+            });
             GameStorage::<T>::insert(&game_id, game.clone());
 
-            Self::deposit_event(Event::MovePlayed { game_id, player: who, x, y });
+            Self::deposit_event(Event::MovePlayed {
+                game_id,
+                player: who,
+                x,
+                y,
+            });
 
             // Check for win condition after saving
             if let Some(winner) = Self::is_game_won(&game_id, &game) {
                 Self::end_game(&game_id, winner);
                 return Ok(());
             }
-
 
             // If this is a PvE game and it's now the AI's turn, let the AI act immediately.
             if matches!(GameModes::<T>::get(&game_id), Some(GameMode::PvE)) {
@@ -588,7 +656,10 @@ pub mod pallet {
             let current_block = <frame_system::Pallet<T>>::block_number();
             let limit: BlockNumberFor<T> = T::BlocksToPlayLimit::get().into();
             let deadline = game.last_played_block.saturating_add(limit);
-            ensure!(current_block >= deadline, Error::<T>::BlocksToPlayLimitNotPassed);
+            ensure!(
+                current_block >= deadline,
+                Error::<T>::BlocksToPlayLimitNotPassed
+            );
 
             // Force finish the current turn
             game.next_turn();
@@ -617,7 +688,10 @@ pub mod pallet {
                 game_id,
                 player: current_player,
             });
-            Self::deposit_event(Event::NewTurn { game_id, next_player });
+            Self::deposit_event(Event::NewTurn {
+                game_id,
+                next_player,
+            });
 
             Ok(())
         }
@@ -630,7 +704,10 @@ pub mod pallet {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
 
             // Enforce exact hand size and uniqueness
-            ensure!(card_ids.len() as u32 == T::HandSize::get(), Error::<T>::HandSizeInvalid);
+            ensure!(
+                card_ids.len() as u32 == T::HandSize::get(),
+                Error::<T>::HandSizeInvalid
+            );
             for i in 0..card_ids.len() {
                 for j in (i + 1)..card_ids.len() {
                     ensure!(card_ids[i] != card_ids[j], Error::<T>::DuplicateCardInHand);
@@ -639,7 +716,8 @@ pub mod pallet {
 
             // Validate ownership and that each card exists
             for &card_id in &card_ids {
-                let info = cards::pallet::Cards::<T>::get(card_id).ok_or(Error::<T>::CardDoesNotExist)?;
+                let info =
+                    cards::pallet::Cards::<T>::get(card_id).ok_or(Error::<T>::CardDoesNotExist)?;
                 ensure!(info.owner == who, Error::<T>::CardNotOwned);
             }
 
@@ -664,7 +742,6 @@ pub mod pallet {
 
 // Helper methods
 impl<T: Config> Pallet<T> {
-
     /// Create a PvP game between two accounts without a signed origin.
     /// Intended to be called from the matchmaking pallet via the `GameCreator` trait.
     fn do_create_pvp_game(
@@ -675,22 +752,40 @@ impl<T: Config> Pallet<T> {
 
         // Sanity checks
         ensure!(a != b, Error::<T>::InvalidMove);
-        ensure!(T::NumPlayers::get() == 2, Error::<T>::InvalidNumberOfPlayers);
+        ensure!(
+            T::NumPlayers::get() == 2,
+            Error::<T>::InvalidNumberOfPlayers
+        );
 
         // Both players must have a preset/current hand (defense in depth; the matchmaker checks this too)
-        ensure!(CurrentHandOf::<T>::contains_key(a), Error::<T>::PresetHandMissing);
-        ensure!(CurrentHandOf::<T>::contains_key(b), Error::<T>::PresetHandMissing);
+        ensure!(
+            CurrentHandOf::<T>::contains_key(a),
+            Error::<T>::PresetHandMissing
+        );
+        ensure!(
+            CurrentHandOf::<T>::contains_key(b),
+            Error::<T>::PresetHandMissing
+        );
 
         // Neither is currently in another game
-        ensure!(ActiveGameOf::<T>::get(a).is_none(), Error::<T>::PlayerAlreadyInGame);
-        ensure!(ActiveGameOf::<T>::get(b).is_none(), Error::<T>::PlayerAlreadyInGame);
+        ensure!(
+            ActiveGameOf::<T>::get(a).is_none(),
+            Error::<T>::PlayerAlreadyInGame
+        );
+        ensure!(
+            ActiveGameOf::<T>::get(b).is_none(),
+            Error::<T>::PlayerAlreadyInGame
+        );
 
         // Create a deterministic game id from (a,b,block)
         let current_block_number = <frame_system::Pallet<T>>::block_number();
         let game_id = T::Hashing::hash_of(&(a.clone(), b.clone(), current_block_number));
 
         // Collision check (extremely unlikely)
-        ensure!(!GameStorage::<T>::contains_key(&game_id), Error::<T>::GameNotFound);
+        ensure!(
+            !GameStorage::<T>::contains_key(&game_id),
+            Error::<T>::GameNotFound
+        );
 
         // Build initial game struct
         let initial_board: Board = Default::default();
@@ -734,9 +829,11 @@ impl<T: Config> Pallet<T> {
         push_recent(b);
 
         // Randomize starting player using `a` as seed (keep behavior similar to create_game PvP)
-        game.set_player_turn(
-            if sp_io::hashing::blake2_128(&a.encode())[0] % 2 == 0 { 0 } else { 1 }
-        );
+        game.set_player_turn(if sp_io::hashing::blake2_128(&a.encode())[0] % 2 == 0 {
+            0
+        } else {
+            1
+        });
 
         GameStorage::<T>::insert(&game_id, game.clone());
         Self::deposit_event(Event::GameCreated { game_id });
@@ -761,13 +858,20 @@ impl<T: Config> Pallet<T> {
         game: &mut Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
     ) {
         // Only PvE
-        if !matches!(GameModes::<T>::get(game_id), Some(GameMode::PvE)) { return; }
+        if !matches!(GameModes::<T>::get(game_id), Some(GameMode::PvE)) {
+            return;
+        }
         let ai_acc = T::AiAccount::get();
         let turn_acc = game.players[game.get_player_turn() as usize].clone();
-        if turn_acc != ai_acc { return; }
+        if turn_acc != ai_acc {
+            return;
+        }
 
         // Build AI adapter state from on-chain state
-        let state = match Self::build_ai_state(game_id, game) { Some(s) => s, None => return };
+        let state = match Self::build_ai_state(game_id, game) {
+            Some(s) => s,
+            None => return,
+        };
         let diff = T::AiDifficulty::get();
 
         if let Some(action) = mc_ai::pallet::Pallet::<T>::suggest::<ai::Adapter>(&state, diff) {
@@ -786,8 +890,18 @@ impl<T: Config> Pallet<T> {
                             if let Some(cell) = col.get(yi) {
                                 if cell.is_none() {
                                     let h = slot.clone();
-                                    let placed = Card { top: h.north, right: h.east, bottom: h.south, left: h.west, possession: None };
-                                    let mv = Move { place_card: placed, place_index_x: x, place_index_y: y };
+                                    let placed = Card {
+                                        top: h.north,
+                                        right: h.east,
+                                        bottom: h.south,
+                                        left: h.west,
+                                        possession: None,
+                                    };
+                                    let mv = Move {
+                                        place_card: placed,
+                                        place_index_x: x,
+                                        place_index_y: y,
+                                    };
 
                                     let player_ix = Self::get_current_player_index(game, &ai_acc);
                                     Self::place_card_on_board(game, &mv, player_ix);
@@ -800,8 +914,12 @@ impl<T: Config> Pallet<T> {
                                     game.last_played_block = current_block;
                                     game.next_turn();
 
-                                    let next_player = game.players[game.get_player_turn() as usize].clone();
-                                    Self::deposit_event(Event::NewTurn { game_id: *game_id, next_player });
+                                    let next_player =
+                                        game.players[game.get_player_turn() as usize].clone();
+                                    Self::deposit_event(Event::NewTurn {
+                                        game_id: *game_id,
+                                        next_player,
+                                    });
                                     GameStorage::<T>::insert(game_id, game.clone());
 
                                     if let Some(winner) = Self::is_game_won(game_id, game) {
@@ -809,7 +927,12 @@ impl<T: Config> Pallet<T> {
                                         return;
                                     }
 
-                                    Self::deposit_event(Event::MovePlayed { game_id: *game_id, player: ai_acc, x, y });
+                                    Self::deposit_event(Event::MovePlayed {
+                                        game_id: *game_id,
+                                        player: ai_acc,
+                                        x,
+                                        y,
+                                    });
                                 }
                             }
                         }
@@ -829,9 +952,21 @@ impl<T: Config> Pallet<T> {
         let hand1 = HandsOfGame::<T>::get(game_id, &p1)?;
 
         let map_hand = |h: &BoundedVec<HandEntry, HandLimit>| -> ai::Hand {
-            let mut arr: [ai::HandEntry; 5] = core::array::from_fn(|_| ai::HandEntry { north: 1, east: 1, south: 1, west: 1, used: true });
+            let mut arr: [ai::HandEntry; 5] = core::array::from_fn(|_| ai::HandEntry {
+                north: 1,
+                east: 1,
+                south: 1,
+                west: 1,
+                used: true,
+            });
             for (i, he) in h.iter().enumerate().take(5) {
-                arr[i] = ai::HandEntry { north: he.north, east: he.east, south: he.south, west: he.west, used: he.used };
+                arr[i] = ai::HandEntry {
+                    north: he.north,
+                    east: he.east,
+                    south: he.south,
+                    west: he.west,
+                    used: he.used,
+                };
             }
             ai::Hand { entries: arr }
         };
@@ -839,10 +974,15 @@ impl<T: Config> Pallet<T> {
         let hands = [map_hand(&hand0), map_hand(&hand1)];
 
         // Map on-chain board (card::Card) to adapter board (ai::Card)
-        let mut board_ai: [[Option<ai::Card>; 4]; 4] = core::array::from_fn(|_| core::array::from_fn(|_| None));
-        for x in 0..4 { for y in 0..4 {
-            if let Some(ref c) = game.board[x][y] { board_ai[x][y] = Some(Self::map_card_to_ai(c)); }
-        }}
+        let mut board_ai: [[Option<ai::Card>; 4]; 4] =
+            core::array::from_fn(|_| core::array::from_fn(|_| None));
+        for x in 0..4 {
+            for y in 0..4 {
+                if let Some(ref c) = game.board[x][y] {
+                    board_ai[x][y] = Some(Self::map_card_to_ai(c));
+                }
+            }
+        }
 
         Some(ai::State {
             board: board_ai,
@@ -875,19 +1015,38 @@ impl<T: Config> Pallet<T> {
             // clamp to [1.0, 9.0] then round without relying on FloatCore/round
             let jitter = ((bytes.get(i % bytes.len()).copied().unwrap_or(0) as i8 % 3) - 1) as f32;
             let mut base = target + jitter;
-            if base < 1.0 { base = 1.0; }
-            if base > 9.0 { base = 9.0; }
+            if base < 1.0 {
+                base = 1.0;
+            }
+            if base > 9.0 {
+                base = 9.0;
+            }
             let b_int = base as i32;
             let frac = base - (b_int as f32);
-            let mut clamped = if frac >= 0.5 { (b_int + 1) as u8 } else { b_int as u8 };
-            if clamped < 1 { clamped = 1; }
-            if clamped > 9 { clamped = 9; }
+            let mut clamped = if frac >= 0.5 {
+                (b_int + 1) as u8
+            } else {
+                b_int as u8
+            };
+            if clamped < 1 {
+                clamped = 1;
+            }
+            if clamped > 9 {
+                clamped = 9;
+            }
             clamped
         };
 
         let mut out: BoundedVec<HandEntry, HandLimit> = BoundedVec::default();
         for i in 0..HandLimit::get() {
-            let e = HandEntry { card_id: 0, north: mk_val(i as usize), east: mk_val(i as usize + 1), south: mk_val(i as usize + 2), west: mk_val(i as usize + 3), used: false };
+            let e = HandEntry {
+                card_id: 0,
+                north: mk_val(i as usize),
+                east: mk_val(i as usize + 1),
+                south: mk_val(i as usize + 2),
+                west: mk_val(i as usize + 3),
+                used: false,
+            };
             let _ = out.try_push(e);
         }
         Some(out)
@@ -968,7 +1127,11 @@ impl<T: Config> Pallet<T> {
         game: &Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
         who: &AccountIdOf<T>,
     ) -> u8 {
-        if who == &game.players[0] { 0 } else { 1 }
+        if who == &game.players[0] {
+            0
+        } else {
+            1
+        }
     }
 
     fn place_card_on_board(
@@ -979,7 +1142,10 @@ impl<T: Config> Pallet<T> {
         let placed_card = player_move
             .place_card
             .clone()
-            .with_possession(match player_ix { 0 => Player::PlayerOne, _ => Player::PlayerTwo });
+            .with_possession(match player_ix {
+                0 => Player::PlayerOne,
+                _ => Player::PlayerTwo,
+            });
         game.board[player_move.place_index_x as usize][player_move.place_index_y as usize] =
             Some(placed_card);
     }
@@ -995,14 +1161,16 @@ impl<T: Config> Pallet<T> {
         //  - It is owned by the opponent
         //  - Our edge strictly beats their opposing edge (ties do NOT capture)
         for &(dx, dy, my_rank) in &[
-            (0, -1, player_move.place_card.top),    // Top: compare vs neighbor's bottom
-            (1,  0, player_move.place_card.right),  // Right: compare vs neighbor's left
-            (0,  1, player_move.place_card.bottom), // Bottom: compare vs neighbor's top
-            (-1, 0, player_move.place_card.left),   // Left: compare vs neighbor's right
+            (0, -1, player_move.place_card.top), // Top: compare vs neighbor's bottom
+            (1, 0, player_move.place_card.right), // Right: compare vs neighbor's left
+            (0, 1, player_move.place_card.bottom), // Bottom: compare vs neighbor's top
+            (-1, 0, player_move.place_card.left), // Left: compare vs neighbor's right
         ] {
             let nx = player_move.place_index_x as isize + dx;
             let ny = player_move.place_index_y as isize + dy;
-            if nx < 0 || nx >= 4 || ny < 0 || ny >= 4 { continue; }
+            if nx < 0 || nx >= 4 || ny < 0 || ny >= 4 {
+                continue;
+            }
 
             let xi = nx as usize;
             let yi = ny as usize;
@@ -1014,13 +1182,15 @@ impl<T: Config> Pallet<T> {
                     (Some(Player::PlayerTwo), 0) => true,
                     _ => false,
                 };
-                if !is_opponent_owned { continue; }
+                if !is_opponent_owned {
+                    continue;
+                }
 
                 // Determine neighbor's opposing edge rank based on direction
                 let opp_rank = match (dx, dy) {
                     (0, -1) => neighbor.bottom,
-                    (1,  0) => neighbor.left,
-                    (0,  1) => neighbor.top,
+                    (1, 0) => neighbor.left,
+                    (0, 1) => neighbor.top,
                     (-1, 0) => neighbor.right,
                     _ => 0,
                 };
@@ -1039,8 +1209,12 @@ impl<T: Config> Pallet<T> {
                 if my_rank > opp_rank {
                     // Adjust scores: remove point from previous owner (opponent), give to current
                     match neighbor.possession.as_ref() {
-                        Some(Player::PlayerOne) => { game.scores.0 = game.scores.0.saturating_sub(1); },
-                        Some(Player::PlayerTwo) => { game.scores.1 = game.scores.1.saturating_sub(1); },
+                        Some(Player::PlayerOne) => {
+                            game.scores.0 = game.scores.0.saturating_sub(1);
+                        }
+                        Some(Player::PlayerTwo) => {
+                            game.scores.1 = game.scores.1.saturating_sub(1);
+                        }
                         _ => {}
                     }
 
@@ -1075,7 +1249,9 @@ impl<T: Config> Pallet<T> {
         // Derive bytes from the game_id itself for reproducible pseudo-randomness
         let h = <T as frame_system::Config>::Hashing::hash_of(game_id);
         let bytes = h.as_ref();
-        if bytes.is_empty() { return None; }
+        if bytes.is_empty() {
+            return None;
+        }
 
         let mut at = 0usize;
         let mut next = || -> u8 {
@@ -1087,7 +1263,14 @@ impl<T: Config> Pallet<T> {
 
         let mut out: BoundedVec<HandEntry, HandLimit> = BoundedVec::default();
         for _ in 0..HandLimit::get() {
-            let e = HandEntry { card_id: 0, north: next(), east: next(), south: next(), west: next(), used: false };
+            let e = HandEntry {
+                card_id: 0,
+                north: next(),
+                east: next(),
+                south: next(),
+                west: next(),
+                used: false,
+            };
             let _ = out.try_push(e);
         }
         Some(out)
@@ -1097,11 +1280,18 @@ impl<T: Config> Pallet<T> {
         // Read and update game in storage to persist final state
         if let Some(mut g) = GameStorage::<T>::get(game_id) {
             // Emit before we change pointers
-            Self::deposit_event(Event::GameFinished { game_id: *game_id, winner: winner.clone() });
+            Self::deposit_event(Event::GameFinished {
+                game_id: *game_id,
+                winner: winner.clone(),
+            });
 
             // Clear active-game markers for human participants
-            if let Some(a) = g.players.get(0).cloned() { ActiveGameOf::<T>::remove(&a); }
-            if let Some(b) = g.players.get(1).cloned() { ActiveGameOf::<T>::remove(&b); }
+            if let Some(a) = g.players.get(0).cloned() {
+                ActiveGameOf::<T>::remove(&a);
+            }
+            if let Some(b) = g.players.get(1).cloned() {
+                ActiveGameOf::<T>::remove(&b);
+            }
 
             // Map AccountId winner to player index (0/1) to match GameState::Finished { winner: Option<u8> }
             let winner_ix: Option<u8> = match winner.as_ref() {
@@ -1113,10 +1303,12 @@ impl<T: Config> Pallet<T> {
             GameStorage::<T>::insert(game_id, g);
         } else {
             // If the game wasn't found (should not happen), still emit the event
-            Self::deposit_event(Event::GameFinished { game_id: *game_id, winner });
+            Self::deposit_event(Event::GameFinished {
+                game_id: *game_id,
+                winner,
+            });
         }
     }
-
 }
 
 // Expose GameCreator for the matchmaker pallet

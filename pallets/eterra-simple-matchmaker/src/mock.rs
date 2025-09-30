@@ -11,8 +11,7 @@ use frame_system as system;
 use sp_core::H256;
 use sp_runtime::{
     traits::{BlakeTwo256, IdentityLookup},
-    BuildStorage,
-    DispatchError,
+    BuildStorage, DispatchError,
 };
 
 // --- Base types for the mock runtime ---
@@ -50,13 +49,13 @@ impl system::Config for Test {
     type MaxConsumers = frame_support::traits::ConstU32<16>;
     type OnSetCode = ();
     // Additional associated types for new frame_system::Config requirements
-    type RuntimeTask = ();            // no background tasks in tests
-    type Nonce = u64;                 // account nonce type used in tests
-    type SingleBlockMigrations = ();  // none for tests
-    type MultiBlockMigrator = ();     // none for tests
-    type PreInherents = ();           // no pre-inherents hooks in mock
-    type PostInherents = ();          // no post-inherents hooks in mock
-    type PostTransactions = ();       // no post-transactions hooks in mock
+    type RuntimeTask = (); // no background tasks in tests
+    type Nonce = u64; // account nonce type used in tests
+    type SingleBlockMigrations = (); // none for tests
+    type MultiBlockMigrator = (); // none for tests
+    type PreInherents = (); // no pre-inherents hooks in mock
+    type PostInherents = (); // no post-inherents hooks in mock
+    type PostTransactions = (); // no post-transactions hooks in mock
 }
 
 // --- Controllable HandProvider for tests ---
@@ -90,7 +89,11 @@ impl pallet_matchmaker::CurrentHandProvider<AccountId> for MockHandProvider {
 pub fn set_has_hand(who: AccountId, has: bool) {
     TL_HAND_SET.with(|s| {
         let mut s = s.borrow_mut();
-        if has { s.insert(who); } else { s.remove(&who); }
+        if has {
+            s.insert(who);
+        } else {
+            s.remove(&who);
+        }
     });
 }
 
@@ -140,7 +143,9 @@ construct_runtime!(
 
 /// Build genesis storage according to the mock runtime.
 pub fn new_test_ext() -> sp_io::TestExternalities {
-    let t = system::GenesisConfig::<Test>::default().build_storage().unwrap();
+    let t = system::GenesisConfig::<Test>::default()
+        .build_storage()
+        .unwrap();
     let mut ext = sp_io::TestExternalities::new(t);
     ext.execute_with(|| {
         clear_all_hands();

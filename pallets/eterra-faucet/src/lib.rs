@@ -5,15 +5,13 @@ pub use pallet::*;
 use frame_support::{
     dispatch::DispatchResult,
     pallet_prelude::*,
-    traits::{
-        tokens::ExistenceRequirement,
-        BuildGenesisConfig,
-        Currency,
-    },
+    traits::{tokens::ExistenceRequirement, BuildGenesisConfig, Currency},
 };
 use frame_system::pallet_prelude::*;
 use sp_runtime::codec::Encode;
-use sp_runtime::transaction_validity::{InvalidTransaction, TransactionSource, TransactionValidity, ValidTransaction};
+use sp_runtime::transaction_validity::{
+    InvalidTransaction, TransactionSource, TransactionValidity, ValidTransaction,
+};
 
 /// Helper to get the balance type from the configured Currency
 pub type BalanceOf<T> =
@@ -58,7 +56,6 @@ pub mod pallet {
         pub faucet_account: Option<T::AccountId>,
         pub payout_amount: BalanceOf<T>,
     }
-
 
     #[pallet::genesis_build]
     impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {

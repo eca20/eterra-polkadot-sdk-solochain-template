@@ -1,6 +1,6 @@
+use crate::Player;
 use frame_support::pallet_prelude::*;
 use scale_info::TypeInfo;
-use crate::Player;
 
 #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone, PartialEq, Eq, Debug)]
 pub struct Card {
@@ -33,4 +33,7 @@ impl Card {
 }
 
 #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone, PartialEq, Eq, Debug)]
-pub enum Possession { PlayerOne, PlayerTwo }
+pub enum Possession {
+    PlayerOne,
+    PlayerTwo,
+}

@@ -7,15 +7,29 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
+use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
-use parity_scale_codec::{Encode, Decode, MaxEncodedLen};
 
 /// A generic, no_std-friendly adapter for any 2-player, turn-based, perfect-information game.
 pub trait GameAdapter {
     /// Game state snapshot for search.
-    type State: Clone + TypeInfo + Encode + Decode + MaxEncodedLen + core::fmt::Debug + PartialEq + Eq;
+    type State: Clone
+        + TypeInfo
+        + Encode
+        + Decode
+        + MaxEncodedLen
+        + core::fmt::Debug
+        + PartialEq
+        + Eq;
     /// An action that the current player can take.
-    type Action: Clone + TypeInfo + Encode + Decode + MaxEncodedLen + core::fmt::Debug + PartialEq + Eq;
+    type Action: Clone
+        + TypeInfo
+        + Encode
+        + Decode
+        + MaxEncodedLen
+        + core::fmt::Debug
+        + PartialEq
+        + Eq;
     /// Identifier for a player (you can use u8 {0,1}, AccountId, etc.)
     type Player: Copy + Eq + TypeInfo + Encode + Decode;
 
@@ -46,11 +60,11 @@ pub trait GameAdapter {
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
-    use frame_support::{pallet_prelude::*, dispatch::DispatchResultWithPostInfo};
-    use frame_system::pallet_prelude::*;
-    use sp_runtime::traits::Hash;
-    use parity_scale_codec::Encode;
     use frame_support::sp_runtime::traits::Hash as HashTrait;
+    use frame_support::{dispatch::DispatchResultWithPostInfo, pallet_prelude::*};
+    use frame_system::pallet_prelude::*;
+    use parity_scale_codec::Encode;
+    use sp_runtime::traits::Hash;
 
     #[pallet::pallet]
     pub struct Pallet<T>(_);
@@ -114,8 +128,8 @@ pub mod pallet {
         ) -> DispatchResultWithPostInfo {
             let _ = ensure_signed(origin)?; // optionally allow unsigned
 
-            let action = Self::suggest::<T::Adapter>(&state, difficulty)
-                .ok_or(Error::<T>::NoLegalMoves)?;
+            let action =
+                Self::suggest::<T::Adapter>(&state, difficulty).ok_or(Error::<T>::NoLegalMoves)?;
 
             let state_hash: T::Hash = <T::Hashing as HashTrait>::hash_of(&state);
             let iters = Self::scaled_iterations::<T>(difficulty);
@@ -157,10 +171,7 @@ pub mod pallet {
         }
 
         /// Monte-Carlo rollout suggestor (per-action averaging).
-        pub fn suggest<A: GameAdapter>(
-            state: &A::State,
-            difficulty: u8,
-        ) -> Option<A::Action> {
+        pub fn suggest<A: GameAdapter>(state: &A::State, difficulty: u8) -> Option<A::Action> {
             if A::is_terminal(state) {
                 return None;
             }
@@ -172,7 +183,9 @@ pub mod pallet {
             let mut actions: [Option<A::Action>; MAX_BUF] = core::array::from_fn(|_| None);
 
             let n = A::list_actions::<MAX_BUF>(state, &mut actions);
-            if n == 0 { return None; }
+            if n == 0 {
+                return None;
+            }
 
             let iters = Self::scaled_iterations::<T>(difficulty).max(n as u32);
             let sims_per_action = (iters / n as u32).max(1);
@@ -201,11 +214,7 @@ pub mod pallet {
             actions[best_idx].clone()
         }
 
-        fn random_playout<A: GameAdapter>(
-            start: &A::State,
-            me: A::Player,
-            mut seed: u64,
-        ) -> i32 {
+        fn random_playout<A: GameAdapter>(start: &A::State, me: A::Player, mut seed: u64) -> i32 {
             let mut s = start.clone();
             let mut depth = 0u16;
             while !A::is_terminal(&s) && depth < T::MaxPlayoutDepth::get() {

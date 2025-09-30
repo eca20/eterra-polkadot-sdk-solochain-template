@@ -1,7 +1,7 @@
 use super::*;
+use crate::pallet::Config;
 use crate::pallet::Pallet as EterraAi;
 use frame_support::{assert_ok, traits::OnInitialize};
-use crate::pallet::Config;
 
 struct AdapterShim;
 
@@ -30,15 +30,23 @@ impl crate::GameAdapter for AdapterShim {
     }
 
     fn score(s: &Self::State, for_player: Self::Player) -> i32 {
-        let (a,b) = s.scores; if for_player == 0 { (a as i32) - (b as i32) } else { (b as i32) - (a as i32) }
+        let (a, b) = s.scores;
+        if for_player == 0 {
+            (a as i32) - (b as i32)
+        } else {
+            (b as i32) - (a as i32)
+        }
     }
 
     fn random_action(s: &Self::State, seed: u64) -> Option<Self::Action> {
         const MAX: usize = 128;
         let mut buf: [Option<Self::Action>; MAX] = core::array::from_fn(|_| None);
         let n = Self::list_actions::<MAX>(s, &mut buf);
-        if n == 0 { return None; }
-        let idx = (seed as usize) % n; buf[idx].clone()
+        if n == 0 {
+            return None;
+        }
+        let idx = (seed as usize) % n;
+        buf[idx].clone()
     }
 }
 
@@ -46,9 +54,12 @@ impl crate::GameAdapter for AdapterShim {
 fn nim_ai_picks_optimal_at_high_difficulty() {
     let mut ext = crate::mock::new_test_ext();
     ext.execute_with(|| {
-        use crate::mock::{NimState, NimAction, Test};
+        use crate::mock::{NimAction, NimState, Test};
 
-        let s = NimState { pile: 3, to_move: 0 }; // optimal is Take1 (random reply; Take2 gives opponent forced win)
+        let s = NimState {
+            pile: 3,
+            to_move: 0,
+        }; // optimal is Take1 (random reply; Take2 gives opponent forced win)
         let a = EterraAi::<Test>::suggest::<crate::mock::NimAdapter>(&s, 95).expect("action");
         assert_eq!(a, NimAction::Take1);
 
@@ -62,25 +73,24 @@ fn nim_ai_picks_optimal_at_high_difficulty() {
 fn extrinsic_emits_suggested_event() {
     let mut ext = crate::mock::new_test_ext();
     ext.execute_with(|| {
-        use crate::mock::{NimState, NimAction, Test};
+        use crate::mock::{NimAction, NimState, Test};
         let who: u64 = 1;
-        let state = NimState { pile: 4, to_move: 0 };
-        assert_ok!(
-            crate::pallet::Pallet::<Test>::suggest_move(
-                frame_system::RawOrigin::Signed(who).into(),
-                state.clone(),
-                80
-            )
-        );
+        let state = NimState {
+            pile: 4,
+            to_move: 0,
+        };
+        assert_ok!(crate::pallet::Pallet::<Test>::suggest_move(
+            frame_system::RawOrigin::Signed(who).into(),
+            state.clone(),
+            80
+        ));
 
         // Check that an event was emitted
         let events = frame_system::Pallet::<Test>::events();
         assert!(events.iter().any(|ev| {
             matches!(
                 ev.event,
-                crate::mock::RuntimeEvent::EterraAi(
-                    crate::pallet::Event::Suggested { .. }
-                )
+                crate::mock::RuntimeEvent::EterraAi(crate::pallet::Event::Suggested { .. })
             )
         }));
     });
@@ -91,7 +101,10 @@ fn nim_terminal_has_no_suggestion() {
     let mut ext = crate::mock::new_test_ext();
     ext.execute_with(|| {
         use crate::mock::{NimState, Test};
-        let terminal = NimState { pile: 0, to_move: 0 };
+        let terminal = NimState {
+            pile: 0,
+            to_move: 0,
+        };
         let a = EterraAi::<Test>::suggest::<crate::mock::NimAdapter>(&terminal, 50);
         assert!(a.is_none());
     });
@@ -99,7 +112,7 @@ fn nim_terminal_has_no_suggestion() {
 
 #[test]
 fn eterra_adapter_ai_returns_legal_move_and_applies() {
-    use eterra_card_ai_adapter::eterra_adapter::{Adapter, Hand, HandEntry, State, Board};
+    use eterra_card_ai_adapter::eterra_adapter::{Adapter, Board, Hand, HandEntry, State};
 
     let mut ext = crate::mock::new_test_ext();
     ext.execute_with(|| {
@@ -117,10 +130,22 @@ fn eterra_adapter_ai_returns_legal_move_and_applies() {
 
         // Build simple hands (5 entries each). Tweak values as needed.
         let hand0 = Hand {
-            entries: [mk(5, 4, 5, 4), mk(4, 6, 4, 6), mk(7, 3, 7, 3), mk(4, 4, 4, 4), mk(6, 2, 6, 2)],
+            entries: [
+                mk(5, 4, 5, 4),
+                mk(4, 6, 4, 6),
+                mk(7, 3, 7, 3),
+                mk(4, 4, 4, 4),
+                mk(6, 2, 6, 2),
+            ],
         };
         let hand1 = Hand {
-            entries: [mk(4, 5, 4, 5), mk(6, 4, 6, 4), mk(3, 7, 3, 7), mk(4, 4, 4, 4), mk(2, 6, 2, 6)],
+            entries: [
+                mk(4, 5, 4, 5),
+                mk(6, 4, 6, 4),
+                mk(3, 7, 3, 7),
+                mk(4, 4, 4, 4),
+                mk(2, 6, 2, 6),
+            ],
         };
 
         let s0 = State {
@@ -157,55 +182,108 @@ fn eterra_adapter_ai_returns_legal_move_and_applies() {
 
 #[test]
 fn adapter_list_actions_respects_max_bound() {
-    use eterra_card_ai_adapter::eterra_adapter::{Hand, HandEntry, State, Board};
+    use eterra_card_ai_adapter::eterra_adapter::{Board, Hand, HandEntry, State};
 
     let mut ext = crate::mock::new_test_ext();
     ext.execute_with(|| {
         let board: Board = Default::default();
-        let mk = |n, e, s, w| HandEntry { north: n, east: e, south: s, west: w, used: false };
-        let base = mk(1,1,1,1);
-        let hand0 = Hand { entries: core::array::from_fn(|_| base.clone()) };
-        let hand1 = Hand { entries: core::array::from_fn(|_| base.clone()) };
-        let s = State { board, scores: (5,5), player_turn: 0, round: 0, max_rounds: 10, hands: [hand0, hand1] };
+        let mk = |n, e, s, w| HandEntry {
+            north: n,
+            east: e,
+            south: s,
+            west: w,
+            used: false,
+        };
+        let base = mk(1, 1, 1, 1);
+        let hand0 = Hand {
+            entries: core::array::from_fn(|_| base.clone()),
+        };
+        let hand1 = Hand {
+            entries: core::array::from_fn(|_| base.clone()),
+        };
+        let s = State {
+            board,
+            scores: (5, 5),
+            player_turn: 0,
+            round: 0,
+            max_rounds: 10,
+            hands: [hand0, hand1],
+        };
 
         // With an empty 4x4, maximum distinct actions is 16 cells * 5 unused cards = 80.
         // We intentionally set MAX lower to ensure the adapter doesn't write past bounds.
         const MAX: usize = 7; // small cap
-        let mut buf: [Option<eterra_card_ai_adapter::eterra_adapter::Action>; MAX] = core::array::from_fn(|_| None);
+        let mut buf: [Option<eterra_card_ai_adapter::eterra_adapter::Action>; MAX] =
+            core::array::from_fn(|_| None);
         let n = AdapterShim::list_actions::<MAX>(&s, &mut buf);
         assert!(n <= MAX, "listed {} actions, exceeds MAX {}", n, MAX);
         // All populated entries should be Some(...)
-        for i in 0..n { assert!(buf[i].is_some(), "index {} should be populated", i); }
+        for i in 0..n {
+            assert!(buf[i].is_some(), "index {} should be populated", i);
+        }
         // And any remaining slots should be None
-        for i in n..MAX { assert!(buf[i].is_none(), "index {} should remain None", i); }
+        for i in n..MAX {
+            assert!(buf[i].is_none(), "index {} should remain None", i);
+        }
     });
 }
 
 #[test]
 fn ai_prefers_capture_when_available_high_difficulty() {
-    use eterra_card_ai_adapter::eterra_adapter::{Adapter, Hand, HandEntry, State, Board, Card as ACard, Possession as Possession};
+    use eterra_card_ai_adapter::eterra_adapter::{
+        Adapter, Board, Card as ACard, Hand, HandEntry, Possession, State,
+    };
 
     let mut ext = crate::mock::new_test_ext();
     ext.execute_with(|| {
         let mut board: Board = Default::default();
         // Place an opponent card at (1,1) with weak side facing left (so we can capture from (0,1))
-        let opp_card = ACard { top: 3, right: 3, bottom: 3, left: 2, possession: Some(eterra_card_ai_adapter::eterra_adapter::Possession::PlayerTwo) };
+        let opp_card = ACard {
+            top: 3,
+            right: 3,
+            bottom: 3,
+            left: 2,
+            possession: Some(eterra_card_ai_adapter::eterra_adapter::Possession::PlayerTwo),
+        };
         board[1][1] = Some(opp_card);
 
         // Our hand has one strong-right card: right=5 beats opp.left(2) when we place at (0,1)
-        let strong_left = HandEntry { north: 1, east: 5, south: 1, west: 1, used: false };
+        let strong_left = HandEntry {
+            north: 1,
+            east: 5,
+            south: 1,
+            west: 1,
+            used: false,
+        };
         // Fill remaining entries with dummies
-        let dummy = HandEntry { north: 1, east: 1, south: 1, west: 1, used: false };
-        let hand0 = Hand { entries: [
-            strong_left,
-            dummy.clone(),
-            dummy.clone(),
-            dummy.clone(),
-            dummy.clone(),
-        ] };
-        let hand1 = Hand { entries: core::array::from_fn(|_| dummy.clone()) };
+        let dummy = HandEntry {
+            north: 1,
+            east: 1,
+            south: 1,
+            west: 1,
+            used: false,
+        };
+        let hand0 = Hand {
+            entries: [
+                strong_left,
+                dummy.clone(),
+                dummy.clone(),
+                dummy.clone(),
+                dummy.clone(),
+            ],
+        };
+        let hand1 = Hand {
+            entries: core::array::from_fn(|_| dummy.clone()),
+        };
 
-        let s0 = State { board, scores: (5,5), player_turn: 0, round: 0, max_rounds: 10, hands: [hand0, hand1] };
+        let s0 = State {
+            board,
+            scores: (5, 5),
+            player_turn: 0,
+            round: 0,
+            max_rounds: 10,
+            hands: [hand0, hand1],
+        };
 
         // Suggest at high difficulty – should favor the capturing move at x=0,y=1 using hand_index=0
         let a = crate::pallet::Pallet::<crate::mock::Test>::suggest::<AdapterShim>(&s0, 95)
@@ -215,7 +293,15 @@ fn ai_prefers_capture_when_available_high_difficulty() {
         let s1 = Adapter::apply_pure(&s0, &a);
 
         // After a correct capture from (0,1), our score should increase (6,4) and enemy card at (1,1) flips to Blue
-        assert!(s1.scores.0 >= s0.scores.0, "our score should not decrease after capturing opportunity");
-        if let Some(c) = s1.board[1][1].clone() { assert_eq!(c.possession, Some(eterra_card_ai_adapter::eterra_adapter::Possession::PlayerOne)); }
+        assert!(
+            s1.scores.0 >= s0.scores.0,
+            "our score should not decrease after capturing opportunity"
+        );
+        if let Some(c) = s1.board[1][1].clone() {
+            assert_eq!(
+                c.possession,
+                Some(eterra_card_ai_adapter::eterra_adapter::Possession::PlayerOne)
+            );
+        }
     });
 }

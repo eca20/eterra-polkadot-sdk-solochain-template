@@ -11,8 +11,8 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
-use frame_support::{pallet_prelude::*, traits::Get, BoundedVec};
 use frame_support::traits::{Currency, ExistenceRequirement};
+use frame_support::{pallet_prelude::*, traits::Get, BoundedVec};
 // ===== New: utilities for in-pallet game logic =====
 
 const GRID_DIM: usize = 4;
@@ -36,9 +36,8 @@ pub mod pallet {
     pub type Balance = u128;
 
     /// Balance type bound to the runtime currency.
-    pub type BalanceOf<T> = <
-        <T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>
-    >::Balance;
+    pub type BalanceOf<T> =
+        <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 
     // Max number of cards we track per owner (bounded index)
     pub type OwnedLimit = ConstU32<600>;
@@ -161,35 +160,20 @@ pub mod pallet {
     /// Index of cards owned by each account.
     #[pallet::storage]
     #[pallet::getter(fn owned_cards)]
-    pub type OwnedCards<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        T::AccountId,
-        BoundedVec<u32, OwnedLimit>,
-        ValueQuery
-    >;
+    pub type OwnedCards<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<u32, OwnedLimit>, ValueQuery>;
 
     /// A map of cards that are up for sale: card_id => price.
     #[pallet::storage]
     #[pallet::getter(fn card_prices)]
-    pub type CardPrices<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        CardId,
-        BalanceOf<T>,
-        OptionQuery
-    >;
+    pub type CardPrices<T: Config> =
+        StorageMap<_, Blake2_128Concat, CardId, BalanceOf<T>, OptionQuery>;
 
     /// Optional: index of cards a given owner has listed (bounded by OwnedLimit for simplicity).
     #[pallet::storage]
     #[pallet::getter(fn listed_by_owner)]
-    pub type ListedByOwner<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        T::AccountId,
-        BoundedVec<CardId, OwnedLimit>,
-        ValueQuery
-    >;
+    pub type ListedByOwner<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<CardId, OwnedLimit>, ValueQuery>;
 
     // ------------------
     // Events
@@ -207,11 +191,20 @@ pub mod pallet {
             card_id: u32,
         },
         /// A card was listed for sale by `owner` at `price`.
-        CardListed { owner: T::AccountId, card_id: u32, price: BalanceOf<T> },
+        CardListed {
+            owner: T::AccountId,
+            card_id: u32,
+            price: BalanceOf<T>,
+        },
         /// A card was unlisted (by owner or due to transfer).
         CardUnlisted { owner: T::AccountId, card_id: u32 },
         /// A card was bought by `buyer` from `seller` for `price`.
-        CardBought { buyer: T::AccountId, seller: T::AccountId, card_id: u32, price: BalanceOf<T> },
+        CardBought {
+            buyer: T::AccountId,
+            seller: T::AccountId,
+            card_id: u32,
+            price: BalanceOf<T>,
+        },
     }
 
     // ------------------
@@ -283,7 +276,11 @@ pub mod pallet {
         /// List a card for sale at a fixed `price` (in chain base units).
         #[pallet::call_index(2)]
         #[pallet::weight(10_000)]
-        pub fn set_price(origin: OriginFor<T>, card_id: CardId, price: BalanceOf<T>) -> DispatchResult {
+        pub fn set_price(
+            origin: OriginFor<T>,
+            card_id: CardId,
+            price: BalanceOf<T>,
+        ) -> DispatchResult {
             let who = ensure_signed(origin)?;
             // Verify ownership
             let is_owner = Cards::<T>::get(card_id)
@@ -302,7 +299,11 @@ pub mod pallet {
                 Ok(())
             })?;
 
-            Self::deposit_event(Event::CardListed { owner: who, card_id, price });
+            Self::deposit_event(Event::CardListed {
+                owner: who,
+                card_id,
+                price,
+            });
             Ok(())
         }
 
@@ -318,7 +319,10 @@ pub mod pallet {
             ensure!(is_owner, Error::<T>::NotOwner);
 
             // Ensure it was listed
-            ensure!(CardPrices::<T>::contains_key(card_id), Error::<T>::NotForSale);
+            ensure!(
+                CardPrices::<T>::contains_key(card_id),
+                Error::<T>::NotForSale
+            );
 
             Self::unlist(card_id, &who);
             Ok(())
@@ -353,7 +357,12 @@ pub mod pallet {
             // Transfer ownership seller -> buyer
             Self::do_transfer(&seller, &buyer, card_id)?;
 
-            Self::deposit_event(Event::CardBought { buyer, seller, card_id, price });
+            Self::deposit_event(Event::CardBought {
+                buyer,
+                seller,
+                card_id,
+                price,
+            });
             Ok(())
         }
     }
@@ -366,7 +375,8 @@ pub mod pallet {
         fn create_new_card(owner: &T::AccountId) -> Result<u32, DispatchError> {
             // Charge the mint fee to the caller and send it to the faucet account.
             // This will fail with an error if the caller has insufficient funds.
-            let fee: <<T as Config>::Currency as Currency<T::AccountId>>::Balance = T::MintFee::get();
+            let fee: <<T as Config>::Currency as Currency<T::AccountId>>::Balance =
+                T::MintFee::get();
             T::Currency::transfer(
                 owner,
                 &T::FaucetAccount::get(),
@@ -421,7 +431,8 @@ pub mod pallet {
                 if list.len() as u32 >= <OwnedLimit as frame_support::traits::Get<u32>>::get() {
                     return Err(Error::<T>::OwnedListFull.into());
                 }
-                list.try_push(card_id).map_err(|_| Error::<T>::OwnedListFull)?;
+                list.try_push(card_id)
+                    .map_err(|_| Error::<T>::OwnedListFull)?;
                 Ok(())
             })?;
 
@@ -441,11 +452,18 @@ pub mod pallet {
                 }
             });
             // Emit event for UI (best-effort; no error path)
-            Self::deposit_event(Event::CardUnlisted { owner: owner.clone(), card_id });
+            Self::deposit_event(Event::CardUnlisted {
+                owner: owner.clone(),
+                card_id,
+            });
         }
 
         /// Internal: transfer ownership from `from` to `to` and ensure indices are updated.
-        fn do_transfer(from: &T::AccountId, to: &T::AccountId, card_id: CardId) -> Result<(), DispatchError> {
+        fn do_transfer(
+            from: &T::AccountId,
+            to: &T::AccountId,
+            card_id: CardId,
+        ) -> Result<(), DispatchError> {
             // Update the card owner in main storage (ensures existence and ownership)
             Cards::<T>::try_mutate(card_id, |maybe_card| -> DispatchResult {
                 let card_info = maybe_card.as_mut().ok_or(Error::<T>::NoSuchCard)?;
@@ -466,7 +484,8 @@ pub mod pallet {
                 if list.len() as u32 >= <OwnedLimit as frame_support::traits::Get<u32>>::get() {
                     return Err(Error::<T>::OwnedListFull.into());
                 }
-                list.try_push(card_id).map_err(|_| Error::<T>::OwnedListFull)?;
+                list.try_push(card_id)
+                    .map_err(|_| Error::<T>::OwnedListFull)?;
                 Ok(())
             })?;
 

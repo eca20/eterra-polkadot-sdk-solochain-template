@@ -37,7 +37,7 @@ pub mod pallet {
     use super::*;
 
     #[pallet::config]
-        pub trait Config: frame_system::Config {
+    pub trait Config: frame_system::Config {
         /// Constant that indicates how many players are needed to create a match.
         #[pallet::constant]
         type PlayersPerMatch: Get<u8>;
@@ -104,9 +104,15 @@ pub mod pallet {
             let who = ensure_signed(origin)?;
             let cap = T::QueueCapacity::get();
             ensure!(cap > 1, Error::<T>::BadCapacity);
-            ensure!(InQueue::<T>::contains_key(&who) == false, Error::<T>::AlreadyQueued);
+            ensure!(
+                InQueue::<T>::contains_key(&who) == false,
+                Error::<T>::AlreadyQueued
+            );
             // Require that the player has configured a Current Hand in the game/cards pallet.
-            ensure!(T::HandProvider::has_current_hand(&who), Error::<T>::NoPresetHand);
+            ensure!(
+                T::HandProvider::has_current_hand(&who),
+                Error::<T>::NoPresetHand
+            );
 
             Head::<T>::mutate(|head| {
                 Tail::<T>::mutate(|tail| -> DispatchResult {
@@ -202,7 +208,9 @@ pub mod pallet {
                 };
                 // Ask the game pallet to create a game for this pair. If it fails we still emit Matched.
                 let _ = T::GameCreator::create_from_matchmaking(&a, &b);
-                Self::deposit_event(Event::Matched { players: [a.clone(), b.clone()] });
+                Self::deposit_event(Event::Matched {
+                    players: [a.clone(), b.clone()],
+                });
             }
             Ok(())
         }

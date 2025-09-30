@@ -1,12 +1,12 @@
 use crate as pallet_eterra;
-use pallet_balances;
-use pallet_eterra_simple_tcg;
 use frame_support::{
     parameter_types,
-    traits::{ConstU16, ConstU32, ConstU64, ConstU8, Get, Currency},
+    traits::{ConstU16, ConstU32, ConstU64, ConstU8, Currency, Get},
 };
 use frame_system as system;
+use pallet_balances;
 use pallet_eterra_monte_carlo_ai as mc_ai;
+use pallet_eterra_simple_tcg;
 use parity_scale_codec::{Decode, Encode}; // Ensure Encode and Decode are imported
 use scale_info::TypeInfo;
 use sp_core::H256; // Ensure H256 is imported
@@ -88,7 +88,7 @@ impl pallet_balances::Config for Test {
     type ReserveIdentifier = [u8; 8];
     type FreezeIdentifier = ();
     type MaxFreezes = ();
-    type RuntimeHoldReason = (); 
+    type RuntimeHoldReason = ();
     type RuntimeFreezeReason = ();
 }
 
@@ -163,10 +163,11 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
     let mut ext = sp_io::TestExternalities::from(t);
     ext.execute_with(|| {
         System::set_block_number(1); // Reset block number
-        // fund some accounts
+                                     // fund some accounts
         let _ = <Balances as Currency<u64>>::deposit_creating(&1u64, 1_000_000_000_000);
         let _ = <Balances as Currency<u64>>::deposit_creating(&2u64, 1_000_000_000_000);
-        let _ = <Balances as Currency<u64>>::deposit_creating(&999u64, 1_000_000_000_000); // faucet
+        let _ = <Balances as Currency<u64>>::deposit_creating(&999u64, 1_000_000_000_000);
+        // faucet
     });
     ext
 }
