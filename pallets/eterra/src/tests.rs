@@ -8,7 +8,10 @@ use crate::Move;
 use crate::{mock::*, types::card::Card};
 use frame_support::traits::Get;
 use frame_support::traits::Hooks;
-use frame_support::{assert_noop, assert_ok};
+use frame_support::{assert_noop, assert_ok, assert_err};
+use pallet_eterra_simple_matchmaker::GameCreator; // bring the trait into scope
+use sp_runtime::DispatchError;
+
 use frame_support::BoundedVec;
 use frame_system::pallet_prelude::BlockNumberFor;
 use log::{Level, Metadata, Record};
@@ -82,6 +85,17 @@ fn setup_new_game() -> (H256, u64, u64) {
     );
     (game_id, creator, opponent)
 }
+
+// Helper: set a minimal valid "current hand" for `who`.
+fn set_dummy_hand<T: crate::Config>(who: &crate::AccountIdOf<T>) {
+    // If your pallet exposes a different alias than `HandLimit`, change it here.
+    let one: BoundedVec<u32, crate::HandLimit> = core::iter::once(42u32)
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("within hand limit");
+    crate::CurrentHandOf::<T>::insert(who, one);
+}
+
 
 /// Helper to setup a new game with the given creator and opponent.
 fn setup_new_game_with(creator: u64, opponent: u64) -> (H256, u64, u64) {
@@ -1939,5 +1953,64 @@ fn creator_cannot_start_second_pve_game_while_active() {
             vec![other_human],
             pallet::GameMode::PvE,
         ));
+    });
+}
+
+
+#[test]
+fn create_from_matchmaking_creates_game_and_emits_event() {
+    new_test_ext().execute_with(|| {
+        type P = crate::Pallet<Test>;
+        type Acc = <Test as frame_system::Config>::AccountId;
+
+        // Prepare two players with preset hands (required by do_create_pvp_game).
+        let a: Acc = 1;
+        let b: Acc = 2;
+        set_dummy_hand::<Test>(&a);
+        set_dummy_hand::<Test>(&b);
+
+        // Call through the matchmaker trait (this is what the matchmaker pallet uses).
+        let game_id = <P as GameCreator<Acc>>::create_from_matchmaking(&a, &b)
+            .expect("should create a game");
+
+        // Storage should contain the game
+        assert!(crate::GameStorage::<Test>::contains_key(&game_id));
+        // Both players should have this game marked active
+        assert_eq!(crate::ActiveGameOf::<Test>::get(&a), Some(game_id));
+        assert_eq!(crate::ActiveGameOf::<Test>::get(&b), Some(game_id));
+
+        // Last event should be GameCreated { game_id }
+        let ev = frame_system::Pallet::<Test>::events()
+            .last()
+            .map(|r| r.event.clone())
+            .expect("some event expected");
+        match ev {
+            RuntimeEvent::Eterra(crate::Event::GameCreated { game_id: gid }) => {
+                assert_eq!(gid, game_id)
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    });
+}
+
+#[test]
+fn create_from_matchmaking_requires_preset_hands() {
+    new_test_ext().execute_with(|| {
+        type P = crate::Pallet<Test>;
+        type Acc = <Test as frame_system::Config>::AccountId;
+
+        let a: Acc = 1;
+        let b: Acc = 2;
+
+        // Only give `a` a hand; `b` lacks one.
+        set_dummy_hand::<Test>(&a);
+
+        let res = <P as GameCreator<Acc>>::create_from_matchmaking(&a, &b);
+        // Should error with PresetHandMissing (your pallet's error)
+        assert_err!(res, DispatchError::from(crate::Error::<Test>::PresetHandMissing));
+
+        // No game should exist and no ActiveGameOf should be set
+        assert_eq!(crate::ActiveGameOf::<Test>::get(&a), None);
+        assert_eq!(crate::ActiveGameOf::<Test>::get(&b), None);
     });
 }

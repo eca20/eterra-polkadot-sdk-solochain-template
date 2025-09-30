@@ -68,6 +68,16 @@ thread_local! {
     static TL_HAND_SET: RefCell<BTreeSet<AccountId>> = RefCell::new(BTreeSet::new());
 }
 
+thread_local! {
+    pub static CREATED_GAMES: std::cell::RefCell<Vec<(AccountId, AccountId)>> =
+        std::cell::RefCell::new(Vec::new());
+    pub static NEXT_GAME_ID: std::cell::Cell<u64> = std::cell::Cell::new(1);
+}
+
+pub fn created_games() -> Vec<(AccountId, AccountId)> {
+    CREATED_GAMES.with(|v| v.borrow().clone())
+}
+
 /// Test-only provider: consults a thread-local set to determine if an account has a hand.
 pub struct MockHandProvider;
 impl pallet_matchmaker::CurrentHandProvider<AccountId> for MockHandProvider {
@@ -91,16 +101,21 @@ pub fn clear_all_hands() {
 
 // --- Test-only GameCreator implementation for () ---
 impl pallet_matchmaker::GameCreator<AccountId> for () {
-    // Adjust the associated type and signature below to match the trait in your pallet.
-    // Using a dummy GameId of u32 for tests.
     type GameId = u32;
 
     fn create_from_matchmaking(
-        _a: &AccountId,
-        _b: &AccountId,
+        a: &AccountId,
+        b: &AccountId,
     ) -> Result<Self::GameId, DispatchError> {
-        // In tests, we don't actually create a game. Return a fixed ID.
-        Ok(0)
+        // Record the created game pair for assertions.
+        CREATED_GAMES.with(|v| v.borrow_mut().push((*a, *b)));
+        // Bump a simple counter for the returned GameId.
+        let id = NEXT_GAME_ID.with(|c| {
+            let id = c.get();
+            c.set(id + 1);
+            id
+        });
+        Ok(id as u32)
     }
 }
 
@@ -129,6 +144,8 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
     let mut ext = sp_io::TestExternalities::new(t);
     ext.execute_with(|| {
         clear_all_hands();
+        CREATED_GAMES.with(|v| v.borrow_mut().clear());
+        NEXT_GAME_ID.with(|c| c.set(1));
         System::set_block_number(1);
     });
     ext

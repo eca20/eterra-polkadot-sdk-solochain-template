@@ -8,7 +8,7 @@ use sp_runtime::DispatchError;
 use frame_system::pallet_prelude::BlockNumberFor;
 
 use crate::mock::{
-    new_test_ext, RuntimeEvent, RuntimeOrigin as SystemOrigin, Test, Matchmaker, set_has_hand, clear_all_hands
+    new_test_ext, RuntimeEvent, RuntimeOrigin as SystemOrigin, Test, Matchmaker, set_has_hand, clear_all_hands, created_games
 };
 
 fn last_event() -> RuntimeEvent {
