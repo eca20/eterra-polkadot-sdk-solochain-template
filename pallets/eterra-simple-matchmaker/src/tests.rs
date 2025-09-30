@@ -39,18 +39,20 @@ fn join_queue_emits_event_and_persists() {
     new_test_ext().execute_with(|| {
         set_has_hand(1, true);
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(1)));
-        // Event
-        let ev = last_event();
-        if let RuntimeEvent::Matchmaker(inner) = ev {
-            let s = format!("{:?}", inner);
-            assert!(
-                s.contains("Queue") || s.contains("Join") || s.contains("Queued"),
-                "unexpected matchmaker event: {:?}",
-                inner
-            );
-        } else {
-            panic!("unexpected event section: {:?}", ev);
-        }
+
+        // Collect all events and ensure a Joined{ who: 1 } was emitted,
+        // ignoring any ProcessingStarted/ProcessingCompleted noise.
+        let evs = take_events();
+        let joined_seen = evs.iter().any(|ev| {
+            matches!(
+                ev,
+                RuntimeEvent::Matchmaker(Event::<Test>::Joined { who }) if *who == 1
+            )
+        });
+        assert!(joined_seen, "expected Joined event for who=1, got: {:?}", evs);
+
+        // Also assert the state persisted: live size should be 1.
+        assert_eq!(LiveSize::<Test>::get(), 1);
     });
 }
 

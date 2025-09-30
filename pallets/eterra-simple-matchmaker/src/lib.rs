@@ -84,6 +84,18 @@ pub mod pallet {
         Joined { who: T::AccountId },
         Left { who: T::AccountId },
         Matched { players: [T::AccountId; 2] },
+        /// Emitted right after a join increases live size to at least the players-per-match threshold.
+        TwoReadyToMatch { live_size: u32 },
+        /// Emitted when `process_queue`/`join_queue` kicks off processing.
+        ProcessingStarted { live_size: u32, head: QIndex, tail: QIndex },
+        /// Emitted when we have popped two candidates to pair.
+        PairFound { a: T::AccountId, b: T::AccountId },
+        /// Emitted immediately before calling into the game pallet to create a game.
+        GameCreateAttempt { a: T::AccountId, b: T::AccountId },
+        /// Emitted when the second pop was unavailable and the first player was requeued.
+        Requeued { who: T::AccountId },
+        /// Emitted after processing finishes for this call.
+        ProcessingCompleted { remaining_live: u32, head: QIndex, tail: QIndex },
     }
 
     #[pallet::error]
@@ -126,6 +138,13 @@ pub mod pallet {
                     InQueue::<T>::insert(&who, ());
                     LiveSize::<T>::mutate(|n| *n = n.saturating_add(1));
 
+                    // If we now have enough players to match, emit a signal.
+                    let threshold = T::PlayersPerMatch::get() as u32;
+                    let current = LiveSize::<T>::get();
+                    if current >= threshold {
+                        Self::deposit_event(Event::TwoReadyToMatch { live_size: current });
+                    }
+
                     Self::deposit_event(Event::Joined { who: who.clone() });
                     Self::do_process(cap)?;
                     Ok(())
@@ -153,6 +172,11 @@ pub mod pallet {
             let _ = ensure_signed(origin).ok();
             let cap = T::QueueCapacity::get();
             ensure!(cap > 1, Error::<T>::BadCapacity);
+            Self::deposit_event(Event::ProcessingStarted {
+                live_size: LiveSize::<T>::get(),
+                head: Head::<T>::get(),
+                tail: Tail::<T>::get(),
+            });
             Self::do_process(cap)
         }
     }
@@ -164,12 +188,15 @@ pub mod pallet {
 
         fn pop_live(cap: QIndex) -> Option<T::AccountId> {
             Head::<T>::mutate(|head| {
-                let tail = Tail::<T>::get();
+                // We’ll search up to `cap` slots (one full cycle) to find a live account.
+                // This makes the ring robust even if `head` previously advanced past older entries.
                 let mut h = *head;
+                let tail = Tail::<T>::get();
 
-                while h != tail {
+                for _ in 0..cap {
                     let idx = h % cap;
                     h = h.wrapping_add(1);
+
                     if let Some(acc) = Ring::<T>::take(idx) {
                         if InQueue::<T>::contains_key(&acc) {
                             *head = h;
@@ -178,13 +205,25 @@ pub mod pallet {
                             return Some(acc);
                         }
                     }
+
+                    // If we made a full pass to the current tail without success and there are no
+                    // gaps to consider, continue scanning; the `for` cap-guard prevents infinite loops.
+                    if h == tail {
+                        // continue scanning post-tail region in case of wrap-around entries
+                    }
                 }
-                *head = h;
+                // Nothing live found in a full cycle.
                 None
             })
         }
 
         fn do_process(cap: QIndex) -> DispatchResult {
+            // Mirror the start event for calls coming from join_queue path.
+            Self::deposit_event(Event::ProcessingStarted {
+                live_size: LiveSize::<T>::get(),
+                head: Head::<T>::get(),
+                tail: Tail::<T>::get(),
+            });
             loop {
                 if LiveSize::<T>::get() < 2 {
                     break;
@@ -203,15 +242,38 @@ pub mod pallet {
                         });
                         InQueue::<T>::insert(&a, ());
                         LiveSize::<T>::mutate(|n| *n = n.saturating_add(1));
+                        Self::deposit_event(Event::Requeued { who: a.clone() });
                         break;
                     }
                 };
+                Self::deposit_event(Event::PairFound { a: a.clone(), b: b.clone() });
+
+                if a == b {
+                    // Extremely defensive: never match the same account with itself.
+                    // Requeue `a` and stop this processing round.
+                    Tail::<T>::mutate(|tail| {
+                        let idx = *tail % cap;
+                        Ring::<T>::insert(idx, &a);
+                        *tail = tail.wrapping_add(1);
+                    });
+                    InQueue::<T>::insert(&a, ());
+                    LiveSize::<T>::mutate(|n| *n = n.saturating_add(1));
+                    Self::deposit_event(Event::Requeued { who: a.clone() });
+                    break;
+                }
+
+                Self::deposit_event(Event::GameCreateAttempt { a: a.clone(), b: b.clone() });
                 // Ask the game pallet to create a game for this pair. If it fails we still emit Matched.
                 let _ = T::GameCreator::create_from_matchmaking(&a, &b);
                 Self::deposit_event(Event::Matched {
                     players: [a.clone(), b.clone()],
                 });
             }
+            Self::deposit_event(Event::ProcessingCompleted {
+                remaining_live: LiveSize::<T>::get(),
+                head: Head::<T>::get(),
+                tail: Tail::<T>::get(),
+            });
             Ok(())
         }
     }
