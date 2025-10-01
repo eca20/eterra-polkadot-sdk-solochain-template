@@ -38,6 +38,7 @@ pub use pallet_eterra_faucet;
 pub use pallet_eterra_simple_tcg;
 pub use pallet_eterra_tcg;
 pub use pallet_eterra_simple_matchmaker;
+pub use pallet_eterra_gamer;
 
 pub struct HandProviderAdapter;
 
@@ -378,6 +379,22 @@ impl pallet_eterra_monte_carlo_ai::Config for Runtime {
     type RandomnessSeed = ConstU64<12345>; // deterministic-ish seed for hashing/entropy
 }
 
+parameter_types! {
+    pub const GamerTagMaxLen: u32 = 32;
+    pub const AvatarCidMaxLen: u32 = 96; // or 128
+    pub const GamerChangeFee: Balance = 100u128;
+}
+
+impl pallet_eterra_gamer::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type Currency = Balances;
+    type ExpIssuerOrigin = frame_system::EnsureRoot<AccountId>;
+    type FaucetAccount = FaucetAccountParam;
+    type ChangeFee = GamerChangeFee;
+    type MaxTagLen = GamerTagMaxLen;
+    type MaxAvatarCidLen = AvatarCidMaxLen;
+}
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 #[frame_support::runtime]
 mod runtime {
@@ -440,4 +457,7 @@ mod runtime {
 
     #[runtime::pallet_index(14)]
     pub type EterraSimpleMatchMaker = pallet_eterra_simple_matchmaker;
+
+    #[runtime::pallet_index(15)]
+    pub type EterraGamer = pallet_eterra_gamer;
 }

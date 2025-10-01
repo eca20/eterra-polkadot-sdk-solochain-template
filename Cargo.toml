@@ -11,6 +11,7 @@ members = [
     "node",
     "pallets/template",
     "pallets/eterra",
+    "pallets/eterra-gamer",
     "pallets/eterra-tcg",
     "pallets/eterra-daily-slots",
     "pallets/eterra-simple-tcg",
@@ -100,4 +101,5 @@ pallet-eterra-simple-tcg                = { path = "pallets/eterra-simple-tcg", 
 pallet-eterra-simple-matchmaker         = { path = "pallets/eterra-simple-matchmaker", default-features = false }
 pallet-eterra-monte-carlo-ai            = { path = "pallets/eterra-monte-carlo-ai", default-features = false }
 eterra-card-ai-adapter                  = { path = "crates/eterra-card-ai-adapter", default-features = false, features = ["std"] }
+pallet-eterra-gamer                     = { path = "pallets/eterra-gamer", default-features = false }
 

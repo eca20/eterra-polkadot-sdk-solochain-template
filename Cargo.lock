@@ -5259,6 +5259,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-eterra-gamer"
+version = "0.1.0"
+dependencies = [
+ "frame-support",
+ "frame-system",
+ "pallet-balances",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
 name = "pallet-eterra-monte-carlo-ai"
 version = "0.1.0"
 dependencies = [
@@ -8455,6 +8470,7 @@ dependencies = [
  "pallet-eterra",
  "pallet-eterra-daily-slots",
  "pallet-eterra-faucet",
+ "pallet-eterra-gamer",
  "pallet-eterra-monte-carlo-ai",
  "pallet-eterra-simple-matchmaker",
  "pallet-eterra-simple-tcg",

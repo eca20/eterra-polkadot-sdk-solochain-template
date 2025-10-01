@@ -53,6 +53,7 @@ pallet-template.workspace = true
 # Local Dependencies
 pallet-eterra                             = { workspace = true }
 pallet-eterra-tcg = { workspace = true }
+pallet-eterra-gamer = { workspace = true }
 pallet-eterra-daily-slots = { workspace = true }
 pallet-eterra-simple-tcg = { workspace = true }
 pallet-eterra-simple-matchmaker = { workspace = true }
@@ -90,6 +91,7 @@ std = [
 	"pallet-transaction-payment/std",
 
   "pallet-eterra/std",
+    "pallet-eterra-gamer/std",
    "pallet-eterra-simple-matchmaker/std",
 
 	"sp-api/std",
