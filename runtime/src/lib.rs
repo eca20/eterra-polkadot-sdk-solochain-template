@@ -42,6 +42,7 @@ pub use pallet_eterra_tcg;
 pub use pallet_eterra_simple_matchmaker;
 pub use pallet_eterra_gamer;
 pub use pallet_eterra_game_authority;
+pub use pallet_eterra_media;
 
 pub struct HandProviderAdapter;
 
@@ -416,6 +417,26 @@ impl pallet_eterra_faucet::Config for Runtime {
     type Currency = Balances;
 }
 
+// Default owner account for the media pallet's default collection.
+// You can later change this to a specific admin or treasury account if desired.
+pub struct MediaDefaultOwner;
+impl Get<AccountId> for MediaDefaultOwner {
+    fn get() -> AccountId {
+        AccountId::from([0u8; 32])
+    }
+}
+
+impl pallet_eterra_media::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type MaxUriLen = ConstU32<256>;
+    type MaxContentTypeLen = ConstU32<64>;
+    type MaxNameLen = ConstU32<64>;
+    type MaxDescriptionLen = ConstU32<256>;
+    type MaxRolesPerAccount = ConstU32<8>;
+    type DefaultCollectionId = ConstU32<0>;
+    type DefaultCollectionOwner = MediaDefaultOwner;
+}
+
 impl pallet_eterra_monte_carlo_ai::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Adapter = eterra_card_ai_adapter::eterra_adapter::Adapter;
@@ -513,4 +534,7 @@ mod runtime {
 
     #[runtime::pallet_index(17)]
     pub type EterraGameAuthority = pallet_eterra_game_authority;
+
+    #[runtime::pallet_index(18)]
+    pub type EterraMedia= pallet_eterra_media;
 }
