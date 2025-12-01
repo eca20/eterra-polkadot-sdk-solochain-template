@@ -2,7 +2,7 @@ use crate::*;
 use crate::pallet::{MediaClass, Delivery, CollectionRole, Error};
 
 use frame_support::{assert_ok, assert_noop};
-use crate::mock::{new_test_ext, Test, EterraMedia};
+use crate::mock::{new_test_ext, new_test_ext_with_default_collection, Test, EterraMedia};
 use crate::mock::RuntimeOrigin;
 
 #[test]
@@ -223,5 +223,80 @@ fn create_collection_and_register_media_respect_length_limits() {
             ),
             Error::<Test>::ContentTypeTooLong
         );
+    });
+}
+
+#[test]
+fn register_media_fails_for_unknown_collection() {
+    new_test_ext().execute_with(|| {
+        // No collections exist; using an arbitrary non-existent id should fail.
+        assert_noop!(
+            EterraMedia::register_media(
+                RuntimeOrigin::signed(1),
+                Some(42),
+                b"ipfs://cid_unknown".to_vec(),
+                b"image/png".to_vec(),
+                MediaClass::CoreAsset,
+                Delivery::RemoteIpfs,
+                None,
+            ),
+            Error::<Test>::UnknownCollection
+        );
+    });
+}
+
+#[test]
+fn freeze_collection_prevents_new_uploads() {
+    new_test_ext().execute_with(|| {
+        // Create collection 0 owned by account 1.
+        assert_ok!(EterraMedia::create_collection(
+            RuntimeOrigin::signed(1),
+            b"Coll".to_vec(),
+            b"Desc".to_vec(),
+        ));
+
+        // First upload succeeds.
+        assert_ok!(EterraMedia::register_media(
+            RuntimeOrigin::signed(1),
+            Some(0),
+            b"ipfs://cid_before_freeze".to_vec(),
+            b"image/png".to_vec(),
+            MediaClass::CoreAsset,
+            Delivery::RemoteIpfs,
+            None,
+        ));
+
+        // Freeze the collection.
+        assert_ok!(EterraMedia::freeze_collection(RuntimeOrigin::signed(1), 0));
+
+        // New uploads should now fail with CollectionFrozen.
+        assert_noop!(
+            EterraMedia::register_media(
+                RuntimeOrigin::signed(1),
+                Some(0),
+                b"ipfs://cid_after_freeze".to_vec(),
+                b"image/png".to_vec(),
+                MediaClass::CoreAsset,
+                Delivery::RemoteIpfs,
+                None,
+            ),
+            Error::<Test>::CollectionFrozen
+        );
+    });
+}
+
+#[test]
+fn genesis_creates_default_collection_and_roles() {
+    new_test_ext_with_default_collection().execute_with(|| {
+        // In the mock, DefaultCollectionId = 0 and DefaultCollectionOwnerForMock::get() = 1.
+        let info = pallet::Collections::<Test>::get(0)
+            .expect("default collection should exist at genesis");
+
+        assert_eq!(info.owner, 1);
+        assert!(!info.frozen);
+
+        let roles = pallet::CollectionRoles::<Test>::get(0, 1);
+        assert!(roles.contains(&CollectionRole::Admin));
+        assert!(roles.contains(&CollectionRole::Uploader));
     });
 }

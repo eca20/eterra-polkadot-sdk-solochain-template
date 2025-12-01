@@ -2,7 +2,7 @@ use crate as pallet_eterra_media;
 
 use frame_support::{
     construct_runtime, parameter_types,
-    traits::{Everything, Get},
+    traits::{Everything, Get, BuildGenesisConfig},
 };
 use frame_system as system;
 use sp_core::H256;
@@ -107,4 +107,23 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
         // you can call EterraMedia::something here.
     });
     ext
+}
+
+/// Helper that builds a TestExternalities where the media pallet
+/// creates its default collection at genesis.
+pub fn new_test_ext_with_default_collection() -> sp_io::TestExternalities {
+    let mut storage = system::GenesisConfig::<Test>::default()
+        .build_storage()
+        .expect("frame-system storage build should not fail");
+
+    pallet_eterra_media::GenesisConfig::<Test> {
+        create_default_collection: true,
+        default_collection_name: b"Default Media".to_vec(),
+        default_collection_description: b"Default media collection".to_vec(),
+        default_collection_owner: None, // falls back to DefaultCollectionOwnerForMock (account 1)
+    }
+    .assimilate_storage(&mut storage)
+    .expect("pallet_eterra_media genesis config assimilation should not fail");
+
+    sp_io::TestExternalities::new(storage)
 }

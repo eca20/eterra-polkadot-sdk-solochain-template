@@ -459,6 +459,29 @@ pub mod pallet {
             Ok(())
         }
 
+                /// Freeze a collection, preventing new media from being registered.
+        /// Only collection Admin or owner may do this.
+        #[pallet::weight(10_000)]
+        pub fn freeze_collection(
+            origin: OriginFor<T>,
+            collection_id: MediaCollectionId,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+
+            Collections::<T>::try_mutate(collection_id, |maybe_info| -> DispatchResult {
+                let info = maybe_info.as_mut().ok_or(Error::<T>::UnknownCollection)?;
+
+                let roles = CollectionRoles::<T>::get(collection_id, &who);
+                let is_owner = info.owner == who;
+                let is_admin = roles.contains(&CollectionRole::Admin);
+
+                ensure!(is_owner || is_admin, Error::<T>::NoPermission);
+
+                info.frozen = true;
+                Ok(())
+            })
+        }
+
         /// Mark a media item as deprecated.
         /// Only collection Admin or media owner may do this.
         #[pallet::weight(10_000)]
