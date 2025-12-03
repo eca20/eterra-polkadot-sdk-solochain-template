@@ -8481,7 +8481,7 @@ dependencies = [
  "sc-transaction-pool",
  "sc-transaction-pool-api",
  "serde_json",
- "solochain-template-runtime",
+ "solochain-eterra-runtime",
  "sp-api",
  "sp-block-builder",
  "sp-blockchain",
@@ -8498,7 +8498,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "solochain-template-runtime"
+name = "solochain-eterra-runtime"
 version = "0.1.0"
 dependencies = [
  "eterra-card-ai-adapter",
