@@ -18,8 +18,6 @@ use frame_support::BoundedVec;
 use frame_system::pallet_prelude::BlockNumberFor;
 use parity_scale_codec::Encode;
 use sp_runtime::traits::Hash;
-use sp_runtime::traits::SaturatedConversion;
-use sp_std::vec::Vec;
 pub use types::board::Board;
 pub use types::card::Card;
 pub use types::card::Possession as Player; // PlayerOne / PlayerTwo
@@ -42,12 +40,12 @@ pub mod pallet {
 
     use crate::types::board::Board;
     use crate::types::card::Card;
-    use crate::types::card::Possession as Player;
+    
     use crate::types::game::Move;
     use crate::types::game::*;
     use crate::types::GameId;
     // Alias the simple TCG pallet so we can read card ownership & stats
-    use eterra_card_ai_adapter::eterra_adapter as ai;
+    
     use pallet_eterra_monte_carlo_ai as mc_ai;
     use pallet_eterra_simple_tcg as cards; // reserved for future use
 
@@ -334,7 +332,7 @@ pub mod pallet {
             }
 
             // Update per-player recent game lists (most-recent first, dedup, prune to 10)
-            let mut push_recent = |acct: &AccountIdOf<T>| {
+            let push_recent = |acct: &AccountIdOf<T>| {
                 PlayerGames::<T>::mutate(acct, |list| {
                     if let Some(pos) = list.iter().position(|g| *g == game_id) {
                         list.remove(pos);
@@ -748,7 +746,7 @@ impl<T: Config> Pallet<T> {
         a: &AccountIdOf<T>,
         b: &AccountIdOf<T>,
     ) -> Result<GameId<T>, sp_runtime::DispatchError> {
-        use sp_runtime::traits::SaturatedConversion;
+        
 
         // Sanity checks
         ensure!(a != b, Error::<T>::InvalidMove);
@@ -812,7 +810,7 @@ impl<T: Config> Pallet<T> {
         ActiveGameOf::<T>::insert(b, game_id);
 
         // Push into recent lists for each player (most-recent first, bounded to 10)
-        let mut push_recent = |acct: &AccountIdOf<T>| {
+        let push_recent = |acct: &AccountIdOf<T>| {
             PlayerGames::<T>::mutate(acct, |list| {
                 if let Some(pos) = list.iter().position(|g| *g == game_id) {
                     list.remove(pos);
@@ -1011,7 +1009,7 @@ impl<T: Config> Pallet<T> {
         let seed_hash = <T as frame_system::Config>::Hashing::hash_of(&(game_id, human));
         let bytes = seed_hash.as_ref();
 
-        let mut mk_val = |i: usize| -> u8 {
+        let mk_val = |i: usize| -> u8 {
             // clamp to [1.0, 9.0] then round without relying on FloatCore/round
             let jitter = ((bytes.get(i % bytes.len()).copied().unwrap_or(0) as i8 % 3) - 1) as f32;
             let mut base = target + jitter;
