@@ -63,8 +63,6 @@ pub mod pallet {
     use frame_support::sp_runtime::traits::Hash as HashTrait;
     use frame_support::{dispatch::DispatchResultWithPostInfo, pallet_prelude::*};
     use frame_system::pallet_prelude::*;
-    use parity_scale_codec::Encode;
-    use sp_runtime::traits::Hash;
 
     #[pallet::pallet]
     pub struct Pallet<T>(_);
