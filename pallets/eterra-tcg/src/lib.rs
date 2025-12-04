@@ -302,7 +302,7 @@ pub mod pallet {
                     .ok_or(Error::<T>::NoActiveCard)?;
 
                 // Must have a card
-                let mut card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
+                let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
                 ensure!(card_info.owner == player, Error::<T>::NotCardOwner);
 
                 // Must have generated at least once
