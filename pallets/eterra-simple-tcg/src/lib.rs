@@ -18,12 +18,11 @@ use frame_support::{pallet_prelude::*, traits::Get, BoundedVec};
 const GRID_DIM: usize = 4;
 const BOARD_SIZE: usize = GRID_DIM * GRID_DIM; // 16
 
-use core::array;
 use frame_support::pallet_prelude::ConstU32;
 use frame_system::{ensure_signed, pallet_prelude::OriginFor};
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
-use sp_runtime::traits::{Hash, SaturatedConversion};
+use sp_runtime::traits::Hash;
 use sp_std::prelude::*;
 
 #[frame_support::pallet]
@@ -393,7 +392,7 @@ pub mod pallet {
 
             // Use the first 4 bytes for the four directions (1..=9)
             let bytes = hash.as_ref();
-            let mut to_stat = |b: u8| -> u8 { (b % 9) + 1 };
+            let to_stat = |b: u8| -> u8 { (b % 9) + 1 };
 
             let n = to_stat(bytes.get(0).copied().unwrap_or(0));
             let e = to_stat(bytes.get(1).copied().unwrap_or(0));
