@@ -26,7 +26,7 @@
 // Substrate and Polkadot dependencies
 use frame_support::{
     derive_impl, parameter_types,
-    traits::{ConstBool, ConstU128, ConstU32, ConstU64, ConstU8, VariantCountOf},
+    traits::{ConstBool, ConstU128, ConstU16, ConstU32, ConstU64, ConstU8, VariantCountOf},
     weights::{
         constants::{RocksDbWeight, WEIGHT_REF_TIME_PER_SECOND},
         IdentityFee, Weight,
@@ -35,8 +35,32 @@ use frame_support::{
 use frame_system::limits::{BlockLength, BlockWeights};
 use pallet_transaction_payment::{ConstFeeMultiplier, FungibleAdapter, Multiplier};
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
-use sp_runtime::{traits::One, Perbill};
+use sp_runtime::{
+    traits::{One, AccountIdConversion},
+    Perbill,
+};
 use sp_version::RuntimeVersion;
+use scale_info::TypeInfo;
+use codec::{Encode, Decode};
+use frame_support::traits::Get;
+use frame_support::PalletId;
+
+// Bring in UNIT and HandProviderAdapter from the parent module (lib.rs)
+use super::{UNIT, HandProviderAdapter};
+
+// Bring in the pallets re-exported in lib.rs
+use super::{
+    pallet_eterra,
+    pallet_eterra_daily_slots,
+    pallet_eterra_faucet,
+    pallet_eterra_simple_tcg,
+    pallet_eterra_tcg,
+    pallet_eterra_simple_matchmaker,
+    pallet_eterra_gamer,
+    pallet_eterra_game_authority,
+    pallet_eterra_media,
+};
+// Monte Carlo AI pallet lives at the crate root; bring it in explicitly.
 
 // Local module imports
 use super::{
@@ -208,8 +232,281 @@ impl pallet_sudo::Config for Runtime {
     type WeightInfo = pallet_sudo::weights::SubstrateWeight<Runtime>;
 }
 
-/// Configure the pallet-template in pallets/template.
-impl pallet_template::Config for Runtime {
+impl pallet_node_authorization::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    type WeightInfo = pallet_template::weights::SubstrateWeight<Runtime>;
+    type MaxWellKnownNodes = MaxWellKnownNodes;
+    type MaxPeerIdLength = MaxPeerIdLength;
+
+    // While bootstrapping, keep it simple: Root controls the allowlist.
+    type AddOrigin   = frame_system::EnsureRoot<AccountId>;
+    type RemoveOrigin= frame_system::EnsureRoot<AccountId>;
+    type SwapOrigin  = frame_system::EnsureRoot<AccountId>;
+    type ResetOrigin = frame_system::EnsureRoot<AccountId>;
+
+    type WeightInfo = ();
+}
+
+
+#[derive(Encode, Decode, TypeInfo, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EterraNumPlayers;
+impl Get<u32> for EterraNumPlayers {
+    fn get() -> u32 {
+        2 // The number of players in the game
+    }
+}
+
+pub struct EterraMaxRounds;
+impl Get<u8> for EterraMaxRounds {
+    fn get() -> u8 {
+        5 // The number of players in the game
+    }
+}
+
+pub struct MaxRollHistoryLength;
+impl Get<u32> for MaxRollHistoryLength {
+    fn get() -> u32 {
+        100 // The number of players in the game
+    }
+}
+
+pub struct EterraBlocksToPlayLimit;
+impl Get<u8> for EterraBlocksToPlayLimit {
+    fn get() -> u8 {
+        6 // The limit in blocks each player has until their turn is force finished
+          // Eventually, the force finish may allow the opponent to click to force finish
+          // but forcing the node to finish turns prevents stale games from laying around
+          // while risking bots accruing rewards.
+    }
+}
+
+pub struct MaxSlotLength;
+impl Get<u32> for MaxSlotLength {
+    fn get() -> u32 {
+        3 // The number of slots per slot roll
+    }
+}
+
+pub struct MaxOptionsPerSlot;
+impl Get<u32> for MaxOptionsPerSlot {
+    fn get() -> u32 {
+        10 // The number of players in the game
+    }
+}
+
+pub struct MaxRollsPerRound;
+impl Get<u32> for MaxRollsPerRound {
+    fn get() -> u32 {
+        3 // The number of players in the game
+    }
+}
+
+pub struct MaxWeightEntries;
+impl Get<u32> for MaxWeightEntries {
+    fn get() -> u32 {
+        100 // max symbol entries per reel (example)
+    }
+}
+
+parameter_types! {
+    // 6 seconds per block → ~30 blocks for ~3 minutes
+    pub const MaxExpirationsPerBlock: u32 = 256; // tune as needed
+}
+
+parameter_types! {
+    pub const MaxPlayersPerGameConst: u32 = 128; // tune as needed
+}
+
+parameter_types! {
+    pub const MaxWellKnownNodes: u32 = 128;   // adjust as you like
+    pub const MaxPeerIdLength: u32 = 128;     // libp2p PeerId length upper bound
+}
+
+// === Faucet configuration parameters ===
+
+parameter_types! {
+    // Treasury account derived from a fixed PalletId; do not change after genesis.
+    pub const TreasuryPalletId: PalletId = PalletId(*b"py/trsry");
+    pub TreasuryAccount: AccountId = TreasuryPalletId::get().into_account_truncating();
+
+    // AI bot can also use a PalletId-based account to avoid dev keys.
+    pub const AiBotPalletId: PalletId = PalletId(*b"ai/bot__");
+    pub AiBotAccountParam: AccountId = AiBotPalletId::get().into_account_truncating();
+
+    pub const PlayersPerMatchConst: u8 = 2;
+    pub const QueueCapacityConst: u32 = 1024;
+
+    // Payout is 1000 whole tokens (adjust UNIT to your decimals)
+    pub FaucetPayoutAmount: Balance = 1_000 * UNIT;
+}
+
+impl pallet_eterra_faucet::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type Currency = Balances;
+}
+
+
+
+parameter_types! {
+    pub const GamerTagMaxLen: u32 = 32;
+    pub const AvatarCidMaxLen: u32 = 96; // or 128
+    pub const GamerChangeFee: Balance = 100u128;
+}
+impl pallet_eterra_gamer::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type Currency = Balances;
+    type ExpIssuerOrigin = frame_system::EnsureRoot<AccountId>;
+    type FaucetAccount = TreasuryAccount;
+    type ChangeFee = GamerChangeFee;
+    type MaxTagLen = GamerTagMaxLen;
+    type MaxAvatarCidLen = AvatarCidMaxLen;
+}
+
+impl pallet_eterra_monte_carlo_ai::pallet::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type Adapter = eterra_card_ai_adapter::eterra_adapter::Adapter;
+    // Limits & tuning params for Monte Carlo search
+    type MaxActions = ConstU32<64>;        // max legal moves enumerated
+    type BaseIterations = ConstU32<200>;   // baseline simulations per suggest() call
+    type MaxPlayoutDepth = ConstU16<16>;   // cut off long playouts
+    type RandomnessSeed = ConstU64<12345>; // deterministic-ish seed for hashing/entropy
+}
+
+
+
+pub struct RewardPerWinAmount;
+impl frame_support::traits::Get<Balance> for RewardPerWinAmount {
+    fn get() -> Balance {
+        100 * UNIT
+    }
+}
+
+impl pallet_eterra_game_authority::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type MaxPlayersPerGame = MaxPlayersPerGameConst;
+    type AdminOrigin = frame_system::EnsureRoot<AccountId>;
+    type MaxExpirationsPerBlock = MaxExpirationsPerBlock;
+    // If your BlockNumber is u32/u64, set 30 blocks:
+    type MaxRoundBlocks = frame_support::traits::ConstU32<30>;
+    // or, if BlockNumber is u64:
+    // type MaxRoundBlocks = frame_support::traits::ConstU64<30>;
+
+    // Max players that can be added in a single batch to a game
+    type MaxBatchAdd = frame_support::traits::ConstU32<32>;
+}
+
+impl pallet_eterra_daily_slots::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type TimeProvider = pallet_timestamp::Pallet<Runtime>;
+    type MaxSlotLength = MaxSlotLength;
+    type MaxOptionsPerSlot = MaxOptionsPerSlot;
+    type MaxRollsPerRound = MaxRollsPerRound;
+    type MaxRollHistoryLength = MaxRollHistoryLength;
+    type MaxWeightEntries = MaxWeightEntries;
+    type Currency = Balances;
+    type RewardPerWin = RewardPerWinAmount; // defined below
+}
+
+impl pallet_eterra_simple_tcg::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+
+    // You already had this:
+    type RandomnessSeed = ConstU64<12345>;
+
+    // NEW: hook up balances as the currency
+    type Currency = Balances;
+
+    // NEW: fixed mint fee of 100 whole tokens (uses your UNIT = base units)
+    type MintFee = ConstU128<{ 100 * UNIT }>;
+
+    // NEW: the faucet account that should receive the fee (Treasury via PalletId!)
+    type FaucetAccount = TreasuryAccount;
+}
+
+impl pallet_eterra_simple_matchmaker::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type PlayersPerMatch = PlayersPerMatchConst;
+    type QueueCapacity = QueueCapacityConst;
+    type HandProvider = HandProviderAdapter; // uses the impl above
+    type GameCreator  = pallet_eterra::Pallet<Runtime>;
+}
+
+impl pallet_eterra_simple_matchmaker::CurrentHandProvider<AccountId> for HandProviderAdapter {
+    fn has_current_hand(who: &AccountId) -> bool {
+        // Delegate to your game/cards pallet storage:
+        // Adjust the path to your pallet module and types.
+        pallet_eterra::CurrentHandOf::<Runtime>::contains_key(who)
+    }
+}
+
+
+impl pallet_eterra_tcg::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type RandomnessSeed = ConstU64<42>;
+
+    type MaxAttempts = ConstU8<3>; // Set maximum attempts per card to 3
+    type CardsPerPack = ConstU8<5>; // Set number of cards per pack to 5
+    type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
+}
+
+pub struct AiBotDifficulty;
+impl Get<u8> for AiBotDifficulty {
+    fn get() -> u8 { 60 }
+}
+
+impl pallet_eterra::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type NumPlayers = EterraNumPlayers;
+    type MaxRounds = EterraMaxRounds;
+    type BlocksToPlayLimit = EterraBlocksToPlayLimit;
+    type HandSize = ConstU32<5>; // <<—— added
+    type AiAccount = AiBotAccountParam;
+    type AiDifficulty = ConstU8<60>;
+}
+
+// FILE: runtime/src/configs/mod.rs
+parameter_types! {
+    // Maximum length (in bytes) of the on-chain URI (e.g. "ipfs://...").
+    pub const MaxMediaUriLen: u32 = 256;
+
+    // Maximum length (in bytes) of the on-chain content type string
+    // (e.g. "image/png", "image/jpeg").
+    pub const MaxMediaContentTypeLen: u32 = 64;
+
+    // Upper bound on the number of distinct collections.
+    pub const MaxMediaCollections: u32 = 1024;
+}
+
+parameter_types! {
+    // Maximum length (in bytes) of a collection or media name.
+    pub const MaxMediaNameLen: u32 = 64;
+
+    // Maximum length (in bytes) of a collection or media description.
+    pub const MaxMediaDescriptionLen: u32 = 256;
+
+    // Maximum number of roles an account can have across collections.
+    pub const MaxMediaRolesPerAccount: u32 = 8;
+
+    // Default collection id used when none is specified.
+    pub const DefaultMediaCollectionId: u32 = 0;
+}
+
+// FILE: runtime/src/configs/mod.rs
+impl pallet_eterra_media::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+
+    // Bounded sizes for URI and content-type.
+    type MaxUriLen = MaxMediaUriLen;
+    type MaxContentTypeLen = MaxMediaContentTypeLen;
+
+    // New: bounded sizes for names and descriptions.
+    type MaxNameLen = MaxMediaNameLen;
+    type MaxDescriptionLen = MaxMediaDescriptionLen;
+
+    // New: maximum roles per account.
+    type MaxRolesPerAccount = MaxMediaRolesPerAccount;
+
+    // New: default collection id and owner.
+    type DefaultCollectionId = DefaultMediaCollectionId;
+    type DefaultCollectionOwner = TreasuryAccount;
+
 }
