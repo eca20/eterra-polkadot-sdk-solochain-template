@@ -13,7 +13,6 @@ use sp_io::TestExternalities;
 use frame_system::EnsureRoot;
 
 pub type AccountId = u64;
-pub type BlockNumber = u64;
 
 parameter_types! {
     pub const BlockHashCount: u64 = 250;

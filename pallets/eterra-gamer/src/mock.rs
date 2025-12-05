@@ -7,10 +7,7 @@ use frame_support::{
 };
 use frame_system as system;
 use sp_core::H256;
-use sp_runtime::{
-    testing::Header,
-    traits::{BlakeTwo256, IdentityLookup},
-};
+use sp_runtime::traits::{BlakeTwo256, IdentityLookup};
 use sp_runtime::BuildStorage;
 
 pub type Balance = u128;
@@ -90,15 +87,10 @@ impl pallet_eterra_gamer::Config for Test {
 }
 
 // Build a mock runtime
-type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
 
 construct_runtime!(
-    pub enum Test where
-        Block = Block,
-        NodeBlock = Block,
-        UncheckedExtrinsic = UncheckedExtrinsic,
-    {
+    pub enum Test {
         System: frame_system,
         Balances: pallet_balances,
         EterraGamer: pallet_eterra_gamer,

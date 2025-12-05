@@ -10,6 +10,44 @@ mod tests;
 
 mod types;
 
+pub mod weights {
+    use frame_support::weights::Weight;
+
+    pub trait WeightInfo {
+        fn create_game() -> Weight;
+        fn play() -> Weight;
+        fn submit_hand() -> Weight;
+        fn play_from_hand() -> Weight;
+        fn force_finish_turn() -> Weight;
+        fn set_current_hand() -> Weight;
+        fn set_preset_hand() -> Weight;
+    }
+
+    impl WeightInfo for () {
+        fn create_game() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+        fn play() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+        fn submit_hand() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+        fn play_from_hand() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+        fn force_finish_turn() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+        fn set_current_hand() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+        fn set_preset_hand() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+    }
+}
+
 pub use crate::types::GameId;
 use frame_support::ensure;
 use frame_support::pallet_prelude::ConstU32;
@@ -35,6 +73,8 @@ pub mod pallet {
     use sp_runtime::traits::Hash;
     use sp_runtime::Saturating;
     use sp_std::vec::Vec;
+    use crate::weights::WeightInfo;
+
 
     pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
 
@@ -69,6 +109,8 @@ pub mod pallet {
         type AiAccount: Get<Self::AccountId>;
         /// Default AI difficulty (0..=100)
         type AiDifficulty: Get<u8>;
+        /// Weight information for extrinsics in this pallet.
+        type WeightInfo: crate::weights::WeightInfo;
     }
 
     #[pallet::storage]
@@ -206,7 +248,7 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         #[pallet::call_index(0)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::create_game())]
         pub fn create_game(
             origin: OriginFor<T>,
             mut players: Vec<AccountIdOf<T>>,
@@ -380,7 +422,7 @@ pub mod pallet {
             Ok(())
         }
         #[pallet::call_index(1)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::play())]
         pub fn play(origin: OriginFor<T>, game_id: GameId<T>, player_move: Move) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
@@ -466,11 +508,11 @@ pub mod pallet {
         /// Submit your current 5-card hand for this game. The submitted hand is always loaded from your current hand configuration.
         /// The `card_ids` argument is ignored and exists for ABI compatibility only.
         #[pallet::call_index(2)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::submit_hand())]
         pub fn submit_hand(
             origin: OriginFor<T>,
             game_id: GameId<T>,
-            card_ids: Vec<u32>,
+            _card_ids: Vec<u32>,
         ) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
 
@@ -544,7 +586,7 @@ pub mod pallet {
 
         /// Play a card by referencing its index in the submitted hand (0..HandSize-1).
         #[pallet::call_index(3)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::play_from_hand())]
         pub fn play_from_hand(
             origin: OriginFor<T>,
             game_id: GameId<T>,
@@ -633,7 +675,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(4)]
-        #[pallet::weight(10_000 + T::DbWeight::get().reads_writes(1, 1).ref_time())]
+        #[pallet::weight(<T as Config>::WeightInfo::force_finish_turn())]
         pub fn force_finish_turn(origin: OriginFor<T>, game_id: GameId<T>) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
 
@@ -697,7 +739,7 @@ pub mod pallet {
         /// Save/update your "current hand" (card IDs only) that the UI will use for future games.
         /// The hand must contain exactly `HandSize` unique cards owned by the caller.
         #[pallet::call_index(5)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::set_current_hand())]
         pub fn set_current_hand(origin: OriginFor<T>, card_ids: Vec<u32>) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
 
@@ -731,7 +773,7 @@ pub mod pallet {
 
         /// Deprecated alias for backwards compatibility. Calls `set_current_hand`.
         #[pallet::call_index(6)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::set_preset_hand())]
         pub fn set_preset_hand(origin: OriginFor<T>, card_ids: Vec<u32>) -> DispatchResult {
             Self::set_current_hand(origin, card_ids)
         }
@@ -1311,12 +1353,13 @@ impl<T: Config> Pallet<T> {
 
 // Expose GameCreator for the matchmaker pallet
 impl<T: Config> pallet_eterra_simple_matchmaker::GameCreator<AccountIdOf<T>> for Pallet<T> {
-    type GameId = GameId<T>;
-
     fn create_from_matchmaking(
         a: &AccountIdOf<T>,
         b: &AccountIdOf<T>,
-    ) -> Result<GameId<T>, sp_runtime::DispatchError> {
-        Self::do_create_pvp_game(a, b)
+    ) -> sp_runtime::DispatchResult {
+        // Create the game and ignore the returned GameId; the matchmaker
+        // only needs to know whether the creation succeeded.
+        let _ = Self::do_create_pvp_game(a, b)?;
+        Ok(())
     }
 }

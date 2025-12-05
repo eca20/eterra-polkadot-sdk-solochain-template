@@ -2,17 +2,13 @@ use crate::mock::RuntimeEvent;
 use crate::pallet;
 use crate::types::card::Possession as Player;
 use crate::types::game::GameProperties; // Import the GameProperties trait
-use crate::GameId;
 use crate::GameStorage;
 use crate::Move;
 use crate::{mock::*, types::card::Card};
 use frame_support::traits::Get;
-use frame_support::traits::Hooks;
 use frame_support::{assert_err, assert_noop, assert_ok};
 use pallet_eterra_simple_matchmaker::GameCreator; // bring the trait into scope
 use sp_runtime::DispatchError;
-
-use crate::types::card::Possession;
 use frame_support::BoundedVec;
 use frame_system::pallet_prelude::BlockNumberFor;
 use frame_system::RawOrigin;
@@ -25,8 +21,6 @@ use cards::pallet as card_pallet;
 use pallet_eterra_simple_tcg as cards;
 
 use crate::HandsOfGame;
-use eterra_card_ai_adapter::eterra_adapter as ai;
-use pallet_eterra_monte_carlo_ai as mc_ai;
 
 static INIT: Once = Once::new();
 
@@ -750,10 +744,15 @@ fn play_out_of_turn_fails() {
 
         // Confirm the opponent can play their turn
         let opponent_card = Card::new(2, 4, 5, 3);
+        let opponent_move = Move {
+            place_index_x: 1,
+            place_index_y: 2,
+            place_card: opponent_card,
+        };
         assert_ok!(Eterra::play(
             frame_system::RawOrigin::Signed(opponent).into(),
             game_id,
-            another_move,
+            opponent_move,
         ));
 
         log::debug!("Test completed: A player cannot play out of turn.");
@@ -1204,7 +1203,7 @@ fn exceeding_max_moves_marks_finished_and_keeps_game_in_storage() {
 fn force_finish_turn_fails_if_caller_not_in_game() {
     init_logger();
     new_test_ext().execute_with(|| {
-        let (game_id, creator, opponent) = setup_new_game();
+        let (game_id, _creator, _opponent) = setup_new_game();
         let non_player = 99; // someone who is not a game participant
 
         // Attempt to force finish with a non-player
@@ -1220,7 +1219,7 @@ fn force_finish_turn_fails_if_caller_not_in_game() {
 fn force_finish_turn_fails_if_current_player() {
     init_logger();
     new_test_ext().execute_with(|| {
-        let (game_id, creator, opponent) = setup_new_game();
+        let (game_id, _creator, _opponent) = setup_new_game();
 
         // By default, one of these (creator or opponent) will be randomly chosen as current player.
         let game = Eterra::game_board(game_id).unwrap();
@@ -1244,7 +1243,7 @@ fn force_finish_turn_fails_if_current_player() {
 fn force_finish_turn_fails_if_blocks_not_passed() {
     init_logger();
     new_test_ext().execute_with(|| {
-        let (game_id, creator, opponent) = setup_new_game();
+        let (game_id, _creator, opponent) = setup_new_game();
 
         // Let's assume the initial turn is creator. Then the opponent tries to force finish.
         // We intentionally do NOT move the block number forward, so BlocksToPlayLimit is not passed.
@@ -1717,7 +1716,7 @@ fn submit_hand_by_non_player_fails() {
 fn play_from_hand_not_your_turn_fails() {
     init_logger();
     new_test_ext().execute_with(|| {
-        let (game_id, creator, opponent) = setup_new_game();
+        let (game_id, creator, _opponent) = setup_new_game();
         // Submit valid hand for creator
         let ids = mint_cards_for(creator, 5);
         assert_ok!(Eterra::submit_hand(
@@ -1859,14 +1858,11 @@ fn transfer_after_submit_does_not_block_play() {
 mod ai_integration_tests {
     use super::ensure_preset_hand;
     use super::*;
-    use crate::mock::*;
-    use crate::types::card::Card;
     use crate::types::card::Possession as Player;
-    use crate::types::game::GameProperties;
     use crate::HandsOfGame;
-    use crate::{GameStorage, Move};
+    use crate::GameStorage;
     use eterra_card_ai_adapter::eterra_adapter as ai;
-    use frame_support::{assert_noop, assert_ok};
+    use frame_support::assert_ok;
     use frame_system::RawOrigin;
     use pallet_eterra_monte_carlo_ai as mc_ai;
     use sp_core::H256;
@@ -1895,7 +1891,7 @@ mod ai_integration_tests {
     #[test]
     fn pve_game_creation_generates_ai_hand() {
         new_test_ext().execute_with(|| {
-            let (game_id, human, ai_account) = setup_pve_game();
+            let (game_id, _human, ai_account) = setup_pve_game();
             // AI hand is generated and stored in HandsOfGame
             let ai_hand = HandsOfGame::<Test>::get(&game_id, &ai_account).expect("AI hand exists");
             assert_eq!(
@@ -1908,7 +1904,7 @@ mod ai_integration_tests {
     #[test]
     fn human_submits_hand_and_plays_one_move_pve() {
         new_test_ext().execute_with(|| {
-            let (game_id, human, ai_account) = setup_pve_game();
+            let (game_id, human, _ai_account) = setup_pve_game();
             // Mint cards and submit hand for human
             let ids = mint_cards_for(human, 5);
             assert_ok!(Eterra::submit_hand(
@@ -1918,8 +1914,6 @@ mod ai_integration_tests {
             ));
             // Ensure it's the human's turn
             let game = GameStorage::<Test>::get(&game_id).unwrap();
-            let human_idx = if game.players[0] == human { 0 } else { 1 };
-            let ai_idx = 1 - human_idx;
             assert_eq!(game.players[game.player_turn as usize], human);
             // Play from hand index 0 at (0,0)
             assert_ok!(Eterra::play_from_hand(
@@ -2205,8 +2199,6 @@ fn creator_cannot_start_second_pvp_game_while_active() {
 fn creator_cannot_start_second_pve_game_while_active() {
     new_test_ext().execute_with(|| {
         let human: u64 = 10;
-        let ai_acc: <Test as frame_system::Config>::AccountId =
-            <Test as crate::Config>::AiAccount::get();
         ensure_preset_hand(human);
 
         // First PvE game should succeed. (Players vec must include the human/creator.)
@@ -2248,14 +2240,20 @@ fn create_from_matchmaking_creates_game_and_emits_event() {
         set_dummy_hand::<Test>(&b);
 
         // Call through the matchmaker trait (this is what the matchmaker pallet uses).
-        let game_id =
-            <P as GameCreator<Acc>>::create_from_matchmaking(&a, &b).expect("should create a game");
+        <P as GameCreator<Acc>>::create_from_matchmaking(&a, &b)
+            .expect("should create a game");
+
+        // Read the active game id from storage (trait now returns ())
+        let game_id_a =
+            crate::ActiveGameOf::<Test>::get(&a).expect("creator should have active game");
+        let game_id_b =
+            crate::ActiveGameOf::<Test>::get(&b).expect("opponent should have active game");
+
+        // Both players should share the same active game
+        assert_eq!(game_id_a, game_id_b);
 
         // Storage should contain the game
-        assert!(crate::GameStorage::<Test>::contains_key(&game_id));
-        // Both players should have this game marked active
-        assert_eq!(crate::ActiveGameOf::<Test>::get(&a), Some(game_id));
-        assert_eq!(crate::ActiveGameOf::<Test>::get(&b), Some(game_id));
+        assert!(crate::GameStorage::<Test>::contains_key(&game_id_a));
 
         // Last event should be GameCreated { game_id }
         let ev = frame_system::Pallet::<Test>::events()
@@ -2264,7 +2262,7 @@ fn create_from_matchmaking_creates_game_and_emits_event() {
             .expect("some event expected");
         match ev {
             RuntimeEvent::Eterra(crate::Event::GameCreated { game_id: gid }) => {
-                assert_eq!(gid, game_id)
+                assert_eq!(gid, game_id_a)
             }
             other => panic!("unexpected event: {:?}", other),
         }

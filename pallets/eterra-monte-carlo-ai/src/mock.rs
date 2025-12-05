@@ -7,15 +7,10 @@ use sp_core::H256;
 use sp_io::TestExternalities;
 use sp_runtime::traits::{BlakeTwo256, IdentityLookup};
 
-type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
 
 frame_support::construct_runtime!(
-    pub enum Test where
-        Block = Block,
-        NodeBlock = Block,
-        UncheckedExtrinsic = UncheckedExtrinsic,
-    {
+    pub enum Test {
         System: frame_system,
         EterraAi: pallet_eterra_monte_carlo_ai,
     }
@@ -154,6 +149,8 @@ impl pallet_eterra_monte_carlo_ai::Config for Test {
     type BaseIterations = BaseIterationsConst;
     type MaxPlayoutDepth = MaxPlayoutDepthConst;
     type RandomnessSeed = RandomnessSeedConst;
+
+    type WeightInfo = ();
 }
 
 pub fn new_test_ext() -> TestExternalities {

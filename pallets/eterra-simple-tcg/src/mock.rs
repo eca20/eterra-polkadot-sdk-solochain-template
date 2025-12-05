@@ -1,7 +1,7 @@
 use crate as pallet_eterra_simple_tcg;
 use frame_support::{
     construct_runtime, parameter_types,
-    traits::{ConstU128, ConstU32, ConstU64, Everything, GenesisBuild},
+    traits::{ConstU128, ConstU32, ConstU64, Everything},
 };
 use frame_system as system;
 use sp_core::H256;
@@ -21,7 +21,6 @@ construct_runtime!(
     }
 );
 
-type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
 
 parameter_types! {
@@ -89,6 +88,8 @@ impl pallet_eterra_simple_tcg::Config for Test {
     type Currency = Balances;
     type MintFee = ConstU128<100>;
     type FaucetAccount = FaucetAccountParam;
+
+    type WeightInfo = ();
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {

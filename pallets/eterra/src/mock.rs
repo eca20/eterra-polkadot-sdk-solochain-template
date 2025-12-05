@@ -7,16 +7,14 @@ use frame_system as system;
 use pallet_balances;
 use pallet_eterra_monte_carlo_ai as mc_ai;
 use pallet_eterra_simple_tcg;
-use parity_scale_codec::{Decode, Encode}; // Ensure Encode and Decode are imported
+use parity_scale_codec::{Decode, Encode}; 
 use scale_info::TypeInfo;
-use sp_core::H256; // Ensure H256 is imported
+use sp_core::H256; 
 use sp_runtime::{
-    testing::Header,
     traits::{BlakeTwo256, IdentityLookup},
     BuildStorage,
-}; // Import TypeInfo
+}; 
 
-type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
 
 frame_support::construct_runtime!(
@@ -98,6 +96,7 @@ impl pallet_eterra_simple_tcg::Config for Test {
     type Currency = Balances;
     type MintFee = MintFeeConst;
     type FaucetAccount = FaucetAccountId;
+    type WeightInfo = ();
 }
 
 #[derive(Encode, Decode, TypeInfo, Clone, Copy, PartialEq, Eq, Debug)]
@@ -144,6 +143,7 @@ impl pallet_eterra::Config for Test {
     type HandSize = HandSizeConst;
     type AiAccount = FaucetAccountId;
     type AiDifficulty = ConstU8<60>;
+    type WeightInfo = ();
 }
 
 impl mc_ai::pallet::Config for Test {
@@ -153,6 +153,7 @@ impl mc_ai::pallet::Config for Test {
     type BaseIterations = ConstU32<100>;
     type MaxPlayoutDepth = ConstU16<16>;
     type RandomnessSeed = ConstU64<12345>;
+    type WeightInfo = ();
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {

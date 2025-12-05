@@ -6,12 +6,10 @@ use frame_support::{
 use frame_system as system;
 use sp_core::H256;
 use sp_runtime::{
-    testing::Header,
     traits::{BlakeTwo256, IdentityLookup},
     BuildStorage,
 };
 
-type UncheckedExtrinsic = frame_system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = frame_system::mocking::MockBlock<Test>;
 
 frame_support::construct_runtime!(
@@ -68,10 +66,12 @@ impl pallet_eterra_slots::Config for Test {
     type MaxAttempts = ConstU8<3>;
     type CardsPerPack = ConstU8<5>;
     type MaxPacks = ConstU32<10>;
+
+    type WeightInfo = ();
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
-    let mut storage = system::GenesisConfig::<Test>::default()
+    let storage = system::GenesisConfig::<Test>::default()
         .build_storage()
         .unwrap();
     storage.into()

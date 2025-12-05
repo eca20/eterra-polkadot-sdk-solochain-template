@@ -2,30 +2,22 @@ use crate as pallet_eterra_media;
 
 use frame_support::{
     construct_runtime, parameter_types,
-    traits::{Everything, Get, BuildGenesisConfig},
+    traits::{Everything, Get},
 };
 use frame_system as system;
 use sp_core::H256;
 use sp_runtime::{
-    testing::Header,
     traits::{BlakeTwo256, IdentityLookup},
     BuildStorage,
 };
 
 pub type AccountId = u64;
-pub type BlockNumber = u64;
 
 // Basic mock types.
-type UncheckedExtrinsic = system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = system::mocking::MockBlock<Test>;
 
 construct_runtime!(
-    pub enum Test
-    where
-        Block = Block,
-        NodeBlock = Block,
-        UncheckedExtrinsic = UncheckedExtrinsic,
-    {
+    pub enum Test {
         System: system,
         EterraMedia: pallet_eterra_media,
     }

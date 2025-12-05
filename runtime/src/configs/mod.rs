@@ -369,6 +369,7 @@ impl pallet_eterra_monte_carlo_ai::pallet::Config for Runtime {
     type BaseIterations = ConstU32<200>;   // baseline simulations per suggest() call
     type MaxPlayoutDepth = ConstU16<16>;   // cut off long playouts
     type RandomnessSeed = ConstU64<12345>; // deterministic-ish seed for hashing/entropy
+    type WeightInfo = ();
 }
 
 
@@ -404,6 +405,7 @@ impl pallet_eterra_daily_slots::Config for Runtime {
     type MaxWeightEntries = MaxWeightEntries;
     type Currency = Balances;
     type RewardPerWin = RewardPerWinAmount; // defined below
+    type WeightInfo = ();
 }
 
 impl pallet_eterra_simple_tcg::Config for Runtime {
@@ -420,6 +422,9 @@ impl pallet_eterra_simple_tcg::Config for Runtime {
 
     // NEW: the faucet account that should receive the fee (Treasury via PalletId!)
     type FaucetAccount = TreasuryAccount;
+
+    type WeightInfo = ();
+
 }
 
 impl pallet_eterra_simple_matchmaker::Config for Runtime {
@@ -428,6 +433,7 @@ impl pallet_eterra_simple_matchmaker::Config for Runtime {
     type QueueCapacity = QueueCapacityConst;
     type HandProvider = HandProviderAdapter; // uses the impl above
     type GameCreator  = pallet_eterra::Pallet<Runtime>;
+    type WeightInfo = ();
 }
 
 impl pallet_eterra_simple_matchmaker::CurrentHandProvider<AccountId> for HandProviderAdapter {
@@ -446,6 +452,7 @@ impl pallet_eterra_tcg::Config for Runtime {
     type MaxAttempts = ConstU8<3>; // Set maximum attempts per card to 3
     type CardsPerPack = ConstU8<5>; // Set number of cards per pack to 5
     type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
+    type WeightInfo = ();
 }
 
 pub struct AiBotDifficulty;
@@ -461,6 +468,7 @@ impl pallet_eterra::Config for Runtime {
     type HandSize = ConstU32<5>; // <<—— added
     type AiAccount = AiBotAccountParam;
     type AiDifficulty = ConstU8<60>;
+    type WeightInfo = ();
 }
 
 // FILE: runtime/src/configs/mod.rs

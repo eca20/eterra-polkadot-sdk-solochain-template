@@ -13,10 +13,7 @@ use crate::{
 use frame_support::traits::Hooks;
 use frame_support::BoundedVec;
 use frame_support::{assert_noop, assert_ok};
-use frame_system::pallet_prelude::BlockNumberFor;
 use frame_system::RawOrigin;
-use rand::{Rng, SeedableRng};
-use rand_chacha::ChaCha8Rng;
 use std::collections::HashMap; // Optional: use fixed seed for deterministic tests
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -35,11 +32,6 @@ fn roll_n_times<T: crate::pallet::Config>(who: &T::AccountId, n: u32) {
 
 // 6h window at 6s/block → 3_600 blocks
 const BLOCKS_PER_WINDOW: u64 = 3_600;
-
-fn advance_blocks(n: u64) {
-    let b: u64 = frame_system::Pallet::<TestRuntime>::block_number();
-    frame_system::Pallet::<TestRuntime>::set_block_number(b + n);
-}
 
 // ─── Basic Slot Roll Tests ─────────────────────────────────────────────────
 

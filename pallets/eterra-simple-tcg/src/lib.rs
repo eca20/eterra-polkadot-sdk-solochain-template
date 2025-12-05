@@ -15,8 +15,6 @@ use frame_support::traits::{Currency, ExistenceRequirement};
 use frame_support::{pallet_prelude::*, traits::Get, BoundedVec};
 // ===== New: utilities for in-pallet game logic =====
 
-const GRID_DIM: usize = 4;
-const BOARD_SIZE: usize = GRID_DIM * GRID_DIM; // 16
 
 use frame_support::pallet_prelude::ConstU32;
 use frame_system::{ensure_signed, pallet_prelude::OriginFor};
@@ -25,9 +23,40 @@ use scale_info::TypeInfo;
 use sp_runtime::traits::Hash;
 use sp_std::prelude::*;
 
+pub mod weights {
+    use frame_support::weights::Weight;
+
+    pub trait WeightInfo {
+        fn mint_card() -> Weight;
+        fn transfer_card() -> Weight;
+        fn set_price() -> Weight;
+        fn remove_price() -> Weight;
+        fn buy_card() -> Weight;
+    }
+
+    impl WeightInfo for () {
+        fn mint_card() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+        fn transfer_card() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+        fn set_price() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+        fn remove_price() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+        fn buy_card() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+    }
+}
+
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
+    use crate::weights::WeightInfo;
     use frame_system::pallet_prelude::BlockNumberFor;
 
     /// Convenience type aliases for IDs/balance types used in cards.
@@ -99,6 +128,9 @@ pub mod pallet {
         /// Faucet account that receives the mint fee.
         #[pallet::constant]
         type FaucetAccount: Get<Self::AccountId>;
+
+        /// Weight information for extrinsics.
+        type WeightInfo: crate::weights::WeightInfo;
     }
 
     // ------------------
@@ -233,7 +265,7 @@ pub mod pallet {
     impl<T: Config> Pallet<T> {
         /// Mint a single card for the caller.
         #[pallet::call_index(0)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::mint_card())]
         pub fn mint_card(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
             let card_id = Self::create_new_card(&player)?;
@@ -245,7 +277,7 @@ pub mod pallet {
         /// If that card is also part of a pack, it still references it, but ownership
         /// changes to `to`.
         #[pallet::call_index(1)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::transfer_card())]
         pub fn transfer_card(
             origin: OriginFor<T>,
             card_id: u32,
@@ -274,7 +306,7 @@ pub mod pallet {
 
         /// List a card for sale at a fixed `price` (in chain base units).
         #[pallet::call_index(2)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::set_price())]
         pub fn set_price(
             origin: OriginFor<T>,
             card_id: CardId,
@@ -308,7 +340,7 @@ pub mod pallet {
 
         /// Remove a card from sale.
         #[pallet::call_index(3)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::remove_price())]
         pub fn remove_price(origin: OriginFor<T>, card_id: CardId) -> DispatchResult {
             let who = ensure_signed(origin)?;
             // Verify ownership
@@ -329,7 +361,7 @@ pub mod pallet {
 
         /// Buy a listed card at the asking price.
         #[pallet::call_index(4)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(<T as Config>::WeightInfo::buy_card())]
         pub fn buy_card(origin: OriginFor<T>, card_id: CardId) -> DispatchResult {
             let buyer = ensure_signed(origin)?;
 

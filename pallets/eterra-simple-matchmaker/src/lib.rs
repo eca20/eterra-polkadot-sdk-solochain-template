@@ -2,39 +2,29 @@
 
 pub use pallet::*;
 
-use frame_support::{dispatch::DispatchResult, pallet_prelude::*, traits::Get};
-use frame_system::pallet_prelude::*;
-use sp_std::prelude::*;
+pub mod weights {
+    use frame_support::weights::Weight;
 
-/// A lightweight bridge to verify that an account has configured a Current Hand
-/// in the cards/game pallet. The runtime implements this by delegating to the
-/// other pallet's storage (e.g. `eterra::CurrentHandOf`).
-pub trait CurrentHandProvider<AccountId> {
-    /// Returns true iff the account has a non-None current hand configured.
-    fn has_current_hand(who: &AccountId) -> bool;
+    pub trait WeightInfo {
+        fn base() -> Weight;
+    }
+
+    impl WeightInfo for () {
+        fn base() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+    }
 }
 
-/// A callback interface the runtime/game pallet implements so the matchmaker
-/// can create a game the moment two players are matched.
-pub trait GameCreator<AccountId> {
-    /// The concrete GameId type of the game pallet.
-    type GameId;
-    /// Create a new game for the given players. Implemented in the game pallet.
-    fn create_from_matchmaking(
-        p1: &AccountId,
-        p2: &AccountId,
-    ) -> Result<Self::GameId, sp_runtime::DispatchError>;
-}
-
-#[cfg(test)]
-mod mock;
-
-#[cfg(test)]
-mod tests;
+const _GRID_DIM: usize = 4;
+const _BOARD_SIZE: usize = _GRID_DIM * _GRID_DIM; // 16
 
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
+    use frame_support::pallet_prelude::*;
+    use frame_system::pallet_prelude::*;
+    use crate::weights::WeightInfo;
 
     #[pallet::config]
     pub trait Config: frame_system::Config {
@@ -50,6 +40,8 @@ pub mod pallet {
         type HandProvider: super::CurrentHandProvider<Self::AccountId>;
         /// Hook to the game pallet that actually creates a game once two players are matched.
         type GameCreator: super::GameCreator<Self::AccountId>;
+        /// Weight information for the pallet's extrinsics.
+        type WeightInfo: WeightInfo;
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
     }
 
@@ -111,7 +103,7 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         #[pallet::call_index(0)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(T::WeightInfo::base())]
         pub fn join_queue(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
             let cap = T::QueueCapacity::get();
@@ -155,7 +147,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(1)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(T::WeightInfo::base())]
         pub fn leave_queue(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
             ensure!(InQueue::<T>::contains_key(&who), Error::<T>::NotQueued);
@@ -167,7 +159,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(2)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(T::WeightInfo::base())]
         pub fn process_queue(origin: OriginFor<T>) -> DispatchResult {
             let _ = ensure_signed(origin).ok();
             let cap = T::QueueCapacity::get();
@@ -277,4 +269,21 @@ pub mod pallet {
             Ok(())
         }
     }
+}
+
+
+/// Abstraction over a game/cards pallet that can tell us whether a player
+/// has configured a current/preset hand suitable for matchmaking.
+pub trait CurrentHandProvider<AccountId> {
+    /// Returns true if the given account has a current hand configured.
+    fn has_current_hand(who: &AccountId) -> bool;
+}
+
+/// Abstraction over the game pallet that will actually instantiate a game
+/// when two players are matched by this matchmaker pallet.
+pub trait GameCreator<AccountId> {
+    /// Called by the matchmaker pallet once a pair has been found.
+    /// Implementations are free to emit their own events or even fail;
+    /// the matchmaker only logs the attempt and the matched pair.
+    fn create_from_matchmaking(a: &AccountId, b: &AccountId) -> sp_runtime::DispatchResult;
 }

@@ -20,8 +20,21 @@ use sp_std::prelude::*;
 pub mod pallet {
     use super::*;
     use frame_support::traits::ConstU32;
+    use frame_support::weights::Weight;
 
     const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
+    /// Weight functions for this pallet's extrinsics.
+    pub trait WeightInfo {
+        /// Weight for `mint_pack` extrinsic.
+        fn mint_pack() -> Weight;
+        /// Weight for `generate_slot` extrinsic.
+        fn generate_slot() -> Weight;
+        /// Weight for `accept_slot` extrinsic.
+        fn accept_slot() -> Weight;
+        /// Weight for `transfer_card` extrinsic.
+        fn transfer_card() -> Weight;
+    }
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -51,6 +64,9 @@ pub mod pallet {
         /// The maximum number of packs a single account can hold.
         #[pallet::constant]
         type MaxPacks: Get<u32>;
+
+        /// Weight information for this pallet's extrinsics.
+        type WeightInfo: WeightInfo;
     }
 
     // ------------------
@@ -188,7 +204,7 @@ pub mod pallet {
         /// Mint a new pack of cards for the caller, up to `MaxPacks`.
         /// Each card is stored globally in `Cards<T>`.
         #[pallet::call_index(0)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(T::WeightInfo::mint_pack())]
         pub fn mint_pack(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
 
@@ -231,7 +247,7 @@ pub mod pallet {
 
         /// Generate new slot values for the user’s current (active) card, up to `MaxAttempts`.
         #[pallet::call_index(1)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(T::WeightInfo::generate_slot())]
         pub fn generate_slot(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
 
@@ -288,7 +304,7 @@ pub mod pallet {
 
         /// Accept (finalize) the user’s current card’s slot values immediately.
         #[pallet::call_index(2)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(T::WeightInfo::accept_slot())]
         pub fn accept_slot(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
 
@@ -322,7 +338,7 @@ pub mod pallet {
         /// If that card is also part of a pack, it still references it, but ownership
         /// changes to `to`.
         #[pallet::call_index(3)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(T::WeightInfo::transfer_card())]
         pub fn transfer_card(
             origin: OriginFor<T>,
             card_id: u32,
@@ -403,6 +419,26 @@ pub mod pallet {
             }
 
             Ok(())
+        }
+    }
+
+    // Default weight implementation for development and tests.
+    impl WeightInfo for () {
+        fn mint_pack() -> Weight {
+            // Flat weight placeholder; replace with benchmarked values in production.
+            Weight::from_parts(10_000, 0)
+        }
+
+        fn generate_slot() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+
+        fn accept_slot() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+
+        fn transfer_card() -> Weight {
+            Weight::from_parts(10_000, 0)
         }
     }
 }

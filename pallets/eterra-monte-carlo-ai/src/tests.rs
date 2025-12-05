@@ -1,7 +1,7 @@
 use super::*;
-use crate::pallet::Config;
 use crate::pallet::Pallet as EterraAi;
-use frame_support::{assert_ok, traits::OnInitialize};
+use frame_support::assert_ok;
+use crate::mock::NimAction;
 
 struct AdapterShim;
 
@@ -54,7 +54,7 @@ impl crate::GameAdapter for AdapterShim {
 fn nim_ai_picks_optimal_at_high_difficulty() {
     let mut ext = crate::mock::new_test_ext();
     ext.execute_with(|| {
-        use crate::mock::{NimAction, NimState, Test};
+        use crate::mock::{NimState, Test};
 
         let s = NimState {
             pile: 3,
@@ -73,7 +73,7 @@ fn nim_ai_picks_optimal_at_high_difficulty() {
 fn extrinsic_emits_suggested_event() {
     let mut ext = crate::mock::new_test_ext();
     ext.execute_with(|| {
-        use crate::mock::{NimAction, NimState, Test};
+        use crate::mock::{NimState, Test};
         let who: u64 = 1;
         let state = NimState {
             pile: 4,
@@ -112,7 +112,7 @@ fn nim_terminal_has_no_suggestion() {
 
 #[test]
 fn eterra_adapter_ai_returns_legal_move_and_applies() {
-    use eterra_card_ai_adapter::eterra_adapter::{Adapter, Board, Hand, HandEntry, State};
+    use eterra_card_ai_adapter::eterra_adapter::{Board, Hand, HandEntry, State};
 
     let mut ext = crate::mock::new_test_ext();
     ext.execute_with(|| {
@@ -231,7 +231,7 @@ fn adapter_list_actions_respects_max_bound() {
 #[test]
 fn ai_prefers_capture_when_available_high_difficulty() {
     use eterra_card_ai_adapter::eterra_adapter::{
-        Adapter, Board, Card as ACard, Hand, HandEntry, Possession, State,
+        Adapter, Board, Card as ACard, Hand, HandEntry, State,
     };
 
     let mut ext = crate::mock::new_test_ext();

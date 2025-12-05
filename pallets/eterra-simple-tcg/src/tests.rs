@@ -1,10 +1,6 @@
 use super::*;
 use crate::{mock::*, Event as TcgEvent};
-use frame_support::{assert_noop, assert_ok, traits::OnInitialize};
-
-fn last_event() -> RuntimeEvent {
-    System::events().pop().expect("Event expected").event
-}
+use frame_support::{assert_noop, assert_ok};
 
 #[test]
 fn mint_card_charges_fee_and_mints() {

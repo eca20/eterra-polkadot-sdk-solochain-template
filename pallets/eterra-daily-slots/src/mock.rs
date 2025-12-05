@@ -9,7 +9,6 @@ use frame_support::{
     traits::{ConstU128, ConstU16, ConstU32, Everything, UnixTime},
 };
 use frame_system as system;
-use frame_system::RawOrigin;
 use pallet_balances as balances;
 use sp_core::H256;
 use sp_runtime::traits::{BlakeTwo256, IdentityLookup};
@@ -41,10 +40,6 @@ impl MockTimeState {
     pub fn set_now(new_now: u64) {
         MOCK_NOW.with(|c| c.set(new_now));
     }
-    /// Read it back (if needed).
-    pub fn now() -> u64 {
-        MOCK_NOW.with(|c| c.get())
-    }
 }
 
 // =====================================================
@@ -58,7 +53,6 @@ construct_runtime!(
     }
 );
 
-type UncheckedExtrinsic = system::mocking::MockUncheckedExtrinsic<Test>;
 type Block = system::mocking::MockBlock<Test>;
 pub type TestRuntime = Test;
 
@@ -157,15 +151,13 @@ impl pallet_eterra_daily_slots::Config for Test {
     type MaxWeightEntries = MaxWeightEntries;
     type Currency = Balances;
     type RewardPerWin = ConstU128<1_000>;
+
+    type WeightInfo = ();
 }
 
 // =====================================================
 // 🧪 Externalities Builder
 // =====================================================
-
-fn reset_mock_time() {
-    MockTimeState::set_now(90_000);
-}
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
     // build the initial storage from genesis

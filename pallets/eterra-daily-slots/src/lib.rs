@@ -26,6 +26,16 @@ const BLOCKS_PER_WINDOW: u64 = 3_600;
 pub mod pallet {
     use super::*;
 
+    /// Weight functions for this pallet's extrinsics.
+    pub trait WeightInfo {
+        /// Weight for `roll` extrinsic.
+        fn roll() -> Weight;
+        /// Weight for `set_reel_weights` extrinsic.
+        fn set_reel_weights() -> Weight;
+        /// Weight for `set_all_reel_weights` extrinsic.
+        fn set_all_reel_weights() -> Weight;
+    }
+
     #[pallet::pallet]
     #[pallet::without_storage_info]
     pub struct Pallet<T>(_);
@@ -44,6 +54,9 @@ pub mod pallet {
         /// Amount of COIN rewarded for a win
         #[pallet::constant]
         type RewardPerWin: Get<BalanceOf<Self>>;
+
+        /// Weight information for the extrinsics in this pallet.
+        type WeightInfo: WeightInfo;
 
         /// How many reels (slots)
         #[pallet::constant]
@@ -169,7 +182,7 @@ pub mod pallet {
     impl<T: Config> Pallet<T> {
         /// Roll the slot machine for the caller, producing a set of symbols.
         #[pallet::call_index(0)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(T::WeightInfo::roll())]
         pub fn roll(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
@@ -257,7 +270,7 @@ pub mod pallet {
             if Self::is_win(&result) {
                 let amt = T::RewardPerWin::get();
                 // Mint to the winner (inflationary faucet-style)
-                T::Currency::deposit_creating(&who, amt);
+                let _ = T::Currency::deposit_creating(&who, amt);
                 Self::deposit_event(Event::WinRewarded {
                     player: who.clone(),
                     amount: amt,
@@ -293,7 +306,7 @@ pub mod pallet {
         /// Set the weights for one reel (indexed by `reel`).
         /// To bias results, ensure all reels (from 0 to MaxSlotLength - 1) are updated.
         #[pallet::call_index(1)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(T::WeightInfo::set_reel_weights())]
         pub fn set_reel_weights(
             origin: OriginFor<T>,
             reel: u32,
@@ -308,7 +321,7 @@ pub mod pallet {
 
         /// Allows a root origin to update multiple reels' weights in one call.
         #[pallet::call_index(2)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(T::WeightInfo::set_all_reel_weights())]
         pub fn set_all_reel_weights(
             origin: OriginFor<T>,
             all_weights: Vec<(u32, Vec<(u32, u32)>)>,
@@ -440,6 +453,22 @@ pub mod pallet {
                 log::warn!("(eterra-daily-slots) weekly drawing failed: {:?}", e);
             }
 
+            Weight::from_parts(10_000, 0)
+        }
+    }
+
+    // Default weight implementation used for development and tests.
+    impl WeightInfo for () {
+        fn roll() -> Weight {
+            // Simple flat weight for now; replace with benchmarked values later.
+            Weight::from_parts(10_000, 0)
+        }
+
+        fn set_reel_weights() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+
+        fn set_all_reel_weights() -> Weight {
             Weight::from_parts(10_000, 0)
         }
     }

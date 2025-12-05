@@ -3,7 +3,6 @@ use crate::{mock::*, ActiveCard, Error, Event, PlayerPacks};
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok};
 use log::{debug, Level, Metadata, Record};
-use sp_runtime::traits::SaturatedConversion;
 use std::sync::Once;
 
 static INIT: Once = Once::new();
@@ -205,8 +204,11 @@ fn test_generate_slot_success() {
         // So let's confirm that event by checking it has the correct type:
         assert_event_found(
             |e| {
-                matches!(e, RuntimeEvent::EterraSlots(Event::SlotGenerated { card_id, values }) 
-                if *card_id >= 0 && values.len() == 4)
+                matches!(
+                    e,
+                    RuntimeEvent::EterraSlots(Event::SlotGenerated { values, .. })
+                        if values.len() == 4
+                )
             },
             "SlotGenerated",
         );
@@ -235,8 +237,10 @@ fn test_accept_slot_success() {
         // The event is now `SlotAccepted { card_id }`, no player field
         assert_event_found(
             |e| {
-                matches!(e, RuntimeEvent::EterraSlots(Event::SlotAccepted { card_id })
-                if *card_id >= 0)
+                matches!(
+                    e,
+                    RuntimeEvent::EterraSlots(Event::SlotAccepted { .. })
+                )
             },
             "SlotAccepted",
         );

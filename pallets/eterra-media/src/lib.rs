@@ -322,7 +322,8 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         /// Create a new media collection.
-        #[pallet::weight(10_000)]
+        #[pallet::call_index(0)]
+        #[pallet::weight(T::DbWeight::get().reads_writes(3, 3))]
         pub fn create_collection(
             origin: OriginFor<T>,
             name: Vec<u8>,
@@ -361,7 +362,8 @@ pub mod pallet {
 
         /// Set or unset a role for an account in a collection.
         /// Only a collection Admin may call this.
-        #[pallet::weight(10_000)]
+        #[pallet::call_index(1)]
+        #[pallet::weight(T::DbWeight::get().reads_writes(3, 3))]
         pub fn set_collection_role(
             origin: OriginFor<T>,
             collection_id: MediaCollectionId,
@@ -397,7 +399,8 @@ pub mod pallet {
         /// Register a new immutable media item.
         ///
         /// If `maybe_collection_id` is `None`, the pallet will fall back to `Config::DefaultCollectionId`.
-        #[pallet::weight(10_000)]
+        #[pallet::call_index(2)]
+        #[pallet::weight(T::DbWeight::get().reads_writes(5, 5))]
         pub fn register_media(
             origin: OriginFor<T>,
             maybe_collection_id: Option<MediaCollectionId>,
@@ -459,9 +462,10 @@ pub mod pallet {
             Ok(())
         }
 
-                /// Freeze a collection, preventing new media from being registered.
+        /// Freeze a collection, preventing new media from being registered.
         /// Only collection Admin or owner may do this.
-        #[pallet::weight(10_000)]
+        #[pallet::call_index(3)]
+        #[pallet::weight(T::DbWeight::get().reads_writes(3, 3))]
         pub fn freeze_collection(
             origin: OriginFor<T>,
             collection_id: MediaCollectionId,
@@ -484,7 +488,8 @@ pub mod pallet {
 
         /// Mark a media item as deprecated.
         /// Only collection Admin or media owner may do this.
-        #[pallet::weight(10_000)]
+        #[pallet::call_index(4)]
+        #[pallet::weight(T::DbWeight::get().reads_writes(3, 3))]
         pub fn deprecate_media(
             origin: OriginFor<T>,
             media_id: MediaId,

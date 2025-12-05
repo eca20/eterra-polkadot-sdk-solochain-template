@@ -10,6 +10,34 @@ mod tests;
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 
+pub mod weights {
+    use core::marker::PhantomData;
+    use frame_support::weights::Weight;
+    use frame_system::Config as SystemConfig;
+
+    /// Weight functions needed for this pallet.
+    pub trait WeightInfo {
+        fn suggest_move() -> Weight;
+    }
+
+    /// Weights for a generic Substrate chain.
+    pub struct SubstrateWeight<T>(PhantomData<T>);
+
+    impl<T: SystemConfig> WeightInfo for SubstrateWeight<T> {
+        fn suggest_move() -> Weight {
+            // Placeholder: constant weight; replace with benchmarked values when available.
+            Weight::from_parts(10_000, 0)
+        }
+    }
+
+    /// Fallback implementation for tests and when weights are not wired in the runtime.
+    impl WeightInfo for () {
+        fn suggest_move() -> Weight {
+            Weight::from_parts(10_000, 0)
+        }
+    }
+}
+
 /// A generic, no_std-friendly adapter for any 2-player, turn-based, perfect-information game.
 pub trait GameAdapter {
     /// Game state snapshot for search.
@@ -63,6 +91,7 @@ pub mod pallet {
     use frame_support::sp_runtime::traits::Hash as HashTrait;
     use frame_support::{dispatch::DispatchResultWithPostInfo, pallet_prelude::*};
     use frame_system::pallet_prelude::*;
+    use crate::weights::WeightInfo;
 
     #[pallet::pallet]
     pub struct Pallet<T>(_);
@@ -89,6 +118,9 @@ pub mod pallet {
         /// Seed used for deterministic PRNG inside the pallet.
         #[pallet::constant]
         type RandomnessSeed: Get<u64>;
+
+        /// Weight information for the extrinsics of this pallet.
+        type WeightInfo: WeightInfo;
     }
 
     #[pallet::storage]
@@ -118,7 +150,7 @@ pub mod pallet {
         /// Ask the AI to suggest the best action by Monte-Carlo (rollout) search.
         /// `difficulty` in 0..=100 scales the iterations.
         #[pallet::call_index(0)]
-        #[pallet::weight(10_000)]
+        #[pallet::weight(T::WeightInfo::suggest_move())]
         pub fn suggest_move(
             origin: OriginFor<T>,
             state: <T::Adapter as GameAdapter>::State,
