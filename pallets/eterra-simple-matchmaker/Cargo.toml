@@ -11,6 +11,8 @@ targets = ["x86_64-unknown-linux-gnu"]
 [dependencies]
 frame-support = { workspace = true, default-features = false }
 frame-system  = { workspace = true, default-features = false }
+frame-benchmarking = { workspace = true, default-features = false, optional = true }
+frame-system-benchmarking = { workspace = true, default-features = false, optional = true }
 parity-scale-codec = { workspace = true, features = ["derive", "max-encoded-len"] }
 scale-info    = { workspace = true, features = ["derive"] }
 sp-io         = { workspace = true, default-features = false }
@@ -26,7 +28,16 @@ default = ["std"]
 std = [
   "frame-support/std",
   "frame-system/std",
+  "frame-benchmarking?/std",
+  "frame-system-benchmarking?/std",
   "sp-std/std",
   "sp-io/std",
   "sp-runtime/std",
+]
+runtime-benchmarks = [
+  "frame-benchmarking/runtime-benchmarks",
+  "frame-system-benchmarking/runtime-benchmarks",
+  "frame-support/runtime-benchmarks",
+  "frame-system/runtime-benchmarks",
+  "sp-runtime/runtime-benchmarks",
 ]

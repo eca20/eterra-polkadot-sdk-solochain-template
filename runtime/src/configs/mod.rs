@@ -440,9 +440,9 @@ impl pallet_eterra_simple_matchmaker::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type PlayersPerMatch = PlayersPerMatchConst;
     type QueueCapacity = QueueCapacityConst;
-    type HandProvider = HandProviderAdapter; // uses the impl above
+    type HandProvider = MatchmakerHandProvider;
     type GameCreator  = pallet_eterra::Pallet<Runtime>;
-    type WeightInfo = ();
+    type WeightInfo = pallet_eterra_simple_matchmaker::weights::SubstrateWeight<Runtime>;
 }
 
 impl pallet_eterra_simple_matchmaker::CurrentHandProvider<AccountId> for HandProviderAdapter {
@@ -453,6 +453,22 @@ impl pallet_eterra_simple_matchmaker::CurrentHandProvider<AccountId> for HandPro
     }
 }
 
+#[cfg(feature = "runtime-benchmarks")]
+pub struct BenchmarkHandProvider;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_eterra_simple_matchmaker::CurrentHandProvider<AccountId> for BenchmarkHandProvider {
+    fn has_current_hand(_who: &AccountId) -> bool {
+        true
+    }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+type MatchmakerHandProvider = BenchmarkHandProvider;
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+type MatchmakerHandProvider = HandProviderAdapter;
+
 
 impl pallet_eterra_tcg::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
@@ -461,7 +477,7 @@ impl pallet_eterra_tcg::Config for Runtime {
     type MaxAttempts = ConstU8<3>; // Set maximum attempts per card to 3
     type CardsPerPack = ConstU8<5>; // Set number of cards per pack to 5
     type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
-    type WeightInfo = ();
+    type WeightInfo = pallet_eterra_tcg::weights::SubstrateWeight<Runtime>;
 }
 
 pub struct AiBotDifficulty;

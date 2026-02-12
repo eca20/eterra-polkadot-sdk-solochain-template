@@ -5325,8 +5325,10 @@ dependencies = [
 name = "pallet-eterra-simple-matchmaker"
 version = "0.1.0"
 dependencies = [
+ "frame-benchmarking",
  "frame-support",
  "frame-system",
+ "frame-system-benchmarking",
  "parity-scale-codec",
  "scale-info",
  "sp-core",
@@ -5359,8 +5361,10 @@ dependencies = [
 name = "pallet-eterra-tcg"
 version = "0.1.0"
 dependencies = [
+ "frame-benchmarking",
  "frame-support",
  "frame-system",
+ "frame-system-benchmarking",
  "hex",
  "log",
  "parity-scale-codec",

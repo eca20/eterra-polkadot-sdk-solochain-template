@@ -4,6 +4,12 @@
 
 pub use pallet::*;
 
+pub mod weights;
+pub use weights::WeightInfo;
+
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+
 #[cfg(test)]
 mod mock;
 #[cfg(test)]
@@ -20,21 +26,9 @@ use sp_std::prelude::*;
 pub mod pallet {
     use super::*;
     use frame_support::traits::ConstU32;
-    use frame_support::weights::Weight;
+    use crate::weights::WeightInfo;
 
     const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
-
-    /// Weight functions for this pallet's extrinsics.
-    pub trait WeightInfo {
-        /// Weight for `mint_pack` extrinsic.
-        fn mint_pack() -> Weight;
-        /// Weight for `generate_slot` extrinsic.
-        fn generate_slot() -> Weight;
-        /// Weight for `accept_slot` extrinsic.
-        fn accept_slot() -> Weight;
-        /// Weight for `transfer_card` extrinsic.
-        fn transfer_card() -> Weight;
-    }
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -482,23 +476,4 @@ pub mod pallet {
         }
     }
 
-    // Default weight implementation for development and tests.
-    impl WeightInfo for () {
-        fn mint_pack() -> Weight {
-            // Flat weight placeholder; replace with benchmarked values in production.
-            Weight::from_parts(10_000, 0)
-        }
-
-        fn generate_slot() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-
-        fn accept_slot() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-
-        fn transfer_card() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-    }
 }

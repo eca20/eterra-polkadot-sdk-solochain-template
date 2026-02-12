@@ -2,19 +2,11 @@
 
 pub use pallet::*;
 
-pub mod weights {
-    use frame_support::weights::Weight;
+pub mod weights;
+pub use weights::WeightInfo;
 
-    pub trait WeightInfo {
-        fn base() -> Weight;
-    }
-
-    impl WeightInfo for () {
-        fn base() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-    }
-}
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
 
 const _GRID_DIM: usize = 4;
 const _BOARD_SIZE: usize = _GRID_DIM * _GRID_DIM; // 16
@@ -103,7 +95,7 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         #[pallet::call_index(0)]
-        #[pallet::weight(T::WeightInfo::base())]
+        #[pallet::weight(T::WeightInfo::join_queue())]
         pub fn join_queue(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
             let cap = T::QueueCapacity::get();
@@ -147,7 +139,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(1)]
-        #[pallet::weight(T::WeightInfo::base())]
+        #[pallet::weight(T::WeightInfo::leave_queue())]
         pub fn leave_queue(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
             ensure!(InQueue::<T>::contains_key(&who), Error::<T>::NotQueued);
@@ -159,7 +151,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(2)]
-        #[pallet::weight(T::WeightInfo::base())]
+        #[pallet::weight(T::WeightInfo::process_queue())]
         pub fn process_queue(origin: OriginFor<T>) -> DispatchResult {
             let _ = ensure_signed(origin).ok();
             let cap = T::QueueCapacity::get();
