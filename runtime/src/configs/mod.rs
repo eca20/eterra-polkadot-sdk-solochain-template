@@ -432,7 +432,7 @@ impl pallet_eterra_simple_tcg::Config for Runtime {
     // NEW: the faucet account that should receive the fee (Treasury via PalletId!)
     type FaucetAccount = TreasuryAccount;
 
-    type WeightInfo = ();
+    type WeightInfo = pallet_eterra_simple_tcg::weights::SubstrateWeight<Runtime>;
 
 }
 

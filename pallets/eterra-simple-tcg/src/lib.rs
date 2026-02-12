@@ -6,6 +6,12 @@ extern crate alloc;
 
 pub use self::pallet::*;
 
+pub mod weights;
+pub use weights::WeightInfo;
+
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+
 #[cfg(test)]
 mod mock;
 #[cfg(test)]
@@ -22,36 +28,6 @@ use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 use sp_runtime::traits::Hash;
 use sp_std::prelude::*;
-
-pub mod weights {
-    use frame_support::weights::Weight;
-
-    pub trait WeightInfo {
-        fn mint_card() -> Weight;
-        fn transfer_card() -> Weight;
-        fn set_price() -> Weight;
-        fn remove_price() -> Weight;
-        fn buy_card() -> Weight;
-    }
-
-    impl WeightInfo for () {
-        fn mint_card() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-        fn transfer_card() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-        fn set_price() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-        fn remove_price() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-        fn buy_card() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-    }
-}
 
 #[frame_support::pallet]
 pub mod pallet {

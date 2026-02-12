@@ -285,11 +285,23 @@ impl_runtime_apis! {
         }
 
         fn get_preset(id: &Option<sp_genesis_builder::PresetId>) -> Option<Vec<u8>> {
-            get_preset::<RuntimeGenesisConfig>(id, |_| None)
+            get_preset::<RuntimeGenesisConfig>(id, |preset| {
+                let preset: &str = preset.try_into().ok()?;
+                match preset {
+                    sp_genesis_builder::DEV_RUNTIME_PRESET
+                    | sp_genesis_builder::LOCAL_TESTNET_RUNTIME_PRESET => {
+                        Some(b"{}".to_vec())
+                    }
+                    _ => None,
+                }
+            })
         }
 
         fn preset_names() -> Vec<sp_genesis_builder::PresetId> {
-            vec![]
+            vec![
+                sp_genesis_builder::DEV_RUNTIME_PRESET.into(),
+                sp_genesis_builder::LOCAL_TESTNET_RUNTIME_PRESET.into(),
+            ]
         }
     }
 }
