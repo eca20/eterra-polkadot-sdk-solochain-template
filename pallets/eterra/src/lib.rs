@@ -2,6 +2,12 @@
 
 pub use pallet::*;
 
+pub mod weights;
+pub use weights::WeightInfo;
+
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+
 #[cfg(test)]
 mod mock;
 
@@ -9,44 +15,6 @@ mod mock;
 mod tests;
 
 mod types;
-
-pub mod weights {
-    use frame_support::weights::Weight;
-
-    pub trait WeightInfo {
-        fn create_game() -> Weight;
-        fn play() -> Weight;
-        fn submit_hand() -> Weight;
-        fn play_from_hand() -> Weight;
-        fn force_finish_turn() -> Weight;
-        fn set_current_hand() -> Weight;
-        fn set_preset_hand() -> Weight;
-    }
-
-    impl WeightInfo for () {
-        fn create_game() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-        fn play() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-        fn submit_hand() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-        fn play_from_hand() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-        fn force_finish_turn() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-        fn set_current_hand() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-        fn set_preset_hand() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-    }
-}
 
 pub use crate::types::GameId;
 use frame_support::ensure;
@@ -204,6 +172,7 @@ pub mod pallet {
         CardNotOwned,
         PlayerAlreadyInGame,
         PresetHandMissing,
+        GameNotActive,
     }
 
     /// Limit of cards per hand (defaults to 5 via Config::HandSize)
@@ -421,6 +390,8 @@ pub mod pallet {
             Self::deposit_event(Event::GameCreated { game_id });
             Ok(())
         }
+        /// Dev-only: play using a raw `Move`. Production uses `play_from_hand`.
+        #[cfg(any(test, feature = "dev-play"))]
         #[pallet::call_index(1)]
         #[pallet::weight(<T as Config>::WeightInfo::play())]
         pub fn play(origin: OriginFor<T>, game_id: GameId<T>, player_move: Move) -> DispatchResult {
@@ -434,6 +405,7 @@ pub mod pallet {
             );
 
             let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
+            ensure!(matches!(game.state, GameState::Playing), Error::<T>::GameNotActive);
 
             // Validate the current player's turn and move
             Self::validate_player_turn(&game, &who)?;
@@ -518,6 +490,7 @@ pub mod pallet {
 
             // Ensure the game exists and the caller is a player in it
             let game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
+            ensure!(matches!(game.state, GameState::Playing), Error::<T>::GameNotActive);
             ensure!(game.players.contains(&who), Error::<T>::PlayerNotInGame);
 
             // Prevent resubmission for this game
@@ -598,6 +571,7 @@ pub mod pallet {
 
             // Load game
             let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
+            ensure!(matches!(game.state, GameState::Playing), Error::<T>::GameNotActive);
 
             // Validate it's the caller's turn and the target cell is open
             Self::validate_player_turn(&game, &who)?;
@@ -681,6 +655,7 @@ pub mod pallet {
 
             // Retrieve the game from storage
             let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
+            ensure!(matches!(game.state, GameState::Playing), Error::<T>::GameNotActive);
 
             // Ensure the caller is a player in the game
             ensure!(game.players.contains(&who), Error::<T>::PlayerNotInGame);

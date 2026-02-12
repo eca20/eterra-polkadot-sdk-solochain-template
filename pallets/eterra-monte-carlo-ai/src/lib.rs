@@ -143,6 +143,7 @@ pub mod pallet {
     #[pallet::error]
     pub enum Error<T> {
         NoLegalMoves,
+        MaxActionsTooHigh,
     }
 
     #[pallet::call]
@@ -157,6 +158,10 @@ pub mod pallet {
             difficulty: u8,
         ) -> DispatchResultWithPostInfo {
             let _ = ensure_signed(origin)?; // optionally allow unsigned
+            ensure!(
+                (T::MaxActions::get() as usize) <= 128,
+                Error::<T>::MaxActionsTooHigh
+            );
 
             let action =
                 Self::suggest::<T::Adapter>(&state, difficulty).ok_or(Error::<T>::NoLegalMoves)?;
@@ -208,6 +213,9 @@ pub mod pallet {
 
             // Collect legal actions into a fixed-size buffer
             const MAX_BUF: usize = 128;
+            if (T::MaxActions::get() as usize) > MAX_BUF {
+                return None;
+            }
             // Ensure compile-time buffer bound is >= runtime bound
             // (Build-time safety: MaxActions <= 128 in tests/runtime config.)
             let mut actions: [Option<A::Action>; MAX_BUF] = core::array::from_fn(|_| None);

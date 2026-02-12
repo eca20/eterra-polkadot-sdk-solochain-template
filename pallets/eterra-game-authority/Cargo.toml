@@ -14,6 +14,8 @@ targets = ["x86_64-unknown-linux-gnu"]
 # Substrate / FRAME (wasm)
 frame-support      = { workspace = true, default-features = false }
 frame-system       = { workspace = true, default-features = false }
+frame-benchmarking = { workspace = true, default-features = false, optional = true }
+frame-system-benchmarking = { workspace = true, default-features = false, optional = true }
 parity-scale-codec = { workspace = true, default-features = false, features = ["derive", "max-encoded-len"] }
 scale-info         = { workspace = true, default-features = false, features = ["derive"] }
 sp-std             = { workspace = true, default-features = false }
@@ -34,6 +36,8 @@ std = [
   "scale-info/std",
   "frame-support/std",
   "frame-system/std",
+  "frame-benchmarking?/std",
+  "frame-system-benchmarking?/std",
   "sp-std/std",
   "sp-runtime/std",
   "sp-io/std",
@@ -41,3 +45,10 @@ std = [
 ]
 # Optional: enable try-runtime hooks when building with `--features try-runtime`
 try-runtime = ["frame-support/try-runtime"]
+runtime-benchmarks = [
+  "frame-benchmarking/runtime-benchmarks",
+  "frame-system-benchmarking/runtime-benchmarks",
+  "frame-support/runtime-benchmarks",
+  "frame-system/runtime-benchmarks",
+  "sp-runtime/runtime-benchmarks",
+]

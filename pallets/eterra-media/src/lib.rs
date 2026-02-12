@@ -277,7 +277,7 @@ pub mod pallet {
     impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
         fn build(&self) {
             NextMediaId::<T>::put(0u64);
-            NextCollectionId::<T>::put(0u32);
+            let mut next_collection_id: u32 = 0;
 
             if self.create_default_collection {
                 let id = T::DefaultCollectionId::get();
@@ -312,7 +312,11 @@ pub mod pallet {
                 let _ = roles.try_insert(CollectionRole::Admin);
                 let _ = roles.try_insert(CollectionRole::Uploader);
                 CollectionRoles::<T>::insert(id, owner, roles);
+
+                next_collection_id = id.saturating_add(1).max(next_collection_id);
             }
+
+            NextCollectionId::<T>::put(next_collection_id);
         }
     }
 

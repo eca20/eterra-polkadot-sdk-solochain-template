@@ -298,5 +298,8 @@ fn genesis_creates_default_collection_and_roles() {
         let roles = pallet::CollectionRoles::<Test>::get(0, 1);
         assert!(roles.contains(&CollectionRole::Admin));
         assert!(roles.contains(&CollectionRole::Uploader));
+
+        // Next collection id should not overwrite the default collection.
+        assert_eq!(pallet::NextCollectionId::<Test>::get(), 1);
     });
 }

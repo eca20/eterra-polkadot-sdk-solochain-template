@@ -139,6 +139,7 @@ parameter_types! {
     pub const MaxRollsPerRound:  u32 = 3;
     pub const MaxRollHistoryLength: u32 = 100;
     pub const MaxWeightEntries: u32 = 10;
+    pub const MaxDrawingEntries: u32 = 100;
 }
 
 impl pallet_eterra_daily_slots::Config for Test {
@@ -149,6 +150,7 @@ impl pallet_eterra_daily_slots::Config for Test {
     type MaxRollsPerRound = MaxRollsPerRound;
     type MaxRollHistoryLength = MaxRollHistoryLength;
     type MaxWeightEntries = MaxWeightEntries;
+    type MaxDrawingEntries = MaxDrawingEntries;
     type Currency = Balances;
     type RewardPerWin = ConstU128<1_000>;
 

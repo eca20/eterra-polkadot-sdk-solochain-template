@@ -85,6 +85,10 @@ pub mod pallet {
         pub fn get_owner(&self) -> &AccountId {
             &self.owner
         }
+
+        pub fn is_finalized(&self) -> bool {
+            self.finalized
+        }
     }
 
     /// A "Pack" just references existing cards by their IDs, rather than embedding them.
@@ -193,6 +197,8 @@ pub mod pallet {
         NoSuchCard,
         /// You do not own the card you’re trying to act upon.
         NotCardOwner,
+        /// The card was already finalized and cannot be mutated.
+        CardAlreadyFinalized,
     }
 
     // ------------------
@@ -254,6 +260,7 @@ pub mod pallet {
             // 1) Find the user’s last minted pack
             PlayerPacks::<T>::mutate(&player, |packs| -> DispatchResult {
                 let pack = packs.last_mut().ok_or(Error::<T>::NoPackFound)?;
+                ensure!(!pack.completed, Error::<T>::PackAlreadyCompleted);
 
                 // 2) Get the active card index
                 let active_card_idx =
@@ -266,6 +273,7 @@ pub mod pallet {
                 // 3) Check ownership
                 let mut card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
                 ensure!(card_info.owner == player, Error::<T>::NotCardOwner);
+                ensure!(!card_info.finalized, Error::<T>::CardAlreadyFinalized);
 
                 // 4) Check attempts
                 let mut attempts = CardAttempts::<T>::get(card_id);
@@ -292,7 +300,7 @@ pub mod pallet {
 
                 // 9) If attempts == max, finalize now
                 if attempts == T::MaxAttempts::get() {
-                    Self::internal_finalize_card(card_id, pack)?;
+                    Self::finalize_card_and_advance(&player, card_id, pack, active_card_idx)?;
                 }
 
                 Self::deposit_event(Event::SlotGenerated { card_id, values });
@@ -310,6 +318,7 @@ pub mod pallet {
 
             PlayerPacks::<T>::mutate(&player, |packs| -> DispatchResult {
                 let pack = packs.last_mut().ok_or(Error::<T>::NoPackFound)?;
+                ensure!(!pack.completed, Error::<T>::PackAlreadyCompleted);
                 let active_card_idx =
                     ActiveCard::<T>::get(&player).ok_or(Error::<T>::NoActiveCard)?;
                 let card_id = *pack
@@ -320,12 +329,13 @@ pub mod pallet {
                 // Must have a card
                 let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
                 ensure!(card_info.owner == player, Error::<T>::NotCardOwner);
+                ensure!(!card_info.finalized, Error::<T>::CardAlreadyFinalized);
 
                 // Must have generated at least once
                 ensure!(card_info.slot_values.is_some(), Error::<T>::NoActiveCard);
 
                 // Finalize
-                Self::internal_finalize_card(card_id, pack)?;
+                Self::finalize_card_and_advance(&player, card_id, pack, active_card_idx)?;
 
                 Self::deposit_event(Event::SlotAccepted { card_id });
                 Ok(())
@@ -416,6 +426,56 @@ pub mod pallet {
                 //   player: ???,
                 //   pack_id: pack.id
                 // });
+            }
+
+            Ok(())
+        }
+
+        /// Finalize the current card and advance the active card index (or complete the pack).
+        fn finalize_card_and_advance(
+            player: &T::AccountId,
+            card_id: u32,
+            pack: &mut Pack,
+            active_card_idx: u8,
+        ) -> DispatchResult {
+            Self::internal_finalize_card(card_id, pack)?;
+
+            let mut next_idx: Option<u8> = None;
+            let start = (active_card_idx as usize).saturating_add(1);
+            let len = pack.card_ids.len();
+
+            for i in start..len {
+                let cid = pack.card_ids[i];
+                if let Some(info) = Cards::<T>::get(cid) {
+                    if !info.finalized {
+                        next_idx = Some(i as u8);
+                        break;
+                    }
+                }
+            }
+
+            if next_idx.is_none() {
+                for i in 0..start.min(len) {
+                    let cid = pack.card_ids[i];
+                    if let Some(info) = Cards::<T>::get(cid) {
+                        if !info.finalized {
+                            next_idx = Some(i as u8);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if let Some(idx) = next_idx {
+                pack.active_card_index = idx;
+                ActiveCard::<T>::insert(player, Some(idx));
+            } else {
+                pack.completed = true;
+                ActiveCard::<T>::insert(player, Option::<u8>::None);
+                Self::deposit_event(Event::PackCompleted {
+                    player: player.clone(),
+                    pack_id: pack.id,
+                });
             }
 
             Ok(())

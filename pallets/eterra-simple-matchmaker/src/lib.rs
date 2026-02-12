@@ -118,10 +118,10 @@ pub mod pallet {
                 Error::<T>::NoPresetHand
             );
 
-            Head::<T>::mutate(|head| {
+            Head::<T>::mutate(|_head| {
                 Tail::<T>::mutate(|tail| -> DispatchResult {
-                    let size = Self::ring_size(*head, *tail, cap);
-                    ensure!(size < cap, Error::<T>::QueueFull);
+                    let live = LiveSize::<T>::get();
+                    ensure!(live < cap, Error::<T>::QueueFull);
 
                     let idx = *tail % cap;
                     Ring::<T>::insert(idx, &who);
@@ -174,10 +174,6 @@ pub mod pallet {
     }
 
     impl<T: Config> Pallet<T> {
-        fn ring_size(head: QIndex, tail: QIndex, _cap: QIndex) -> QIndex {
-            tail.wrapping_sub(head)
-        }
-
         fn pop_live(cap: QIndex) -> Option<T::AccountId> {
             Head::<T>::mutate(|head| {
                 // We’ll search up to `cap` slots (one full cycle) to find a live account.

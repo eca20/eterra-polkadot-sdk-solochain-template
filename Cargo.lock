@@ -5204,8 +5204,10 @@ name = "pallet-eterra"
 version = "0.1.0"
 dependencies = [
  "eterra-card-ai-adapter",
+ "frame-benchmarking",
  "frame-support",
  "frame-system",
+ "frame-system-benchmarking",
  "hex",
  "log",
  "pallet-balances",
@@ -5262,8 +5264,10 @@ dependencies = [
 name = "pallet-eterra-game-authority"
 version = "0.1.0"
 dependencies = [
+ "frame-benchmarking",
  "frame-support",
  "frame-system",
+ "frame-system-benchmarking",
  "parity-scale-codec",
  "scale-info",
  "sp-core",

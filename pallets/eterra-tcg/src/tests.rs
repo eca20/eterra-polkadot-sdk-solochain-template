@@ -306,6 +306,58 @@ fn test_accept_slot_fail_when_slot_not_rolled() {
 }
 
 #[test]
+fn active_card_advances_after_finalize() {
+    new_test_ext().execute_with(|| {
+        let player = 1;
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
+        assert_eq!(ActiveCard::<Test>::get(player), Some(0));
+
+        let max_attempts: u8 = <Test as EterraSlotsConfig>::MaxAttempts::get();
+        for _ in 0..max_attempts {
+            assert_ok!(EterraSlots::generate_slot(RuntimeOrigin::signed(player)));
+        }
+
+        assert_eq!(ActiveCard::<Test>::get(player), Some(1));
+        let packs = EterraSlots::player_packs(player);
+        let pack = packs.last().expect("pack exists");
+        assert_eq!(pack.get_active_card_index(), 1);
+
+        let first_id = *pack.get_card_ids().first().expect("card exists");
+        let card = EterraSlots::cards(first_id).expect("card exists");
+        assert!(card.is_finalized());
+    });
+}
+
+#[test]
+fn pack_completed_clears_active_card_and_emits_event() {
+    new_test_ext().execute_with(|| {
+        let player = 1;
+        System::set_block_number(1);
+        System::reset_events();
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
+
+        let max_attempts: u8 = <Test as EterraSlotsConfig>::MaxAttempts::get();
+        let cards_per_pack: u8 = <Test as EterraSlotsConfig>::CardsPerPack::get();
+
+        for _ in 0..cards_per_pack {
+            for _ in 0..max_attempts {
+                assert_ok!(EterraSlots::generate_slot(RuntimeOrigin::signed(player)));
+            }
+        }
+
+        assert_eq!(ActiveCard::<Test>::get(player), None);
+        let packs = EterraSlots::player_packs(player);
+        let pack = packs.last().expect("pack exists");
+        assert!(pack.get_completed());
+
+        System::assert_has_event(RuntimeEvent::EterraSlots(Event::PackCompleted {
+            player,
+            pack_id: pack.get_id(),
+        }));
+    });
+}
+
+#[test]
 fn test_attempts_removed_after_generating_max_times() {
     new_test_ext().execute_with(|| {
         let player = 1;

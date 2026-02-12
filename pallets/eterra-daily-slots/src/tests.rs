@@ -293,6 +293,28 @@ fn test_weekly_winner_event_emitted_correctly() {
 }
 
 #[test]
+fn weekly_drawing_skips_when_too_many_ticket_holders() {
+    new_test_ext().execute_with(|| {
+        set_mock_time_to_sunday_6pm();
+        LastDrawingTime::<TestRuntime>::put(0);
+        frame_system::Pallet::<TestRuntime>::set_block_number(1001);
+        frame_system::Pallet::<TestRuntime>::reset_events();
+
+        // MaxDrawingEntries in mock is 100; insert 101 holders.
+        for who in 1u64..=101u64 {
+            TicketsPerUser::<TestRuntime>::insert(who, 1);
+        }
+        TotalTickets::<TestRuntime>::put(101);
+
+        Pallet::<TestRuntime>::on_initialize(1001);
+
+        // Too many holders should prevent clearing and last drawing update.
+        assert_eq!(TotalTickets::<TestRuntime>::get(), 101);
+        assert_eq!(LastDrawingTime::<TestRuntime>::get(), 0);
+    });
+}
+
+#[test]
 fn roll_creates_history_entry() {
     new_test_ext().execute_with(|| {
         let user = 1u64; // Assume u64 AccountId in mock.rs

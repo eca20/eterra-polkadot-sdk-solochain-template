@@ -125,6 +125,8 @@ runtime-benchmarks = [
 	"pallet-grandpa/runtime-benchmarks",
 	"pallet-sudo/runtime-benchmarks",
 	"pallet-timestamp/runtime-benchmarks",
+	"pallet-eterra/runtime-benchmarks",
+	"pallet-eterra-game-authority/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",
 ]
 

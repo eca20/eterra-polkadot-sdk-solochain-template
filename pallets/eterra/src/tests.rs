@@ -1,7 +1,8 @@
 use crate::mock::RuntimeEvent;
+use crate::Error;
 use crate::pallet;
 use crate::types::card::Possession as Player;
-use crate::types::game::GameProperties; // Import the GameProperties trait
+use crate::types::game::{GameProperties, GameState}; // Import the GameProperties trait
 use crate::GameStorage;
 use crate::Move;
 use crate::{mock::*, types::card::Card};
@@ -237,6 +238,30 @@ fn ensure_my_turn(game_id: H256, me: u64, other: u64) {
             }
         }
     }
+}
+
+#[test]
+fn play_fails_when_game_not_active() {
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, _opponent) = setup_new_game();
+
+        GameStorage::<Test>::mutate(game_id, |g| {
+            if let Some(game) = g {
+                game.state = GameState::Finished { winner: None };
+            }
+        });
+
+        let mv = Move {
+            place_index_x: 0,
+            place_index_y: 0,
+            place_card: Card::new(1, 1, 1, 1),
+        };
+
+        assert_noop!(
+            Eterra::play(frame_system::RawOrigin::Signed(creator).into(), game_id, mv),
+            Error::<Test>::GameNotActive
+        );
+    });
 }
 
 #[test]

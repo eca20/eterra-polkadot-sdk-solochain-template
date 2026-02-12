@@ -8,10 +8,6 @@ use frame_support::{
     traits::{tokens::ExistenceRequirement, BuildGenesisConfig, Currency},
 };
 use frame_system::pallet_prelude::*;
-use sp_runtime::codec::Encode;
-use sp_runtime::transaction_validity::{
-    InvalidTransaction, TransactionSource, TransactionValidity, ValidTransaction,
-};
 
 /// Helper to get the balance type from the configured Currency
 pub type BalanceOf<T> =
@@ -88,19 +84,20 @@ pub mod pallet {
         NotConfigured,
         /// Destination already claimed this block (rate limit).
         TooFrequent,
+        /// Destination must be the caller.
+        InvalidDestination,
     }
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         /// Claim faucet funds. Transfers `PayoutAmount` from `FaucetAccount` to `dest`.
         ///
-        /// This is an **unsigned** extrinsic, validated via `ValidateUnsigned` so brand-new
-        /// accounts (with no balance/nonce) can claim. Rate-limited to once per block per `dest`.
+        /// This is a **signed** extrinsic. Rate-limited to once per block per `dest`.
         #[pallet::call_index(0)]
-        #[pallet::weight((0, frame_support::dispatch::DispatchClass::Normal, frame_support::dispatch::Pays::No))]
+        #[pallet::weight(T::DbWeight::get().reads_writes(3, 3))]
         pub fn claim(origin: OriginFor<T>, dest: T::AccountId) -> DispatchResult {
-            // Unsigned call; no nonce/fee required
-            ensure_none(origin)?;
+            let who = ensure_signed(origin)?;
+            ensure!(who == dest, Error::<T>::InvalidDestination);
 
             // Basic rate limit: once per block per destination
             let now = frame_system::Pallet::<T>::block_number();
@@ -127,28 +124,6 @@ pub mod pallet {
 
             Self::deposit_event(Event::Claimed { who: dest, amount });
             Ok(())
-        }
-    }
-
-    #[pallet::validate_unsigned]
-    impl<T: Config> sp_runtime::traits::ValidateUnsigned for Pallet<T> {
-        type Call = Call<T>;
-
-        fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
-            match call {
-                // Whitelist our unsigned faucet claim. Use provides=(dest, block) so duplicates
-                // in the same block are rejected by the pool. Dispatch also enforces it on-chain.
-                Call::claim { dest } => {
-                    let now = frame_system::Pallet::<T>::block_number();
-                    ValidTransaction::with_tag_prefix("EterraFaucet")
-                        .priority(0)
-                        .longevity(1)
-                        .propagate(true)
-                        .and_provides((dest, now).encode())
-                        .build()
-                }
-                _ => InvalidTransaction::Call.into(),
-            }
         }
     }
 }

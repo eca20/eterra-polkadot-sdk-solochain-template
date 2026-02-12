@@ -5,6 +5,7 @@
 use crate::{self as pallet_eterra_game_authority, Error, Pallet as GamePallet};
 use crate::mock::*;
 use frame_support::{assert_noop, assert_ok};
+use frame_support::traits::Get;
 use frame_support::traits::Hooks;
 
 #[test]
@@ -227,6 +228,24 @@ fn create_game_schedules_expiration() {
             // The game id 0 should be present in the expirations list for expire_at.
             let scheduled = pallet_eterra_game_authority::Expirations::<Test>::get(expire_at);
             assert!(scheduled.contains(&0), "game 0 not scheduled for expiration at {}", expire_at);
+        });
+}
+
+#[test]
+fn create_game_fails_when_expiration_bucket_full() {
+    ExtBuilder::default()
+        .with_servers(vec![ALICE])
+        .build()
+        .execute_with(|| {
+            let max = <Test as pallet_eterra_game_authority::Config>::MaxExpirationsPerBlock::get();
+            for _ in 0..max {
+                assert_ok!(GamePallet::<Test>::create_game(RuntimeOrigin::signed(ALICE)));
+            }
+
+            assert_noop!(
+                GamePallet::<Test>::create_game(RuntimeOrigin::signed(ALICE)),
+                Error::<Test>::TooManyExpirations
+            );
         });
 }
 

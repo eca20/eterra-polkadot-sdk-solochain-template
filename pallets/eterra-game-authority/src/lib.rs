@@ -2,6 +2,12 @@
 
 pub use pallet::*;
 
+pub mod weights;
+pub use weights::WeightInfo;
+
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+
 #[frame_support::pallet]
 pub mod pallet {
     use frame_support::{
@@ -15,6 +21,7 @@ pub mod pallet {
     use sp_std::vec::Vec;
     use frame_support::traits::BuildGenesisConfig;
     use frame_support::sp_runtime::traits::Saturating;
+    use crate::weights::WeightInfo;
 
     pub type GameId = u64;
 
@@ -44,6 +51,9 @@ pub mod pallet {
 
         /// Maximum round length, in blocks. Games exceeding this age are auto-ended.
         type MaxRoundBlocks: Get<BlockNumberFor<Self>>;
+
+        /// Weight information for extrinsics and hooks.
+        type WeightInfo: WeightInfo;
     }
 
     #[pallet::pallet]
@@ -102,29 +112,27 @@ pub mod pallet {
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
         fn on_initialize(n: BlockNumberFor<T>) -> Weight {
             // Take the list of games scheduled to expire now.
-            let mut weight: Weight = T::DbWeight::get().reads_writes(1, 0);
             let games: BoundedVec<GameId, T::MaxExpirationsPerBlock> = Expirations::<T>::take(n);
+            let games_len: u32 = games.len() as u32;
+            let mut removed_players: u32 = 0;
+
             // For each game, end it if not already ended.
             for game_id in games.into_inner().into_iter() {
                 if let Some(mut game) = Games::<T>::get(game_id) {
-                    weight = weight.saturating_add(T::DbWeight::get().reads_writes(2, 2));
                     if !game.ended {
                         // mark ended and clear active mapping for players
                         game.ended = true;
-                        let players: Vec<T::AccountId> = game.players.iter().cloned().collect();
-                        for p in players {
-                            ActiveGameByPlayer::<T>::remove(&p);
+                        removed_players = removed_players.saturating_add(game.players.len() as u32);
+                        for p in game.players.iter() {
+                            ActiveGameByPlayer::<T>::remove(p);
                         }
                         Games::<T>::insert(game_id, game);
                         // Emit event so indexers know this was auto-ended.
                         Self::deposit_event(Event::GameEnded(game_id));
                     }
-                } else {
-                    // account a read
-                    weight = weight.saturating_add(T::DbWeight::get().reads(1));
                 }
             }
-            weight
+            T::WeightInfo::on_initialize(games_len, removed_players)
         }
     }
 
@@ -152,6 +160,7 @@ pub mod pallet {
         AlreadyWhitelisted,
         NotWhitelisted,
         NotGameOwnerServer,
+        TooManyExpirations,
     }
 
     impl<T: Config> Pallet<T> {
@@ -163,7 +172,7 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         #[pallet::call_index(0)]
-        #[pallet::weight(T::DbWeight::get().reads_writes(1, 1))]
+        #[pallet::weight(T::WeightInfo::add_server())]
         pub fn add_server(origin: T::RuntimeOrigin, server: T::AccountId) -> DispatchResult {
             T::AdminOrigin::ensure_origin(origin)?;
             ensure!(!WhitelistedServers::<T>::contains_key(&server), Error::<T>::AlreadyWhitelisted);
@@ -173,7 +182,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(1)]
-        #[pallet::weight(T::DbWeight::get().reads_writes(1, 1))]
+        #[pallet::weight(T::WeightInfo::remove_server())]
         pub fn remove_server(origin: T::RuntimeOrigin, server: T::AccountId) -> DispatchResult {
             T::AdminOrigin::ensure_origin(origin)?;
             ensure!(WhitelistedServers::<T>::contains_key(&server), Error::<T>::NotWhitelisted);
@@ -183,7 +192,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(2)]
-        #[pallet::weight(T::DbWeight::get().reads_writes(1, 1))]
+        #[pallet::weight(T::WeightInfo::create_game())]
         pub fn create_game(origin: T::RuntimeOrigin) -> DispatchResult {
             let server = ensure_signed(origin)?;
             Self::ensure_whitelisted(&server)?;
@@ -200,16 +209,17 @@ pub mod pallet {
             // Schedule automatic end of game after MaxRoundBlocks from now.
             let now = <frame_system::Pallet<T>>::block_number();
             let expire_at = now.saturating_add(T::MaxRoundBlocks::get());
-            Expirations::<T>::mutate(expire_at, |list| {
-                let _ = list.try_push(id);
-            });
+            Expirations::<T>::try_mutate(expire_at, |list| -> Result<(), Error<T>> {
+                list.try_push(id).map_err(|_| Error::<T>::TooManyExpirations)?;
+                Ok(())
+            })?;
 
             Self::deposit_event(Event::GameCreated(id, server));
             Ok(())
         }
 
         #[pallet::call_index(3)]
-        #[pallet::weight(T::DbWeight::get().reads_writes(1, 1))]
+        #[pallet::weight(T::WeightInfo::add_player())]
         pub fn add_player(origin: T::RuntimeOrigin, game_id: GameId, player: T::AccountId) -> DispatchResult {
             let caller = ensure_signed(origin)?;
             Self::ensure_whitelisted(&caller)?;
@@ -232,11 +242,7 @@ pub mod pallet {
         /// validation (already in another game, already in this game, or game full) are skipped.
         /// Emits `PlayerAdded` for each successfully added player.
         #[pallet::call_index(4)]
-        #[pallet::weight({
-            // Weight scales linearly with number of players checked/inserted.
-            let n = players.len() as u64;
-            T::DbWeight::get().reads_writes(1 + n, 1 + 2*n)
-        })]
+        #[pallet::weight(T::WeightInfo::add_players_batch(players.len() as u32))]
         pub fn add_players_batch(
             origin: T::RuntimeOrigin,
             game_id: GameId,
@@ -270,11 +276,7 @@ pub mod pallet {
         /// Create a game and immediately batch-add players in a single extrinsic.
         /// Best-effort: players already active elsewhere or duplicates are skipped; stops when full.
         #[pallet::call_index(7)]
-        #[pallet::weight({
-            let n = players.len() as u64;
-            // Rough linear scaling: create game + schedule expiration + per-player checks/inserts
-            T::DbWeight::get().reads_writes(4 + n, 3 + 2*n)
-        })]
+        #[pallet::weight(T::WeightInfo::create_game_with_batch_add(players.len() as u32))]
         pub fn create_game_with_batch_add(
             origin: T::RuntimeOrigin,
             players: BoundedVec<T::AccountId, T::MaxBatchAdd>,
@@ -294,9 +296,10 @@ pub mod pallet {
             // Schedule automatic end of game after MaxRoundBlocks from now.
             let now = <frame_system::Pallet<T>>::block_number();
             let expire_at = now.saturating_add(T::MaxRoundBlocks::get());
-            Expirations::<T>::mutate(expire_at, |list| {
-                let _ = list.try_push(id);
-            });
+            Expirations::<T>::try_mutate(expire_at, |list| -> Result<(), Error<T>> {
+                list.try_push(id).map_err(|_| Error::<T>::TooManyExpirations)?;
+                Ok(())
+            })?;
 
             // Fill players best-effort before inserting the game into storage
             let mut added: Vec<T::AccountId> = Vec::new();
@@ -325,7 +328,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(5)]
-        #[pallet::weight(T::DbWeight::get().reads_writes(1, 1))]
+        #[pallet::weight(T::WeightInfo::record_eliminations())]
         pub fn record_eliminations(origin: T::RuntimeOrigin, game_id: GameId, player: T::AccountId, delta: u32) -> DispatchResult {
             let caller = ensure_signed(origin)?;
             Self::ensure_whitelisted(&caller)?;
@@ -345,7 +348,7 @@ pub mod pallet {
         }
 
         #[pallet::call_index(6)]
-        #[pallet::weight(T::DbWeight::get().reads_writes(1, 1))]
+        #[pallet::weight(T::WeightInfo::end_game())]
         pub fn end_game(origin: T::RuntimeOrigin, game_id: GameId) -> DispatchResult {
             let caller = ensure_signed(origin)?;
             Self::ensure_whitelisted(&caller)?;

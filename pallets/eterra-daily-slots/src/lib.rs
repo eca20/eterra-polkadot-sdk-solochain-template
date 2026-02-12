@@ -73,6 +73,9 @@ pub mod pallet {
         /// Number of entries per reel
         #[pallet::constant]
         type MaxWeightEntries: Get<u32>;
+        /// Maximum number of ticket holders processed in a single weekly drawing.
+        #[pallet::constant]
+        type MaxDrawingEntries: Get<u32>;
     }
 
     // ─── STORAGE ────────────────────────────────────────────────────────────────
@@ -174,6 +177,7 @@ pub mod pallet {
         ExceedRollsPerRound,
         InvalidConfiguration,
         NoTicketsAvailable,
+        TooManyTicketHolders,
     }
 
     // ─── DISPATCHABLE CALLS ───────────────────────────────────────────────────
@@ -360,7 +364,7 @@ pub mod pallet {
             Ok(())
         }
 
-        fn perform_weekly_drawing() -> Result<(), Error<T>> {
+        fn perform_weekly_drawing(max_entries: u32) -> Result<(), Error<T>> {
             let total = TotalTickets::<T>::get();
             if total == 0 {
                 return Err(Error::<T>::NoTicketsAvailable);
@@ -370,18 +374,24 @@ pub mod pallet {
             let pick = (seed.as_ref()[0] as u32) % total;
 
             let mut cum = 0;
+            let mut seen: u32 = 0;
+            let mut winner: Option<T::AccountId> = None;
             for (acct, share) in TicketsPerUser::<T>::iter() {
+                seen = seen.saturating_add(1);
+                if seen > max_entries {
+                    return Err(Error::<T>::TooManyTicketHolders);
+                }
                 cum += share;
-                if pick < cum {
-                    Self::deposit_event(Event::WeeklyWinner {
-                        winner: acct.clone(),
-                    });
-                    break;
+                if winner.is_none() && pick < cum {
+                    winner = Some(acct);
                 }
             }
 
+            let winner = winner.ok_or(Error::<T>::NoTicketsAvailable)?;
+            Self::deposit_event(Event::WeeklyWinner { winner });
+
             // reset
-            let _ = TicketsPerUser::<T>::clear(u32::MAX, None);
+            let _ = TicketsPerUser::<T>::clear(max_entries, None);
             TotalTickets::<T>::put(0);
             LastDrawingTime::<T>::put(now);
             Ok(())
@@ -439,21 +449,22 @@ pub mod pallet {
             let is_after_6pm = secs_today >= EVENING_THRESHOLD;
             if !(is_sunday && is_after_6pm) {
                 // bail out early, no drawing
-                return Weight::from_parts(10_000, 0);
+                return T::DbWeight::get().reads(1);
             }
 
             // If we’ve already done a drawing in the last 24 h, bail again:
             let last = LastDrawingTime::<T>::get();
             if now_secs.saturating_sub(last) < 24 * 3600 {
-                return Weight::from_parts(10_000, 0);
+                return T::DbWeight::get().reads(1);
             }
 
             // Now we really do a weekly drawing
-            if let Err(e) = Self::perform_weekly_drawing() {
+            if let Err(e) = Self::perform_weekly_drawing(T::MaxDrawingEntries::get()) {
                 log::warn!("(eterra-daily-slots) weekly drawing failed: {:?}", e);
             }
 
-            Weight::from_parts(10_000, 0)
+            let max = T::MaxDrawingEntries::get() as u64;
+            T::DbWeight::get().reads_writes(3 + max, 2 + max)
         }
     }
 

@@ -69,20 +69,15 @@ fn join_queue_rejects_duplicates() {
 }
 
 #[test]
-fn queue_capacity_enforced() {
+fn queue_capacity_does_not_fill_due_to_ring_holes() {
     new_test_ext().execute_with(|| {
-        // QueueCapacityConst is defined in mock.rs; fill it completely.
-        for who in 1..=mock::QueueCapacityConst::get() as u64 {
+        // With auto-processing, live size stays low. Ensure repeated joins
+        // don't hit QueueFull due to ring holes.
+        let cap = mock::QueueCapacityConst::get() as u64;
+        for who in 1..=(cap + 5) {
             set_has_hand(who, true);
             assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(who)));
         }
-        // One more should fail (ensure the overflow player also has a preset hand so we hit QueueFull, not NoPresetHand)
-        let overflow = mock::QueueCapacityConst::get() as u64 + 1;
-        set_has_hand(overflow, true);
-        assert_noop!(
-            Matchmaker::join_queue(SystemOrigin::signed(overflow)),
-            Error::<Test>::QueueFull
-        );
     });
 }
 

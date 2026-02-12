@@ -307,6 +307,13 @@ impl Get<u32> for MaxWeightEntries {
     }
 }
 
+pub struct MaxDrawingEntries;
+impl Get<u32> for MaxDrawingEntries {
+    fn get() -> u32 {
+        1_000 // max ticket holders processed per weekly draw
+    }
+}
+
 parameter_types! {
     // 6 seconds per block → ~30 blocks for ~3 minutes
     pub const MaxExpirationsPerBlock: u32 = 256; // tune as needed
@@ -393,6 +400,7 @@ impl pallet_eterra_game_authority::Config for Runtime {
 
     // Max players that can be added in a single batch to a game
     type MaxBatchAdd = frame_support::traits::ConstU32<32>;
+    type WeightInfo = pallet_eterra_game_authority::weights::SubstrateWeight<Runtime>;
 }
 
 impl pallet_eterra_daily_slots::Config for Runtime {
@@ -403,6 +411,7 @@ impl pallet_eterra_daily_slots::Config for Runtime {
     type MaxRollsPerRound = MaxRollsPerRound;
     type MaxRollHistoryLength = MaxRollHistoryLength;
     type MaxWeightEntries = MaxWeightEntries;
+    type MaxDrawingEntries = MaxDrawingEntries;
     type Currency = Balances;
     type RewardPerWin = RewardPerWinAmount; // defined below
     type WeightInfo = ();
@@ -468,7 +477,7 @@ impl pallet_eterra::Config for Runtime {
     type HandSize = ConstU32<5>; // <<—— added
     type AiAccount = AiBotAccountParam;
     type AiDifficulty = ConstU8<60>;
-    type WeightInfo = ();
+    type WeightInfo = pallet_eterra::weights::SubstrateWeight<Runtime>;
 }
 
 // FILE: runtime/src/configs/mod.rs
