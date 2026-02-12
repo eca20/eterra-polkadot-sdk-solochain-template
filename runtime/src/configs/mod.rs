@@ -349,6 +349,7 @@ parameter_types! {
 impl pallet_eterra_faucet::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Currency = Balances;
+    type WeightInfo = pallet_eterra_faucet::weights::SubstrateWeight<Runtime>;
 }
 
 
@@ -414,7 +415,7 @@ impl pallet_eterra_daily_slots::Config for Runtime {
     type MaxDrawingEntries = MaxDrawingEntries;
     type Currency = Balances;
     type RewardPerWin = RewardPerWinAmount; // defined below
-    type WeightInfo = ();
+    type WeightInfo = pallet_eterra_daily_slots::weights::SubstrateWeight<Runtime>;
 }
 
 impl pallet_eterra_simple_tcg::Config for Runtime {

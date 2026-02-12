@@ -30,8 +30,10 @@ frame_benchmarking::define_benchmarks!(
     [pallet_timestamp, Timestamp]
     [pallet_sudo, Sudo]
     [pallet_eterra, Eterra]
+    [pallet_eterra_daily_slots, EterraDailySlots]
     [pallet_eterra_simple_tcg, EterraSimpleTCG]
     [pallet_eterra_simple_matchmaker, EterraSimpleMatchMaker]
+    [pallet_eterra_faucet, EterraFaucet]
     [pallet_eterra_tcg, EterraTCG]
     [pallet_eterra_game_authority, EterraGameAuthority]
 );

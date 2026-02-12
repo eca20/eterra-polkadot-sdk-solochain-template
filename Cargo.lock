@@ -5226,8 +5226,10 @@ dependencies = [
 name = "pallet-eterra-daily-slots"
 version = "0.1.0"
 dependencies = [
+ "frame-benchmarking",
  "frame-support",
  "frame-system",
+ "frame-system-benchmarking",
  "hex",
  "log",
  "pallet-balances",
@@ -5247,8 +5249,10 @@ dependencies = [
 name = "pallet-eterra-faucet"
 version = "0.1.0"
 dependencies = [
+ "frame-benchmarking",
  "frame-support",
  "frame-system",
+ "frame-system-benchmarking",
  "hex",
  "log",
  "parity-scale-codec",

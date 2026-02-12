@@ -2,6 +2,12 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+pub mod weights;
+pub use weights::WeightInfo;
+
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+
 use frame_support::{
     pallet_prelude::*,
     traits::{Currency, UnixTime},
@@ -25,16 +31,7 @@ const BLOCKS_PER_WINDOW: u64 = 3_600;
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
-
-    /// Weight functions for this pallet's extrinsics.
-    pub trait WeightInfo {
-        /// Weight for `roll` extrinsic.
-        fn roll() -> Weight;
-        /// Weight for `set_reel_weights` extrinsic.
-        fn set_reel_weights() -> Weight;
-        /// Weight for `set_all_reel_weights` extrinsic.
-        fn set_all_reel_weights() -> Weight;
-    }
+    use crate::weights::WeightInfo;
 
     #[pallet::pallet]
     #[pallet::without_storage_info]
@@ -468,21 +465,6 @@ pub mod pallet {
         }
     }
 
-    // Default weight implementation used for development and tests.
-    impl WeightInfo for () {
-        fn roll() -> Weight {
-            // Simple flat weight for now; replace with benchmarked values later.
-            Weight::from_parts(10_000, 0)
-        }
-
-        fn set_reel_weights() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-
-        fn set_all_reel_weights() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-    }
 }
 
 pub use pallet::*;

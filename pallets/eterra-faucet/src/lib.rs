@@ -2,6 +2,12 @@
 
 pub use pallet::*;
 
+pub mod weights;
+pub use weights::WeightInfo;
+
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+
 use frame_support::{
     dispatch::DispatchResult,
     pallet_prelude::*,
@@ -16,6 +22,7 @@ pub type BalanceOf<T> =
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
+    use crate::weights::WeightInfo;
 
     #[pallet::config]
     pub trait Config: frame_system::Config {
@@ -24,6 +31,9 @@ pub mod pallet {
 
         /// The currency used for faucet payouts.
         type Currency: Currency<Self::AccountId>;
+
+        /// Weight information for extrinsics in this pallet.
+        type WeightInfo: WeightInfo;
     }
 
     #[pallet::pallet]
@@ -94,7 +104,7 @@ pub mod pallet {
         ///
         /// This is a **signed** extrinsic. Rate-limited to once per block per `dest`.
         #[pallet::call_index(0)]
-        #[pallet::weight(T::DbWeight::get().reads_writes(3, 3))]
+        #[pallet::weight(T::WeightInfo::claim())]
         pub fn claim(origin: OriginFor<T>, dest: T::AccountId) -> DispatchResult {
             let who = ensure_signed(origin)?;
             ensure!(who == dest, Error::<T>::InvalidDestination);
