@@ -367,6 +367,23 @@ impl pallet_eterra_gamer::Config for Runtime {
     type ChangeFee = GamerChangeFee;
     type MaxTagLen = GamerTagMaxLen;
     type MaxAvatarCidLen = AvatarCidMaxLen;
+    type WeightInfo = pallet_eterra_gamer::weights::SubstrateWeight<Runtime>;
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct MonteCarloBenchHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_eterra_monte_carlo_ai::BenchmarkHelper<
+    eterra_card_ai_adapter::eterra_adapter::Adapter,
+> for MonteCarloBenchHelper {
+    fn bench_state() -> eterra_card_ai_adapter::eterra_adapter::State {
+        let mut s = eterra_card_ai_adapter::eterra_adapter::State::default();
+        s.max_rounds = 1;
+        s.round = 0;
+        s.player_turn = 0;
+        s
+    }
 }
 
 impl pallet_eterra_monte_carlo_ai::pallet::Config for Runtime {
@@ -377,7 +394,10 @@ impl pallet_eterra_monte_carlo_ai::pallet::Config for Runtime {
     type BaseIterations = ConstU32<200>;   // baseline simulations per suggest() call
     type MaxPlayoutDepth = ConstU16<16>;   // cut off long playouts
     type RandomnessSeed = ConstU64<12345>; // deterministic-ish seed for hashing/entropy
-    type WeightInfo = ();
+    type WeightInfo = pallet_eterra_monte_carlo_ai::weights::SubstrateWeight<Runtime>;
+
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHelper = MonteCarloBenchHelper;
 }
 
 
@@ -542,5 +562,6 @@ impl pallet_eterra_media::Config for Runtime {
     // New: default collection id and owner.
     type DefaultCollectionId = DefaultMediaCollectionId;
     type DefaultCollectionOwner = TreasuryAccount;
+    type WeightInfo = pallet_eterra_media::weights::SubstrateWeight<Runtime>;
 
 }

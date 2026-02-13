@@ -2,6 +2,12 @@
 
 pub use pallet::*;
 
+pub mod weights;
+pub use weights::WeightInfo;
+
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+
 #[cfg(test)]
 mod mock;
 #[cfg(test)]
@@ -9,34 +15,6 @@ mod tests;
 
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
-
-pub mod weights {
-    use core::marker::PhantomData;
-    use frame_support::weights::Weight;
-    use frame_system::Config as SystemConfig;
-
-    /// Weight functions needed for this pallet.
-    pub trait WeightInfo {
-        fn suggest_move() -> Weight;
-    }
-
-    /// Weights for a generic Substrate chain.
-    pub struct SubstrateWeight<T>(PhantomData<T>);
-
-    impl<T: SystemConfig> WeightInfo for SubstrateWeight<T> {
-        fn suggest_move() -> Weight {
-            // Placeholder: constant weight; replace with benchmarked values when available.
-            Weight::from_parts(10_000, 0)
-        }
-    }
-
-    /// Fallback implementation for tests and when weights are not wired in the runtime.
-    impl WeightInfo for () {
-        fn suggest_move() -> Weight {
-            Weight::from_parts(10_000, 0)
-        }
-    }
-}
 
 /// A generic, no_std-friendly adapter for any 2-player, turn-based, perfect-information game.
 pub trait GameAdapter {
@@ -85,6 +63,12 @@ pub trait GameAdapter {
     fn random_action(state: &Self::State, seed: u64) -> Option<Self::Action>;
 }
 
+#[cfg(feature = "runtime-benchmarks")]
+pub trait BenchmarkHelper<A: GameAdapter> {
+    fn bench_state() -> A::State;
+    fn bench_difficulty() -> u8 { 100 }
+}
+
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
@@ -121,6 +105,10 @@ pub mod pallet {
 
         /// Weight information for the extrinsics of this pallet.
         type WeightInfo: WeightInfo;
+
+        /// Benchmarking helper to construct a valid, non-terminal state.
+        #[cfg(feature = "runtime-benchmarks")]
+        type BenchmarkHelper: crate::BenchmarkHelper<Self::Adapter>;
     }
 
     #[pallet::storage]

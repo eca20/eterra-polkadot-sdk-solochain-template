@@ -98,6 +98,7 @@ std = [
    "pallet-eterra-simple-matchmaker/std",
   "pallet-eterra-game-authority/std",
   "pallet-eterra-media/std",
+  "pallet-eterra-monte-carlo-ai/std",
 
 	"sp-api/std",
 	"sp-block-builder/std",
@@ -130,6 +131,9 @@ runtime-benchmarks = [
 	"pallet-eterra-simple-matchmaker/runtime-benchmarks",
 	"pallet-eterra-daily-slots/runtime-benchmarks",
 	"pallet-eterra-faucet/runtime-benchmarks",
+	"pallet-eterra-gamer/runtime-benchmarks",
+	"pallet-eterra-media/runtime-benchmarks",
+	"pallet-eterra-monte-carlo-ai/runtime-benchmarks",
 	"pallet-eterra-tcg/runtime-benchmarks",
 	"pallet-eterra-game-authority/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",

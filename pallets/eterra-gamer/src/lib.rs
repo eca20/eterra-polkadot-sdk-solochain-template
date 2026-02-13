@@ -1,6 +1,12 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 pub use pallet::*;
 
+pub mod weights;
+pub use weights::WeightInfo;
+
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+
 #[cfg(test)]
 mod mock;
 #[cfg(test)]
@@ -17,6 +23,7 @@ use sp_std::vec::Vec;
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
+    use crate::weights::WeightInfo;
 
     type BalanceOf<T> =
         <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
@@ -47,6 +54,9 @@ pub mod pallet {
 
         /// Runtime event
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+
+        /// Weight information for extrinsics.
+        type WeightInfo: WeightInfo;
     }
 
     #[pallet::storage]
@@ -159,7 +169,7 @@ pub mod pallet {
     impl<T: Config> Pallet<T> {
         /// Set (or change) gamer tag. First set is free; changes cost 100 tokens (configurable).
         #[pallet::call_index(0)]
-        #[pallet::weight(T::DbWeight::get().reads_writes(1,2))]
+        #[pallet::weight(T::WeightInfo::set_gamer_tag())]
         pub fn set_gamer_tag(origin: OriginFor<T>, tag: Vec<u8>) -> DispatchResult {
             let who = ensure_signed(origin)?;
             let bounded: BoundedVec<_, T::MaxTagLen> =
@@ -177,7 +187,7 @@ pub mod pallet {
         /// Set (or change) avatar CID (e.g., IPFS). First set free; changes cost 100 tokens (configurable).
         /// The value must be printable ASCII (no spaces/control chars) and within MaxAvatarCidLen.
         #[pallet::call_index(1)]
-        #[pallet::weight(T::DbWeight::get().reads_writes(1,2))]
+        #[pallet::weight(T::WeightInfo::set_avatar())]
         pub fn set_avatar(origin: OriginFor<T>, cid: Vec<u8>) -> DispatchResult {
             let who = ensure_signed(origin)?;
             ensure!(Self::validate_ascii_cid(&cid), Error::<T>::AvatarCidInvalidAscii);
@@ -194,7 +204,7 @@ pub mod pallet {
 
         /// (Privileged) Grant experience to a player (minting XP).
         #[pallet::call_index(2)]
-        #[pallet::weight(T::DbWeight::get().reads_writes(1,1))]
+        #[pallet::weight(T::WeightInfo::grant_experience())]
         pub fn grant_experience(origin: OriginFor<T>, to: T::AccountId, amount: u128) -> DispatchResult {
             T::ExpIssuerOrigin::ensure_origin(origin)?;
             Experience::<T>::mutate(&to, |xp| *xp = xp.saturating_add(amount));
@@ -204,7 +214,7 @@ pub mod pallet {
 
         /// Redeem available experience into levels until you run out of EXP or hit 99.
         #[pallet::call_index(3)]
-        #[pallet::weight(T::DbWeight::get().reads_writes(2,2))]
+        #[pallet::weight(T::WeightInfo::redeem_levels())]
         pub fn redeem_levels(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
             let current = Level::<T>::get(&who);

@@ -84,6 +84,7 @@ impl pallet_eterra_gamer::Config for Test {
     type ChangeFee = ChangeFee;
     type MaxTagLen = MaxTagLen;
     type MaxAvatarCidLen = MaxAvatarCidLen;
+    type WeightInfo = ();
 }
 
 // Build a mock runtime

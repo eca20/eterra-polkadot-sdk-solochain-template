@@ -85,6 +85,7 @@ impl pallet_eterra_media::Config for Test {
     type MaxRolesPerAccount = MaxRolesPerAccount;
     type DefaultCollectionId = DefaultCollectionId;
     type DefaultCollectionOwner = DefaultCollectionOwnerForMock;
+    type WeightInfo = ();
 }
 
 // Helper to build a fresh Ext for each test.

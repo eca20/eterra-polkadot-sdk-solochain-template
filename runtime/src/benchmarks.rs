@@ -34,6 +34,9 @@ frame_benchmarking::define_benchmarks!(
     [pallet_eterra_simple_tcg, EterraSimpleTCG]
     [pallet_eterra_simple_matchmaker, EterraSimpleMatchMaker]
     [pallet_eterra_faucet, EterraFaucet]
+    [pallet_eterra_gamer, EterraGamer]
+    [pallet_eterra_monte_carlo_ai, EterraMonteCarloAi]
     [pallet_eterra_tcg, EterraTCG]
     [pallet_eterra_game_authority, EterraGameAuthority]
+    [pallet_eterra_media, EterraMedia]
 );
