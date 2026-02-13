@@ -24,6 +24,7 @@ use sp_std::vec::Vec;
 pub mod pallet {
     use super::*;
     use crate::weights::WeightInfo;
+    use frame_support::traits::StorageVersion;
 
     type BalanceOf<T> =
         <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
@@ -102,8 +103,23 @@ pub mod pallet {
         InvalidLevelRequest,
     }
 
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
     #[pallet::pallet]
+    #[pallet::storage_version(STORAGE_VERSION)]
     pub struct Pallet<T>(_);
+
+    #[pallet::hooks]
+    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        fn on_runtime_upgrade() -> Weight {
+            let mut weight = T::DbWeight::get().reads(1);
+            if StorageVersion::get::<Pallet<T>>() < STORAGE_VERSION {
+                STORAGE_VERSION.put::<Pallet<T>>();
+                weight = weight.saturating_add(T::DbWeight::get().writes(1));
+            }
+            weight
+        }
+    }
 
     impl<T: Config> Pallet<T> {
         /// Small ASCII validation for CIDs: non-empty, only visible ASCII (33..=126).

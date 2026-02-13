@@ -100,7 +100,7 @@ where
     }
 }
 
-#[derive(Encode, Decode, TypeInfo, PartialEq, Clone, Debug)]
+#[derive(Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Clone, Debug)]
 pub struct Move {
     pub place_index_x: u8,
     pub place_index_y: u8,

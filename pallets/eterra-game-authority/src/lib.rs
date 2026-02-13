@@ -20,6 +20,7 @@ pub mod pallet {
     use sp_std::marker::PhantomData;
     use sp_std::vec::Vec;
     use frame_support::traits::BuildGenesisConfig;
+    use frame_support::traits::StorageVersion;
     use frame_support::sp_runtime::traits::Saturating;
     use crate::weights::WeightInfo;
 
@@ -56,7 +57,10 @@ pub mod pallet {
         type WeightInfo: WeightInfo;
     }
 
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
     #[pallet::pallet]
+    #[pallet::storage_version(STORAGE_VERSION)]
     pub struct Pallet<T>(_);
 
     #[pallet::storage]
@@ -110,6 +114,15 @@ pub mod pallet {
     >;
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        fn on_runtime_upgrade() -> Weight {
+            let mut weight = T::DbWeight::get().reads(1);
+            if StorageVersion::get::<Pallet<T>>() < STORAGE_VERSION {
+                STORAGE_VERSION.put::<Pallet<T>>();
+                weight = weight.saturating_add(T::DbWeight::get().writes(1));
+            }
+            weight
+        }
+
         fn on_initialize(n: BlockNumberFor<T>) -> Weight {
             // Take the list of games scheduled to expire now.
             let games: BoundedVec<GameId, T::MaxExpirationsPerBlock> = Expirations::<T>::take(n);

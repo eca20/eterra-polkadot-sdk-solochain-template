@@ -15,6 +15,7 @@ const _BOARD_SIZE: usize = _GRID_DIM * _GRID_DIM; // 16
 pub mod pallet {
     use super::*;
     use frame_support::pallet_prelude::*;
+    use frame_support::traits::StorageVersion;
     use frame_system::pallet_prelude::*;
     use crate::weights::WeightInfo;
 
@@ -39,8 +40,23 @@ pub mod pallet {
 
     pub type QIndex = u32;
 
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
     #[pallet::pallet]
+    #[pallet::storage_version(STORAGE_VERSION)]
     pub struct Pallet<T>(_);
+
+    #[pallet::hooks]
+    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        fn on_runtime_upgrade() -> Weight {
+            let mut weight = T::DbWeight::get().reads(1);
+            if StorageVersion::get::<Pallet<T>>() < STORAGE_VERSION {
+                STORAGE_VERSION.put::<Pallet<T>>();
+                weight = weight.saturating_add(T::DbWeight::get().writes(1));
+            }
+            weight
+        }
+    }
 
     #[pallet::storage]
     #[pallet::getter(fn head)]

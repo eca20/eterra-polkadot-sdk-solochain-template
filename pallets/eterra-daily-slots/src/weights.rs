@@ -39,6 +39,8 @@ pub trait WeightInfo {
 	fn roll() -> Weight;
 	fn set_reel_weights() -> Weight;
 	fn set_all_reel_weights() -> Weight;
+	fn on_initialize_no_draw() -> Weight;
+	fn on_initialize_with_draw(max_entries: u32) -> Weight;
 }
 
 impl WeightInfo for () {
@@ -49,6 +51,12 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn set_all_reel_weights() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn on_initialize_no_draw() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn on_initialize_with_draw(_max_entries: u32) -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 }
@@ -97,5 +105,14 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(136_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 0))
 			.saturating_add(T::DbWeight::get().writes(3))
+	}
+	fn on_initialize_no_draw() -> Weight {
+		// Roughly a single read for the time provider check.
+		T::DbWeight::get().reads(1)
+	}
+	fn on_initialize_with_draw(max_entries: u32) -> Weight {
+		// The weekly draw iterates up to max_entries and clears storage.
+		let max = max_entries as u64;
+		T::DbWeight::get().reads_writes(3 + max, 2 + max)
 	}
 }

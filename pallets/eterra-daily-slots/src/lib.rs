@@ -32,9 +32,13 @@ const BLOCKS_PER_WINDOW: u64 = 3_600;
 pub mod pallet {
     use super::*;
     use crate::weights::WeightInfo;
+    use frame_support::traits::StorageVersion;
+
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
     #[pallet::pallet]
     #[pallet::without_storage_info]
+    #[pallet::storage_version(STORAGE_VERSION)]
     pub struct Pallet<T>(_);
 
     /// Configuration trait for this pallet.
@@ -410,6 +414,15 @@ pub mod pallet {
 
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        fn on_runtime_upgrade() -> Weight {
+            let mut weight = T::DbWeight::get().reads(1);
+            if StorageVersion::get::<Pallet<T>>() < STORAGE_VERSION {
+                STORAGE_VERSION.put::<Pallet<T>>();
+                weight = weight.saturating_add(T::DbWeight::get().writes(1));
+            }
+            weight
+        }
+
         fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
             // Only on the first block
             if _n == 1u32.into() {
@@ -446,13 +459,13 @@ pub mod pallet {
             let is_after_6pm = secs_today >= EVENING_THRESHOLD;
             if !(is_sunday && is_after_6pm) {
                 // bail out early, no drawing
-                return T::DbWeight::get().reads(1);
+                return T::WeightInfo::on_initialize_no_draw();
             }
 
             // If we’ve already done a drawing in the last 24 h, bail again:
             let last = LastDrawingTime::<T>::get();
             if now_secs.saturating_sub(last) < 24 * 3600 {
-                return T::DbWeight::get().reads(1);
+                return T::WeightInfo::on_initialize_no_draw();
             }
 
             // Now we really do a weekly drawing
@@ -460,8 +473,8 @@ pub mod pallet {
                 log::warn!("(eterra-daily-slots) weekly drawing failed: {:?}", e);
             }
 
-            let max = T::MaxDrawingEntries::get() as u64;
-            T::DbWeight::get().reads_writes(3 + max, 2 + max)
+            let max = T::MaxDrawingEntries::get();
+            T::WeightInfo::on_initialize_with_draw(max)
         }
     }
 

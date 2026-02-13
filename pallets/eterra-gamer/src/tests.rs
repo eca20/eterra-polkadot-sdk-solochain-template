@@ -124,3 +124,26 @@ fn already_max_level_fails() {
         );
     });
 }
+
+#[test]
+fn exp_required_is_monotonic() {
+    // Ensure required EXP strictly increases per level.
+    let mut prev = 0u128;
+    for lvl in 1u8..=99u8 {
+        let need = EterraGamer::exp_required_for_level(lvl);
+        assert!(need > prev, "level {} not increasing", lvl);
+        prev = need;
+    }
+}
+
+#[test]
+fn redeem_caps_at_99() {
+    new_test_ext().execute_with(|| {
+        Level::<Test>::insert(ALICE, 98u8);
+        Experience::<Test>::insert(ALICE, u128::MAX);
+
+        assert_ok!(EterraGamer::redeem_levels(RuntimeOrigin::signed(ALICE)));
+
+        assert_eq!(Level::<Test>::get(ALICE), 99u8);
+    });
+}

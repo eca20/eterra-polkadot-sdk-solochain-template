@@ -37,6 +37,7 @@ pub mod pallet {
     use frame_support::pallet_prelude::ConstU32;
     use frame_support::BoundedVec;
     use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
+    use frame_support::traits::StorageVersion;
     use frame_system::pallet_prelude::*;
     use sp_runtime::traits::Hash;
     use sp_runtime::Saturating;
@@ -57,8 +58,23 @@ pub mod pallet {
     use pallet_eterra_monte_carlo_ai as mc_ai;
     use pallet_eterra_simple_tcg as cards; // reserved for future use
 
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
     #[pallet::pallet]
+    #[pallet::storage_version(STORAGE_VERSION)]
     pub struct Pallet<T>(_);
+
+    #[pallet::hooks]
+    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        fn on_runtime_upgrade() -> Weight {
+            let mut weight = T::DbWeight::get().reads(1);
+            if StorageVersion::get::<Pallet<T>>() < STORAGE_VERSION {
+                STORAGE_VERSION.put::<Pallet<T>>();
+                weight = weight.saturating_add(T::DbWeight::get().writes(1));
+            }
+            weight
+        }
+    }
 
     #[pallet::config]
     pub trait Config: frame_system::Config + cards::pallet::Config + mc_ai::pallet::Config {
