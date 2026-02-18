@@ -1138,6 +1138,7 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "dev-play"))]
     fn validate_move(
         game: &Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
         player_move: &Move,

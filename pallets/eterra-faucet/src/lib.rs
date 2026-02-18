@@ -8,12 +8,7 @@ pub use weights::WeightInfo;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
-use frame_support::{
-    dispatch::DispatchResult,
-    pallet_prelude::*,
-    traits::{tokens::ExistenceRequirement, BuildGenesisConfig, Currency},
-};
-use frame_system::pallet_prelude::*;
+use frame_support::traits::Currency;
 
 /// Helper to get the balance type from the configured Currency
 pub type BalanceOf<T> =
@@ -22,8 +17,12 @@ pub type BalanceOf<T> =
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
-    use crate::weights::WeightInfo;
-    use frame_support::traits::StorageVersion;
+    use frame_support::{
+        dispatch::DispatchResult,
+        pallet_prelude::*,
+        traits::{tokens::ExistenceRequirement, BuildGenesisConfig, StorageVersion},
+    };
+    use frame_system::pallet_prelude::*;
 
     #[pallet::config]
     pub trait Config: frame_system::Config {
