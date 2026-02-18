@@ -34,27 +34,25 @@ use pallet_eterra_monte_carlo_ai as mc_ai; // reserved for future use
 
 #[frame_support::pallet]
 pub mod pallet {
+    use crate::weights::WeightInfo;
     use frame_support::pallet_prelude::ConstU32;
+    use frame_support::traits::StorageVersion;
     use frame_support::BoundedVec;
     use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
-    use frame_support::traits::StorageVersion;
     use frame_system::pallet_prelude::*;
     use sp_runtime::traits::Hash;
     use sp_runtime::Saturating;
-    use sp_std::vec::Vec;
-    use crate::weights::WeightInfo;
-
 
     pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
 
     use crate::types::board::Board;
     use crate::types::card::Card;
-    
+
     use crate::types::game::Move;
     use crate::types::game::*;
     use crate::types::GameId;
     // Alias the simple TCG pallet so we can read card ownership & stats
-    
+
     use pallet_eterra_monte_carlo_ai as mc_ai;
     use pallet_eterra_simple_tcg as cards; // reserved for future use
 
@@ -236,7 +234,7 @@ pub mod pallet {
         #[pallet::weight(<T as Config>::WeightInfo::create_game())]
         pub fn create_game(
             origin: OriginFor<T>,
-            mut players: Vec<AccountIdOf<T>>,
+            mut players: BoundedVec<AccountIdOf<T>, T::NumPlayers>,
             game_mode: GameMode,
         ) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
@@ -263,9 +261,17 @@ pub mod pallet {
                     // so downstream logic is predictable.
                     ensure!(players[0] != players[1], Error::<T>::InvalidMove);
                     if players[0] != who {
-                        // Put creator in slot 0
+                        // Put creator in slot 0 while keeping a bounded structure.
                         if players[1] == who {
-                            players.swap(0, 1);
+                            let opponent = players[0].clone();
+                            let mut normalized = BoundedVec::<AccountIdOf<T>, T::NumPlayers>::new();
+                            normalized
+                                .try_push(who.clone())
+                                .map_err(|_| Error::<T>::InvalidNumberOfPlayers)?;
+                            normalized
+                                .try_push(opponent)
+                                .map_err(|_| Error::<T>::InvalidNumberOfPlayers)?;
+                            players = normalized;
                         } else {
                             // Shouldn’t happen because of the contains() check, but be safe.
                             return Err(Error::<T>::CreatorMustBeInGame.into());
@@ -277,7 +283,14 @@ pub mod pallet {
                     let ai_acc = T::AiAccount::get();
                     // Also guard against creator == AI account (shouldn’t happen for sane config).
                     ensure!(who != ai_acc, Error::<T>::InvalidMove);
-                    players = sp_std::vec![who.clone(), ai_acc];
+                    let mut forced = BoundedVec::<AccountIdOf<T>, T::NumPlayers>::new();
+                    forced
+                        .try_push(who.clone())
+                        .map_err(|_| Error::<T>::InvalidNumberOfPlayers)?;
+                    forced
+                        .try_push(ai_acc)
+                        .map_err(|_| Error::<T>::InvalidNumberOfPlayers)?;
+                    players = forced;
                 }
             }
 
@@ -334,10 +347,7 @@ pub mod pallet {
             let mut game: Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> = Game {
                 state: GameState::Playing,
                 last_played_block: current_block_number,
-                players: players
-                    .clone()
-                    .try_into()
-                    .map_err(|_| Error::<T>::InternalError)?,
+                players: players.clone(),
                 player_turn: 0,
                 round: 0,
                 max_rounds: T::MaxRounds::get(),
@@ -421,7 +431,10 @@ pub mod pallet {
             );
 
             let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
-            ensure!(matches!(game.state, GameState::Playing), Error::<T>::GameNotActive);
+            ensure!(
+                matches!(game.state, GameState::Playing),
+                Error::<T>::GameNotActive
+            );
 
             // Validate the current player's turn and move
             Self::validate_player_turn(&game, &who)?;
@@ -500,13 +513,16 @@ pub mod pallet {
         pub fn submit_hand(
             origin: OriginFor<T>,
             game_id: GameId<T>,
-            _card_ids: Vec<u32>,
+            _card_ids: BoundedVec<u32, HandLimit>,
         ) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
 
             // Ensure the game exists and the caller is a player in it
             let game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
-            ensure!(matches!(game.state, GameState::Playing), Error::<T>::GameNotActive);
+            ensure!(
+                matches!(game.state, GameState::Playing),
+                Error::<T>::GameNotActive
+            );
             ensure!(game.players.contains(&who), Error::<T>::PlayerNotInGame);
 
             // Prevent resubmission for this game
@@ -587,7 +603,10 @@ pub mod pallet {
 
             // Load game
             let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
-            ensure!(matches!(game.state, GameState::Playing), Error::<T>::GameNotActive);
+            ensure!(
+                matches!(game.state, GameState::Playing),
+                Error::<T>::GameNotActive
+            );
 
             // Validate it's the caller's turn and the target cell is open
             Self::validate_player_turn(&game, &who)?;
@@ -671,7 +690,10 @@ pub mod pallet {
 
             // Retrieve the game from storage
             let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
-            ensure!(matches!(game.state, GameState::Playing), Error::<T>::GameNotActive);
+            ensure!(
+                matches!(game.state, GameState::Playing),
+                Error::<T>::GameNotActive
+            );
 
             // Ensure the caller is a player in the game
             ensure!(game.players.contains(&who), Error::<T>::PlayerNotInGame);
@@ -731,7 +753,10 @@ pub mod pallet {
         /// The hand must contain exactly `HandSize` unique cards owned by the caller.
         #[pallet::call_index(5)]
         #[pallet::weight(<T as Config>::WeightInfo::set_current_hand())]
-        pub fn set_current_hand(origin: OriginFor<T>, card_ids: Vec<u32>) -> DispatchResult {
+        pub fn set_current_hand(
+            origin: OriginFor<T>,
+            card_ids: BoundedVec<u32, HandLimit>,
+        ) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
 
             // Enforce exact hand size and uniqueness
@@ -753,19 +778,17 @@ pub mod pallet {
             }
 
             // Persist as a bounded vec
-            let current: BoundedVec<u32, HandLimit> = card_ids
-                .clone()
-                .try_into()
-                .map_err(|_| Error::<T>::HandSizeInvalid)?;
-
-            CurrentHandOf::<T>::insert(&who, current);
+            CurrentHandOf::<T>::insert(&who, card_ids);
             Ok(())
         }
 
         /// Deprecated alias for backwards compatibility. Calls `set_current_hand`.
         #[pallet::call_index(6)]
         #[pallet::weight(<T as Config>::WeightInfo::set_preset_hand())]
-        pub fn set_preset_hand(origin: OriginFor<T>, card_ids: Vec<u32>) -> DispatchResult {
+        pub fn set_preset_hand(
+            origin: OriginFor<T>,
+            card_ids: BoundedVec<u32, HandLimit>,
+        ) -> DispatchResult {
             Self::set_current_hand(origin, card_ids)
         }
     }
@@ -779,8 +802,6 @@ impl<T: Config> Pallet<T> {
         a: &AccountIdOf<T>,
         b: &AccountIdOf<T>,
     ) -> Result<GameId<T>, sp_runtime::DispatchError> {
-        
-
         // Sanity checks
         ensure!(a != b, Error::<T>::InvalidMove);
         ensure!(

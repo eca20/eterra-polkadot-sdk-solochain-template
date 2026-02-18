@@ -38,9 +38,9 @@ benchmarks! {
         let reel: u32 = 0;
         let max_entries = T::MaxWeightEntries::get();
         let count = max_entries.max(1).min(3);
-        let mut weights: Vec<(u32, u32)> = Vec::new();
+        let mut weights: BoundedVec<(u32, u32), T::MaxWeightEntries> = BoundedVec::default();
         for i in 0..count {
-            weights.push((i, 1));
+            weights.try_push((i, 1)).expect("within benchmark bounds; qed");
         }
     }: _(RawOrigin::Root, reel, weights)
     verify {
@@ -52,13 +52,18 @@ benchmarks! {
         let max_entries = T::MaxWeightEntries::get();
         let count = max_entries.max(1).min(3);
 
-        let mut all_weights: Vec<(u32, Vec<(u32, u32)>)> = Vec::new();
+        let mut all_weights: BoundedVec<
+            (u32, BoundedVec<(u32, u32), T::MaxWeightEntries>),
+            T::MaxSlotLength
+        > = BoundedVec::default();
         for reel in 0..slot_len {
-            let mut weights: Vec<(u32, u32)> = Vec::new();
+            let mut weights: BoundedVec<(u32, u32), T::MaxWeightEntries> = BoundedVec::default();
             for i in 0..count {
-                weights.push((i, 1));
+                weights.try_push((i, 1)).expect("within benchmark bounds; qed");
             }
-            all_weights.push((reel, weights));
+            all_weights
+                .try_push((reel, weights))
+                .expect("within benchmark bounds; qed");
         }
     }: _(RawOrigin::Root, all_weights)
     verify {

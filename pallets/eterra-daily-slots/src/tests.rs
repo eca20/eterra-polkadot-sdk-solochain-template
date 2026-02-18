@@ -30,6 +30,26 @@ fn roll_n_times<T: crate::pallet::Config>(who: &T::AccountId, n: u32) {
     }
 }
 
+fn bounded_weights(weights: Vec<(u32, u32)>) -> BoundedVec<(u32, u32), MaxWeightEntries> {
+    weights
+        .try_into()
+        .expect("weights length must fit MaxWeightEntries")
+}
+
+fn bounded_all_weights(
+    all: Vec<(u32, Vec<(u32, u32)>)>,
+) -> BoundedVec<(u32, BoundedVec<(u32, u32), MaxWeightEntries>), <Test as Config>::MaxSlotLength> {
+    let mut out: BoundedVec<
+        (u32, BoundedVec<(u32, u32), MaxWeightEntries>),
+        <Test as Config>::MaxSlotLength,
+    > = BoundedVec::default();
+    for (reel, weights) in all.into_iter() {
+        out.try_push((reel, bounded_weights(weights)))
+            .expect("reel list must fit MaxSlotLength");
+    }
+    out
+}
+
 // 6h window at 6s/block → 3_600 blocks
 const BLOCKS_PER_WINDOW: u64 = 3_600;
 
@@ -354,9 +374,9 @@ fn test_set_reel_weights_and_roll_with_weights() {
         assert_ok!(Pallet::<Test>::set_reel_weights(
             RawOrigin::Root.into(),
             0,
-            weights.clone()
+            bounded_weights(weights.clone())
         ));
-        let expected: BoundedVec<_, MaxWeightEntries> = weights.try_into().unwrap();
+        let expected = bounded_weights(weights);
         assert_eq!(crate::ReelWeights::<Test>::get(0).unwrap(), expected);
         // Perform a roll and ensure the result includes the weighted symbol
         assert_ok!(Pallet::<Test>::roll(RawOrigin::Signed(1).into()));
@@ -469,7 +489,7 @@ fn test_set_all_reel_weights_successfully_sets_all() {
 
         assert_ok!(Pallet::<Test>::set_all_reel_weights(
             RawOrigin::Root.into(),
-            all.clone()
+            bounded_all_weights(all.clone())
         ));
 
         for (reel, w) in all {
@@ -483,7 +503,8 @@ fn test_set_all_reel_weights_successfully_sets_all() {
 #[test]
 fn test_set_empty_reel_weights_fails() {
     new_test_ext().execute_with(|| {
-        let result = Pallet::<Test>::set_reel_weights(RawOrigin::Root.into(), 0, vec![]);
+        let result =
+            Pallet::<Test>::set_reel_weights(RawOrigin::Root.into(), 0, bounded_weights(vec![]));
         assert_noop!(result, Error::<Test>::InvalidConfiguration);
     });
 }
@@ -496,8 +517,11 @@ fn test_set_reel_weights_exceeds_max_entries() {
             .map(|i| (i, 1))
             .collect();
 
-        let result = Pallet::<Test>::set_reel_weights(RawOrigin::Root.into(), 0, too_many_weights);
-        assert_noop!(result, Error::<Test>::InvalidConfiguration);
+        let bounded: Result<BoundedVec<_, MaxWeightEntries>, _> = too_many_weights.try_into();
+        assert!(
+            bounded.is_err(),
+            "inputs above MaxWeightEntries should fail to decode"
+        );
     });
 }
 

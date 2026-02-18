@@ -42,8 +42,7 @@ fn seed_cards<T: Config>(owner: &T::AccountId, start_id: u32, count: u32) -> Vec
 fn seed_current_hand<T: Config>(owner: &T::AccountId, start_id: u32) -> Vec<u32> {
     let count = HandLimit::get();
     let ids = seed_cards::<T>(owner, start_id, count);
-    let bounded: BoundedVec<u32, HandLimit> =
-        ids.clone().try_into().expect("hand size fits; qed");
+    let bounded: BoundedVec<u32, HandLimit> = ids.clone().try_into().expect("hand size fits; qed");
     CurrentHandOf::<T>::insert(owner, bounded);
     ids
 }
@@ -90,7 +89,7 @@ benchmarks! {
     create_game {
         let who: T::AccountId = whitelisted_caller();
         let _ = seed_current_hand::<T>(&who, 0);
-        let players: Vec<T::AccountId> = Vec::new();
+        let players: BoundedVec<T::AccountId, T::NumPlayers> = BoundedVec::default();
         let game_mode = GameMode::PvE;
     }: _(RawOrigin::Signed(who.clone()), players, game_mode)
     verify {
@@ -105,7 +104,7 @@ benchmarks! {
         let ai = T::AiAccount::get();
         let _ = seed_current_hand::<T>(&who, 0);
         let game_id = seed_game::<T>(sp_std::vec![who.clone(), ai.clone()], GameMode::PvE, 1);
-    }: _(RawOrigin::Signed(who.clone()), game_id, Vec::new())
+    }: _(RawOrigin::Signed(who.clone()), game_id, BoundedVec::<u32, HandLimit>::default())
     verify {
         assert!(HandsOfGame::<T>::get(&game_id, &who).is_some());
     }
@@ -148,7 +147,8 @@ benchmarks! {
     set_current_hand {
         let who: T::AccountId = whitelisted_caller();
         let card_ids = seed_cards::<T>(&who, 0, HandLimit::get());
-    }: _(RawOrigin::Signed(who.clone()), card_ids.clone())
+        let bounded: BoundedVec<u32, HandLimit> = card_ids.clone().try_into().expect("hand size fits; qed");
+    }: _(RawOrigin::Signed(who.clone()), bounded)
     verify {
         assert!(CurrentHandOf::<T>::contains_key(&who));
     }
@@ -156,7 +156,8 @@ benchmarks! {
     set_preset_hand {
         let who: T::AccountId = whitelisted_caller();
         let card_ids = seed_cards::<T>(&who, 100, HandLimit::get());
-    }: _(RawOrigin::Signed(who.clone()), card_ids.clone())
+        let bounded: BoundedVec<u32, HandLimit> = card_ids.clone().try_into().expect("hand size fits; qed");
+    }: _(RawOrigin::Signed(who.clone()), bounded)
     verify {
         assert!(CurrentHandOf::<T>::contains_key(&who));
     }
@@ -167,9 +168,5 @@ mod tests {
     use super::*;
     use frame_benchmarking::impl_benchmark_test_suite;
 
-    impl_benchmark_test_suite!(
-        Pallet,
-        crate::mock::new_test_ext(),
-        crate::mock::Test
-    );
+    impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);
 }

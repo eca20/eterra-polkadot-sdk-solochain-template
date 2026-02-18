@@ -315,7 +315,7 @@ pub mod pallet {
         pub fn set_reel_weights(
             origin: OriginFor<T>,
             reel: u32,
-            weights: Vec<(u32, u32)>,
+            weights: BoundedVec<(u32, u32), T::MaxWeightEntries>,
         ) -> DispatchResult {
             ensure_root(origin)?; // or ensure_signed(origin)? with checks
 
@@ -329,11 +329,14 @@ pub mod pallet {
         #[pallet::weight(T::WeightInfo::set_all_reel_weights())]
         pub fn set_all_reel_weights(
             origin: OriginFor<T>,
-            all_weights: Vec<(u32, Vec<(u32, u32)>)>,
+            all_weights: BoundedVec<
+                (u32, BoundedVec<(u32, u32), T::MaxWeightEntries>),
+                T::MaxSlotLength,
+            >,
         ) -> DispatchResult {
             ensure_root(origin)?;
 
-            for (reel, weights) in all_weights {
+            for (reel, weights) in all_weights.into_iter() {
                 Self::update_reel_weights(reel, weights)?;
             }
 
@@ -345,19 +348,18 @@ pub mod pallet {
 
     impl<T: Config> Pallet<T> {
         /// Internal helper to update reel weights, converting and inserting into storage.
-        fn update_reel_weights(reel: u32, weights: Vec<(u32, u32)>) -> Result<(), Error<T>> {
+        fn update_reel_weights(
+            reel: u32,
+            weights: BoundedVec<(u32, u32), T::MaxWeightEntries>,
+        ) -> Result<(), Error<T>> {
             // Reject empty weight lists
             if weights.is_empty() {
                 return Err(Error::<T>::InvalidConfiguration);
             }
 
-            // Clone weights for logging after move into BoundedVec
+            // Clone weights for logging after insertion.
             let weights_for_log = weights.clone();
-            let bounded: BoundedVec<_, T::MaxWeightEntries> = weights
-                .try_into()
-                .map_err(|_| Error::<T>::InvalidConfiguration)?;
-
-            ReelWeights::<T>::insert(reel, bounded);
+            ReelWeights::<T>::insert(reel, weights);
             info!(
                 "[daily_slots] Set weights for reel {}: {:?}",
                 reel, weights_for_log
@@ -477,7 +479,6 @@ pub mod pallet {
             T::WeightInfo::on_initialize_with_draw(max)
         }
     }
-
 }
 
 pub use pallet::*;

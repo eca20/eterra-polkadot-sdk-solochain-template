@@ -2,9 +2,10 @@
 #![cfg(test)]
 
 use super::*;
-use crate::pallet::{Experience, GamerTag, Level, AvatarCid, Error as GamerError};
-use frame_support::{assert_ok, assert_noop};
 use crate::mock::*;
+use crate::pallet::{AvatarCid, Error as GamerError, Experience, GamerTag, Level};
+use frame_support::BoundedVec;
+use frame_support::{assert_noop, assert_ok};
 
 #[test]
 fn first_set_tag_is_free() {
@@ -14,11 +15,19 @@ fn first_set_tag_is_free() {
 
         // First set by ALICE should be free
         let tag = b"AliceTheBrave".to_vec();
-        assert_ok!(EterraGamer::set_gamer_tag(RuntimeOrigin::signed(ALICE), tag.clone()));
+        let bounded: BoundedVec<u8, <Test as crate::Config>::MaxTagLen> =
+            tag.clone().try_into().expect("within max tag len");
+        assert_ok!(EterraGamer::set_gamer_tag(
+            RuntimeOrigin::signed(ALICE),
+            bounded
+        ));
         assert_eq!(GamerTag::<Test>::get(ALICE).unwrap().to_vec(), tag);
 
         // Faucet balance unchanged (no fee on first set)
-        assert_eq!(pallet_balances::Pallet::<Test>::free_balance(FAUCET), faucet_before);
+        assert_eq!(
+            pallet_balances::Pallet::<Test>::free_balance(FAUCET),
+            faucet_before
+        );
     });
 }
 
@@ -28,15 +37,31 @@ fn second_set_tag_charges_fee() {
         let tag1 = b"Alice1".to_vec();
         let tag2 = b"Alice2".to_vec();
 
-        assert_ok!(EterraGamer::set_gamer_tag(RuntimeOrigin::signed(ALICE), tag1));
+        let tag1: BoundedVec<u8, <Test as crate::Config>::MaxTagLen> =
+            tag1.try_into().expect("within max tag len");
+        assert_ok!(EterraGamer::set_gamer_tag(
+            RuntimeOrigin::signed(ALICE),
+            tag1
+        ));
         let before_faucet = pallet_balances::Pallet::<Test>::free_balance(FAUCET);
         let before_alice = pallet_balances::Pallet::<Test>::free_balance(ALICE);
 
-        assert_ok!(EterraGamer::set_gamer_tag(RuntimeOrigin::signed(ALICE), tag2));
+        let tag2: BoundedVec<u8, <Test as crate::Config>::MaxTagLen> =
+            tag2.try_into().expect("within max tag len");
+        assert_ok!(EterraGamer::set_gamer_tag(
+            RuntimeOrigin::signed(ALICE),
+            tag2
+        ));
         // Fee moved
         let fee = ChangeFee::get();
-        assert_eq!(pallet_balances::Pallet::<Test>::free_balance(FAUCET), before_faucet + fee);
-        assert_eq!(pallet_balances::Pallet::<Test>::free_balance(ALICE), before_alice - fee);
+        assert_eq!(
+            pallet_balances::Pallet::<Test>::free_balance(FAUCET),
+            before_faucet + fee
+        );
+        assert_eq!(
+            pallet_balances::Pallet::<Test>::free_balance(ALICE),
+            before_alice - fee
+        );
     });
 }
 
@@ -44,7 +69,12 @@ fn second_set_tag_charges_fee() {
 fn set_avatar_valid_ascii_and_length() {
     new_test_ext().execute_with(|| {
         let cid = b"bafybeigdyrztvz3kvis4cdwq5lq6eqyqf7x7v2gd3h3b7l5jv2w7".to_vec();
-        assert_ok!(EterraGamer::set_avatar(RuntimeOrigin::signed(ALICE), cid.clone()));
+        let bounded: BoundedVec<u8, <Test as crate::Config>::MaxAvatarCidLen> =
+            cid.clone().try_into().expect("within max avatar len");
+        assert_ok!(EterraGamer::set_avatar(
+            RuntimeOrigin::signed(ALICE),
+            bounded
+        ));
         assert_eq!(AvatarCid::<Test>::get(ALICE).unwrap().to_vec(), cid);
     });
 }
@@ -54,8 +84,10 @@ fn set_avatar_rejects_invalid_ascii() {
     new_test_ext().execute_with(|| {
         let mut cid = b"bafy..ok".to_vec();
         cid[4] = b' '; // space is invalid per validate_ascii_cid (must be 33..=126)
+        let bounded: BoundedVec<u8, <Test as crate::Config>::MaxAvatarCidLen> =
+            cid.try_into().expect("within max avatar len");
         assert_noop!(
-            EterraGamer::set_avatar(RuntimeOrigin::signed(ALICE), cid),
+            EterraGamer::set_avatar(RuntimeOrigin::signed(ALICE), bounded),
             GamerError::<Test>::AvatarCidInvalidAscii
         );
     });
@@ -68,10 +100,14 @@ fn second_set_avatar_charges_fee_and_fails_if_insufficient() {
         let cid2 = b"bafy2".to_vec();
 
         // Give BOB a tiny balance so second change fails
+        let cid1: BoundedVec<u8, <Test as crate::Config>::MaxAvatarCidLen> =
+            cid1.try_into().expect("within max avatar len");
         assert_ok!(EterraGamer::set_avatar(RuntimeOrigin::signed(BOB), cid1));
         // Drain BOB so change fee cannot be paid
         pallet_balances::Pallet::<Test>::make_free_balance_be(&BOB, 0);
 
+        let cid2: BoundedVec<u8, <Test as crate::Config>::MaxAvatarCidLen> =
+            cid2.try_into().expect("within max avatar len");
         assert_noop!(
             EterraGamer::set_avatar(RuntimeOrigin::signed(BOB), cid2),
             GamerError::<Test>::InsufficientBalanceForChange
@@ -89,7 +125,11 @@ fn grant_exp_and_redeem_levels_progresses() {
         let total = l1 + l2 + l3 + 10; // a bit extra
 
         // Only privileged origin can grant
-        assert_ok!(EterraGamer::grant_experience(RuntimeOrigin::root(), ALICE, total));
+        assert_ok!(EterraGamer::grant_experience(
+            RuntimeOrigin::root(),
+            ALICE,
+            total
+        ));
         assert_eq!(Experience::<Test>::get(ALICE), total);
 
         // Redeem

@@ -1,21 +1,21 @@
 use crate::mock::RuntimeEvent;
-use crate::Error;
 use crate::pallet;
 use crate::types::card::Possession as Player;
 use crate::types::game::{GameProperties, GameState}; // Import the GameProperties trait
+use crate::Error;
 use crate::GameStorage;
 use crate::Move;
 use crate::{mock::*, types::card::Card};
 use frame_support::traits::Get;
-use frame_support::{assert_err, assert_noop, assert_ok};
-use pallet_eterra_simple_matchmaker::GameCreator; // bring the trait into scope
-use sp_runtime::DispatchError;
 use frame_support::BoundedVec;
+use frame_support::{assert_err, assert_noop, assert_ok};
 use frame_system::pallet_prelude::BlockNumberFor;
 use frame_system::RawOrigin;
 use log::{Level, Metadata, Record};
+use pallet_eterra_simple_matchmaker::GameCreator; // bring the trait into scope
 use sp_core::H256; // Fix: Import H256
 use sp_runtime::traits::{BlakeTwo256, Hash};
+use sp_runtime::DispatchError;
 use std::sync::Once;
 
 use cards::pallet as card_pallet;
@@ -68,7 +68,7 @@ fn setup_new_game() -> (H256, u64, u64) {
     // Create the game with two players
     assert_ok!(Eterra::create_game(
         frame_system::RawOrigin::Signed(creator).into(),
-        vec![creator, opponent],
+        bounded_players(vec![creator, opponent]),
         pallet::GameMode::PvP,
     ));
     log::debug!(
@@ -103,7 +103,7 @@ fn setup_new_game_with(creator: u64, opponent: u64) -> (H256, u64, u64) {
     // Create the game with two players
     assert_ok!(Eterra::create_game(
         frame_system::RawOrigin::Signed(creator).into(),
-        vec![creator, opponent],
+        bounded_players(vec![creator, opponent]),
         pallet::GameMode::PvP,
     ));
     log::debug!(
@@ -119,11 +119,20 @@ fn setup_new_game_with(creator: u64, opponent: u64) -> (H256, u64, u64) {
 fn ensure_preset_hand(owner: u64) -> Vec<u32> {
     let hand_size = <Test as crate::Config>::HandSize::get() as usize;
     let ids = mint_cards_for(owner, hand_size);
+    let bounded = BoundedVec::try_from(ids.clone()).expect("within hand limit");
     assert_ok!(Eterra::set_preset_hand(
         frame_system::RawOrigin::Signed(owner).into(),
-        ids.clone(),
+        bounded,
     ));
     ids
+}
+
+fn bounded_hand_ids(ids: Vec<u32>) -> BoundedVec<u32, crate::pallet::HandLimit> {
+    BoundedVec::try_from(ids).expect("within hand limit")
+}
+
+fn bounded_players(ids: Vec<u64>) -> BoundedVec<u64, <Test as crate::Config>::NumPlayers> {
+    BoundedVec::try_from(ids).expect("within player bound")
 }
 #[test]
 fn create_game_fails_without_preset_hand_pvp() {
@@ -134,7 +143,7 @@ fn create_game_fails_without_preset_hand_pvp() {
         // Do NOT set preset hands for either player
         let res = Eterra::create_game(
             frame_system::RawOrigin::Signed(creator).into(),
-            vec![creator, opponent],
+            bounded_players(vec![creator, opponent]),
             pallet::GameMode::PvP,
         );
         assert!(
@@ -154,7 +163,7 @@ fn create_game_succeeds_with_preset_hand_pvp() {
         ensure_preset_hand(opponent);
         assert_ok!(Eterra::create_game(
             frame_system::RawOrigin::Signed(creator).into(),
-            vec![creator, opponent],
+            bounded_players(vec![creator, opponent]),
             pallet::GameMode::PvP,
         ));
     });
@@ -167,7 +176,7 @@ fn create_pve_game_fails_without_preset_hand_for_human() {
         // No preset hand for human; AI hand is generated on creation, but human must have preset
         let res = Eterra::create_game(
             RawOrigin::Signed(human).into(),
-            vec![human],
+            bounded_players(vec![human]),
             pallet::GameMode::PvE,
         );
         assert!(
@@ -185,7 +194,7 @@ fn create_pve_game_succeeds_with_preset_hand_for_human() {
         ensure_preset_hand(human);
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(human).into(),
-            vec![human],
+            bounded_players(vec![human]),
             pallet::GameMode::PvE,
         ));
     });
@@ -272,7 +281,7 @@ fn create_game_with_same_players_fails() {
         ensure_preset_hand(player);
         let result = Eterra::create_game(
             frame_system::RawOrigin::Signed(player).into(),
-            vec![player, player],
+            bounded_players(vec![player, player]),
             pallet::GameMode::PvP,
         );
         assert_noop!(result, crate::Error::<Test>::InvalidMove);
@@ -932,7 +941,7 @@ fn create_game_invalid_number_of_players() {
         // 0 players
         let res = Eterra::create_game(
             RawOrigin::Signed(creator).into(),
-            vec![],
+            bounded_players(vec![]),
             pallet::GameMode::PvP,
         );
         assert_noop!(res, crate::Error::<Test>::CreatorMustBeInGame);
@@ -940,23 +949,21 @@ fn create_game_invalid_number_of_players() {
         // 1 player
         let res = Eterra::create_game(
             RawOrigin::Signed(creator).into(),
-            vec![creator],
+            bounded_players(vec![creator]),
             pallet::GameMode::PvP,
         );
         assert_noop!(res, crate::Error::<Test>::InvalidNumberOfPlayers);
 
-        // 3 players
-        let res = Eterra::create_game(
-            RawOrigin::Signed(creator).into(),
-            vec![creator, opponent, third_player],
-            pallet::GameMode::PvP,
-        );
-        assert_noop!(res, crate::Error::<Test>::InvalidNumberOfPlayers);
+        // 3 players: rejected at bounded decoding boundary.
+        let too_many_players = vec![creator, opponent, third_player];
+        let bounded: Result<BoundedVec<u64, <Test as crate::Config>::NumPlayers>, _> =
+            too_many_players.try_into();
+        assert!(bounded.is_err());
 
         // valid 2 players
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(creator).into(),
-            vec![creator, opponent],
+            bounded_players(vec![creator, opponent]),
             pallet::GameMode::PvP
         ));
     });
@@ -1560,7 +1567,8 @@ fn submit_hand_rejects_unowned_card() {
         let mut creator_cards = mint_cards_for(creator, 5);
         let opp_cards = mint_cards_for(opponent, 1);
         creator_cards[0] = opp_cards[0];
-        let res = Eterra::set_preset_hand(RawOrigin::Signed(creator).into(), creator_cards);
+        let bounded = BoundedVec::try_from(creator_cards).expect("within hand limit");
+        let res = Eterra::set_preset_hand(RawOrigin::Signed(creator).into(), bounded);
         assert_noop!(res, crate::Error::<Test>::CardNotOwned);
     });
 }
@@ -1575,14 +1583,14 @@ fn submit_hand_accepts_owned_cards_and_prevents_resubmit() {
         assert_ok!(Eterra::submit_hand(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
-            creator_cards.clone(),
+            bounded_hand_ids(creator_cards.clone()),
         ));
 
         // Submitting again should fail
         let res = Eterra::submit_hand(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
-            creator_cards,
+            bounded_hand_ids(creator_cards),
         );
         assert_noop!(res, crate::Error::<Test>::HandAlreadySubmitted);
     });
@@ -1615,7 +1623,7 @@ fn play_from_hand_marks_used_and_prevents_reuse() {
         assert_ok!(Eterra::submit_hand(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
-            creator_cards,
+            bounded_hand_ids(creator_cards),
         ));
 
         // Make sure it's creator's turn
@@ -1654,7 +1662,7 @@ fn play_from_hand_index_out_of_range_fails() {
         assert_ok!(Eterra::submit_hand(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
-            creator_cards,
+            bounded_hand_ids(creator_cards),
         ));
 
         ensure_my_turn(game_id, creator, opponent);
@@ -1685,7 +1693,7 @@ fn submit_hand_fails_for_unknown_game() {
         let res = Eterra::submit_hand(
             frame_system::RawOrigin::Signed(creator).into(),
             fake_game_id,
-            card_ids,
+            bounded_hand_ids(card_ids),
         );
         assert_noop!(res, crate::Error::<Test>::GameNotFound);
     });
@@ -1700,14 +1708,17 @@ fn submit_hand_wrong_size_rejected() {
 
         let mut too_small = cards.clone();
         too_small.pop();
-        let res = Eterra::set_preset_hand(RawOrigin::Signed(creator).into(), too_small);
+        let bounded_small = BoundedVec::try_from(too_small).expect("within hand limit");
+        let res = Eterra::set_preset_hand(RawOrigin::Signed(creator).into(), bounded_small);
         assert_noop!(res, crate::Error::<Test>::HandSizeInvalid);
 
         let extra = mint_cards_for(creator, 1);
         let mut too_big = cards.clone();
         too_big.extend_from_slice(&extra);
-        let res = Eterra::set_preset_hand(RawOrigin::Signed(creator).into(), too_big);
-        assert_noop!(res, crate::Error::<Test>::HandSizeInvalid);
+        assert!(
+            BoundedVec::<u32, crate::pallet::HandLimit>::try_from(too_big).is_err(),
+            "oversized hand should be rejected by bounded decoding"
+        );
     });
 }
 
@@ -1720,7 +1731,8 @@ fn submit_hand_rejects_duplicates() {
         if cards.len() >= 2 {
             cards[1] = cards[0];
         }
-        let res = Eterra::set_preset_hand(RawOrigin::Signed(creator).into(), cards);
+        let bounded = BoundedVec::try_from(cards).expect("within hand limit");
+        let res = Eterra::set_preset_hand(RawOrigin::Signed(creator).into(), bounded);
         assert_noop!(res, crate::Error::<Test>::DuplicateCardInHand);
     });
 }
@@ -1732,7 +1744,11 @@ fn submit_hand_by_non_player_fails() {
         let (game_id, _creator, _opponent) = setup_new_game();
         let rando = 77u64;
         let ids = mint_cards_for(rando, 5);
-        let res = Eterra::submit_hand(frame_system::RawOrigin::Signed(rando).into(), game_id, ids);
+        let res = Eterra::submit_hand(
+            frame_system::RawOrigin::Signed(rando).into(),
+            game_id,
+            bounded_hand_ids(ids),
+        );
         assert_noop!(res, crate::Error::<Test>::PlayerNotInGame);
     });
 }
@@ -1747,7 +1763,7 @@ fn play_from_hand_not_your_turn_fails() {
         assert_ok!(Eterra::submit_hand(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
-            ids
+            bounded_hand_ids(ids)
         ));
 
         // Ensure it's NOT the creator's turn: if it is, have creator make a normal play to pass turn
@@ -1789,7 +1805,7 @@ fn play_from_hand_cell_occupied_and_bounds_checked() {
         assert_ok!(Eterra::submit_hand(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
-            ids
+            bounded_hand_ids(ids)
         ));
 
         // Ensure creator's turn
@@ -1857,7 +1873,7 @@ fn transfer_after_submit_does_not_block_play() {
         assert_ok!(Eterra::submit_hand(
             frame_system::RawOrigin::Signed(creator).into(),
             game_id,
-            ids.clone()
+            bounded_hand_ids(ids.clone())
         ));
 
         // Transfer the first card to opponent AFTER submission
@@ -1884,8 +1900,8 @@ mod ai_integration_tests {
     use super::ensure_preset_hand;
     use super::*;
     use crate::types::card::Possession as Player;
-    use crate::HandsOfGame;
     use crate::GameStorage;
+    use crate::HandsOfGame;
     use eterra_card_ai_adapter::eterra_adapter as ai;
     use frame_support::assert_ok;
     use frame_system::RawOrigin;
@@ -1907,7 +1923,7 @@ mod ai_integration_tests {
             sp_runtime::traits::BlakeTwo256::hash_of(&(human, ai_account, current_block_number));
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(human).into(),
-            vec![human],
+            bounded_players(vec![human]),
             pallet::GameMode::PvE,
         ));
         (game_id, human, ai_account)
@@ -1935,7 +1951,7 @@ mod ai_integration_tests {
             assert_ok!(Eterra::submit_hand(
                 RawOrigin::Signed(human).into(),
                 game_id,
-                ids.clone()
+                bounded_hand_ids(ids.clone())
             ));
             // Ensure it's the human's turn
             let game = GameStorage::<Test>::get(&game_id).unwrap();
@@ -1972,7 +1988,7 @@ mod ai_integration_tests {
             assert_ok!(Eterra::submit_hand(
                 RawOrigin::Signed(human).into(),
                 game_id,
-                ids.clone()
+                bounded_hand_ids(ids.clone())
             ));
             // Ensure both hands exist
             let game = GameStorage::<Test>::get(&game_id).unwrap();
@@ -2085,7 +2101,7 @@ fn multiple_pve_games_have_independent_ai_state() {
             sp_runtime::traits::BlakeTwo256::hash_of(&(human1, ai_account, current_block_a));
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(human1).into(),
-            vec![human1],
+            bounded_players(vec![human1]),
             pallet::GameMode::PvE,
         ));
 
@@ -2095,7 +2111,7 @@ fn multiple_pve_games_have_independent_ai_state() {
             sp_runtime::traits::BlakeTwo256::hash_of(&(human2, ai_account, current_block_b));
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(human2).into(),
-            vec![human2],
+            bounded_players(vec![human2]),
             pallet::GameMode::PvE,
         ));
 
@@ -2121,12 +2137,12 @@ fn multiple_pve_games_have_independent_ai_state() {
         assert_ok!(Eterra::submit_hand(
             RawOrigin::Signed(human1).into(),
             game_id_a,
-            ids1
+            bounded_hand_ids(ids1)
         ));
         assert_ok!(Eterra::submit_hand(
             RawOrigin::Signed(human2).into(),
             game_id_b,
-            ids2
+            bounded_hand_ids(ids2)
         ));
 
         // --- Human1 plays one move in Game A ---
@@ -2199,14 +2215,14 @@ fn creator_cannot_start_second_pvp_game_while_active() {
         // First PvP game should succeed.
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(creator).into(),
-            vec![creator, opponent_a],
+            bounded_players(vec![creator, opponent_a]),
             pallet::GameMode::PvP,
         ));
 
         // Attempt to start a second PvP game while the first is still active must fail.
         let res = Eterra::create_game(
             RawOrigin::Signed(creator).into(),
-            vec![creator, opponent_b],
+            bounded_players(vec![creator, opponent_b]),
             pallet::GameMode::PvP,
         );
         assert_noop!(res, crate::Error::<Test>::PlayerAlreadyInGame);
@@ -2214,7 +2230,7 @@ fn creator_cannot_start_second_pvp_game_while_active() {
         // Sanity: the opponent who isn't in any game can still start a game with someone else.
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(opponent_b).into(),
-            vec![opponent_b, 4u64],
+            bounded_players(vec![opponent_b, 4u64]),
             pallet::GameMode::PvP,
         ));
     });
@@ -2229,14 +2245,14 @@ fn creator_cannot_start_second_pve_game_while_active() {
         // First PvE game should succeed. (Players vec must include the human/creator.)
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(human).into(),
-            vec![human],
+            bounded_players(vec![human]),
             pallet::GameMode::PvE,
         ));
 
         // Attempt to start a second PvE game for the same human while the first is active must fail.
         let res = Eterra::create_game(
             RawOrigin::Signed(human).into(),
-            vec![human],
+            bounded_players(vec![human]),
             pallet::GameMode::PvE,
         );
         assert_noop!(res, crate::Error::<Test>::PlayerAlreadyInGame);
@@ -2246,7 +2262,7 @@ fn creator_cannot_start_second_pve_game_while_active() {
         ensure_preset_hand(other_human);
         assert_ok!(Eterra::create_game(
             RawOrigin::Signed(other_human).into(),
-            vec![other_human],
+            bounded_players(vec![other_human]),
             pallet::GameMode::PvE,
         ));
     });
@@ -2265,8 +2281,7 @@ fn create_from_matchmaking_creates_game_and_emits_event() {
         set_dummy_hand::<Test>(&b);
 
         // Call through the matchmaker trait (this is what the matchmaker pallet uses).
-        <P as GameCreator<Acc>>::create_from_matchmaking(&a, &b)
-            .expect("should create a game");
+        <P as GameCreator<Acc>>::create_from_matchmaking(&a, &b).expect("should create a game");
 
         // Read the active game id from storage (trait now returns ())
         let game_id_a =

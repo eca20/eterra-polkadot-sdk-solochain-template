@@ -27,22 +27,18 @@ use sp_std::prelude::*;
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
-    use frame_support::{
-        pallet_prelude::*,
-        traits::BuildGenesisConfig,
-        BoundedBTreeSet, BoundedVec,
-    };
-    use frame_support::traits::StorageVersion;
-    use frame_system::pallet_prelude::*;
     use crate::weights::WeightInfo;
+    use frame_support::traits::StorageVersion;
+    use frame_support::{
+        pallet_prelude::*, traits::BuildGenesisConfig, BoundedBTreeSet, BoundedVec,
+    };
+    use frame_system::pallet_prelude::*;
 
     pub type MediaId = u64;
     pub type MediaCollectionId = u32;
 
     /// High-level class/channel of the media, for policy & filtering.
-    #[derive(
-        Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen,
-    )]
+    #[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     pub enum MediaClass {
         CoreAsset,
         Cosmetic,
@@ -55,9 +51,7 @@ pub mod pallet {
     }
 
     /// How this media is expected to be delivered to clients.
-    #[derive(
-        Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen,
-    )]
+    #[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
     pub enum Delivery {
         /// Shipped with the game client; URI is mostly an identifier.
         ClientBundled,
@@ -69,7 +63,17 @@ pub mod pallet {
 
     /// Roles within a media collection; roughly analogous to pallet-nfts collection roles.
     #[derive(
-        Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen, Ord, PartialOrd,
+        Encode,
+        Decode,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        RuntimeDebug,
+        TypeInfo,
+        MaxEncodedLen,
+        Ord,
+        PartialOrd,
     )]
     pub enum CollectionRole {
         Admin,
@@ -137,14 +141,10 @@ pub mod pallet {
     }
 
     // Convenient aliases
-    type BoundedStrUri<T> =
-        BoundedVec<u8, <T as Config>::MaxUriLen>;
-    type BoundedStrContentType<T> =
-        BoundedVec<u8, <T as Config>::MaxContentTypeLen>;
-    type BoundedStrName<T> =
-        BoundedVec<u8, <T as Config>::MaxNameLen>;
-    type BoundedStrDescription<T> =
-        BoundedVec<u8, <T as Config>::MaxDescriptionLen>;
+    type BoundedStrUri<T> = BoundedVec<u8, <T as Config>::MaxUriLen>;
+    type BoundedStrContentType<T> = BoundedVec<u8, <T as Config>::MaxContentTypeLen>;
+    type BoundedStrName<T> = BoundedVec<u8, <T as Config>::MaxNameLen>;
+    type BoundedStrDescription<T> = BoundedVec<u8, <T as Config>::MaxDescriptionLen>;
 
     #[pallet::storage]
     #[pallet::getter(fn next_media_id)]
@@ -161,31 +161,25 @@ pub mod pallet {
         _,
         Blake2_128Concat,
         MediaCollectionId,
-        CollectionInfo<
-            T::AccountId,
-            BoundedStrName<T>,
-        >,
+        CollectionInfo<T::AccountId, BoundedStrName<T>>,
         OptionQuery,
     >;
 
     /// Optional mapping from collection to full description.
     #[pallet::storage]
     #[pallet::getter(fn collection_description)]
-    pub type CollectionDescriptions<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        MediaCollectionId,
-        BoundedStrDescription<T>,
-        OptionQuery,
-    >;
+    pub type CollectionDescriptions<T: Config> =
+        StorageMap<_, Blake2_128Concat, MediaCollectionId, BoundedStrDescription<T>, OptionQuery>;
 
     /// Collection roles per account.
     #[pallet::storage]
     #[pallet::getter(fn collection_roles)]
     pub type CollectionRoles<T: Config> = StorageDoubleMap<
         _,
-        Blake2_128Concat, MediaCollectionId,
-        Blake2_128Concat, T::AccountId,
+        Blake2_128Concat,
+        MediaCollectionId,
+        Blake2_128Concat,
+        T::AccountId,
         BoundedBTreeSet<CollectionRole, T::MaxRolesPerAccount>,
         ValueQuery,
     >;
@@ -197,24 +191,15 @@ pub mod pallet {
         _,
         Blake2_128Concat,
         MediaId,
-        MediaMetadata<
-            BoundedStrUri<T>,
-            BoundedStrContentType<T>,
-            T::AccountId,
-        >,
+        MediaMetadata<BoundedStrUri<T>, BoundedStrContentType<T>, T::AccountId>,
         OptionQuery,
     >;
 
     /// Owner shortcut (redundant but handy).
     #[pallet::storage]
     #[pallet::getter(fn media_owner)]
-    pub type MediaOwner<T: Config> = StorageMap<
-        _,
-        Blake2_128Concat,
-        MediaId,
-        T::AccountId,
-        OptionQuery,
-    >;
+    pub type MediaOwner<T: Config> =
+        StorageMap<_, Blake2_128Concat, MediaId, T::AccountId, OptionQuery>;
 
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -356,29 +341,22 @@ pub mod pallet {
         #[pallet::weight(T::WeightInfo::create_collection())]
         pub fn create_collection(
             origin: OriginFor<T>,
-            name: Vec<u8>,
-            description: Vec<u8>,
+            name: BoundedStrName<T>,
+            description: BoundedStrDescription<T>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
-
-            let bounded_name: BoundedStrName<T> = name
-                .try_into()
-                .map_err(|_| Error::<T>::NameTooLong)?;
-            let bounded_desc: BoundedStrDescription<T> = description
-                .try_into()
-                .map_err(|_| Error::<T>::DescriptionTooLong)?;
 
             let id = NextCollectionId::<T>::get();
             NextCollectionId::<T>::put(id.checked_add(1).expect("overflow in collection id"));
 
             let info = CollectionInfo {
                 owner: who.clone(),
-                name: bounded_name,
+                name,
                 frozen: false,
             };
 
             Collections::<T>::insert(id, info);
-            CollectionDescriptions::<T>::insert(id, bounded_desc.clone());
+            CollectionDescriptions::<T>::insert(id, description.clone());
 
             // By default caller is Admin + Uploader.
             let mut roles = BoundedBTreeSet::new();
@@ -386,7 +364,10 @@ pub mod pallet {
             let _ = roles.try_insert(CollectionRole::Uploader);
             CollectionRoles::<T>::insert(id, &who, roles);
 
-            Self::deposit_event(Event::CollectionCreated { collection_id: id, owner: who });
+            Self::deposit_event(Event::CollectionCreated {
+                collection_id: id,
+                owner: who,
+            });
             Ok(())
         }
 
@@ -434,20 +415,20 @@ pub mod pallet {
         pub fn register_media(
             origin: OriginFor<T>,
             maybe_collection_id: Option<MediaCollectionId>,
-            uri: Vec<u8>,
-            content_type: Vec<u8>,
+            uri: BoundedStrUri<T>,
+            content_type: BoundedStrContentType<T>,
             class: MediaClass,
             delivery: Delivery,
             size_bytes: Option<u64>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
-            let collection_id = maybe_collection_id
-                .unwrap_or_else(|| T::DefaultCollectionId::get());
+            let collection_id =
+                maybe_collection_id.unwrap_or_else(|| T::DefaultCollectionId::get());
 
             // Ensure collection exists.
-            let collection_info = Collections::<T>::get(collection_id)
-                .ok_or(Error::<T>::UnknownCollection)?;
+            let collection_info =
+                Collections::<T>::get(collection_id).ok_or(Error::<T>::UnknownCollection)?;
 
             ensure!(!collection_info.frozen, Error::<T>::CollectionFrozen);
 
@@ -458,21 +439,14 @@ pub mod pallet {
 
             ensure!(is_owner || can_upload, Error::<T>::NoPermission);
 
-            let bounded_uri: BoundedStrUri<T> = uri
-                .try_into()
-                .map_err(|_| Error::<T>::UriTooLong)?;
-            let bounded_ct: BoundedStrContentType<T> = content_type
-                .try_into()
-                .map_err(|_| Error::<T>::ContentTypeTooLong)?;
-
             let media_id = NextMediaId::<T>::get();
             NextMediaId::<T>::put(media_id.checked_add(1).expect("overflow in media id"));
 
             let metadata = MediaMetadata {
                 collection_id,
                 owner: who.clone(),
-                uri: bounded_uri,
-                content_type: bounded_ct,
+                uri,
+                content_type,
                 class,
                 delivery,
                 size_bytes,
@@ -520,10 +494,7 @@ pub mod pallet {
         /// Only collection Admin or media owner may do this.
         #[pallet::call_index(4)]
         #[pallet::weight(T::WeightInfo::deprecate_media())]
-        pub fn deprecate_media(
-            origin: OriginFor<T>,
-            media_id: MediaId,
-        ) -> DispatchResult {
+        pub fn deprecate_media(origin: OriginFor<T>, media_id: MediaId) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
             Media::<T>::try_mutate(media_id, |maybe_meta| -> DispatchResult {

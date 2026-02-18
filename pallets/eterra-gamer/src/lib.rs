@@ -12,7 +12,6 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
-
 use frame_support::{
     pallet_prelude::*,
     traits::{Currency, ExistenceRequirement},
@@ -69,13 +68,19 @@ pub mod pallet {
     #[pallet::storage]
     #[pallet::getter(fn avatar_cid)]
     /// Stored as **ASCII** bytes representing a CID (IPFS / multibase). First set free; changes cost a fee.
-    pub type AvatarCid<T: Config> =
-        StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<u8, T::MaxAvatarCidLen>, OptionQuery>;
+    pub type AvatarCid<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedVec<u8, T::MaxAvatarCidLen>,
+        OptionQuery,
+    >;
 
     /// Unredeemed experience points available to redeem.
     #[pallet::storage]
     #[pallet::getter(fn exp)]
-    pub type Experience<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, u128, ValueQuery>;
+    pub type Experience<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, u128, ValueQuery>;
 
     /// Current level (0..=99).
     #[pallet::storage]
@@ -85,10 +90,24 @@ pub mod pallet {
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        TagSet { who: T::AccountId, tag: Vec<u8>, charged: bool },
-        AvatarSet { who: T::AccountId, cid: Vec<u8>, charged: bool },
-        ExperienceGranted { to: T::AccountId, amount: u128 },
-        LevelUp { who: T::AccountId, new_level: u8 },
+        TagSet {
+            who: T::AccountId,
+            tag: Vec<u8>,
+            charged: bool,
+        },
+        AvatarSet {
+            who: T::AccountId,
+            cid: Vec<u8>,
+            charged: bool,
+        },
+        ExperienceGranted {
+            to: T::AccountId,
+            amount: u128,
+        },
+        LevelUp {
+            who: T::AccountId,
+            new_level: u8,
+        },
     }
 
     #[pallet::error]
@@ -125,7 +144,9 @@ pub mod pallet {
         /// Small ASCII validation for CIDs: non-empty, only visible ASCII (33..=126).
         #[inline]
         fn validate_ascii_cid(cid: &[u8]) -> bool {
-            if cid.is_empty() { return false; }
+            if cid.is_empty() {
+                return false;
+            }
             // Avoid spaces/control characters; multibase CIDs are visible ASCII.
             cid.iter().all(|b| (33..=126).contains(b))
         }
@@ -146,10 +167,7 @@ pub mod pallet {
             const K_DEN: u128 = 1_000_000;
 
             let term = l * l - 1; // (L^2 - 1)
-            let k_term = (K_NUM
-                .saturating_mul(term)
-                .saturating_add(K_DEN / 2))
-                / K_DEN;
+            let k_term = (K_NUM.saturating_mul(term).saturating_add(K_DEN / 2)) / K_DEN;
             250u128 + k_term
         }
 
@@ -158,7 +176,9 @@ pub mod pallet {
             let mut gained = 0u8;
             while lvl < 99 {
                 let need = Self::exp_required_for_level((lvl + 1) as u8);
-                if xp < need { break; }
+                if xp < need {
+                    break;
+                }
                 xp -= need;
                 lvl = lvl.saturating_add(1);
                 gained = gained.saturating_add(1);
@@ -166,7 +186,10 @@ pub mod pallet {
             (lvl, xp, gained)
         }
 
-        fn charge_change_fee_if_needed(who: &T::AccountId, already_set: bool) -> Result<bool, Error<T>> {
+        fn charge_change_fee_if_needed(
+            who: &T::AccountId,
+            already_set: bool,
+        ) -> Result<bool, Error<T>> {
             if !already_set {
                 return Ok(false);
             }
@@ -176,7 +199,8 @@ pub mod pallet {
                 &T::FaucetAccount::get(),
                 fee,
                 ExistenceRequirement::KeepAlive,
-            ).map_err(|_| Error::<T>::InsufficientBalanceForChange)?;
+            )
+            .map_err(|_| Error::<T>::InsufficientBalanceForChange)?;
             Ok(true)
         }
     }
@@ -186,17 +210,23 @@ pub mod pallet {
         /// Set (or change) gamer tag. First set is free; changes cost 100 tokens (configurable).
         #[pallet::call_index(0)]
         #[pallet::weight(T::WeightInfo::set_gamer_tag())]
-        pub fn set_gamer_tag(origin: OriginFor<T>, tag: Vec<u8>) -> DispatchResult {
+        pub fn set_gamer_tag(
+            origin: OriginFor<T>,
+            tag: BoundedVec<u8, T::MaxTagLen>,
+        ) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            let bounded: BoundedVec<_, T::MaxTagLen> =
-                tag.clone().try_into().map_err(|_| Error::<T>::TagTooLong)?;
-            ensure!(bounded.len() >= 1, Error::<T>::TagTooShort);
+            ensure!(tag.len() >= 1, Error::<T>::TagTooShort);
+            let tag_raw = tag.to_vec();
 
             let already = <GamerTag<T>>::contains_key(&who);
             let charged = Self::charge_change_fee_if_needed(&who, already)?;
 
-            <GamerTag<T>>::insert(&who, bounded);
-            Self::deposit_event(Event::TagSet { who, tag, charged });
+            <GamerTag<T>>::insert(&who, tag);
+            Self::deposit_event(Event::TagSet {
+                who,
+                tag: tag_raw,
+                charged,
+            });
             Ok(())
         }
 
@@ -204,24 +234,37 @@ pub mod pallet {
         /// The value must be printable ASCII (no spaces/control chars) and within MaxAvatarCidLen.
         #[pallet::call_index(1)]
         #[pallet::weight(T::WeightInfo::set_avatar())]
-        pub fn set_avatar(origin: OriginFor<T>, cid: Vec<u8>) -> DispatchResult {
+        pub fn set_avatar(
+            origin: OriginFor<T>,
+            cid: BoundedVec<u8, T::MaxAvatarCidLen>,
+        ) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            ensure!(Self::validate_ascii_cid(&cid), Error::<T>::AvatarCidInvalidAscii);
-            let bounded: BoundedVec<_, T::MaxAvatarCidLen> =
-                cid.clone().try_into().map_err(|_| Error::<T>::AvatarCidTooLong)?;
+            ensure!(
+                Self::validate_ascii_cid(&cid),
+                Error::<T>::AvatarCidInvalidAscii
+            );
+            let cid_raw = cid.to_vec();
 
             let already = <AvatarCid<T>>::contains_key(&who);
             let charged = Self::charge_change_fee_if_needed(&who, already)?;
 
-            <AvatarCid<T>>::insert(&who, bounded);
-            Self::deposit_event(Event::AvatarSet { who, cid, charged });
+            <AvatarCid<T>>::insert(&who, cid);
+            Self::deposit_event(Event::AvatarSet {
+                who,
+                cid: cid_raw,
+                charged,
+            });
             Ok(())
         }
 
         /// (Privileged) Grant experience to a player (minting XP).
         #[pallet::call_index(2)]
         #[pallet::weight(T::WeightInfo::grant_experience())]
-        pub fn grant_experience(origin: OriginFor<T>, to: T::AccountId, amount: u128) -> DispatchResult {
+        pub fn grant_experience(
+            origin: OriginFor<T>,
+            to: T::AccountId,
+            amount: u128,
+        ) -> DispatchResult {
             T::ExpIssuerOrigin::ensure_origin(origin)?;
             Experience::<T>::mutate(&to, |xp| *xp = xp.saturating_add(amount));
             Self::deposit_event(Event::ExperienceGranted { to, amount });

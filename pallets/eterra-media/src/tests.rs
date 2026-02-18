@@ -1,9 +1,28 @@
+use crate::pallet::{CollectionRole, Delivery, Error, MediaClass};
 use crate::*;
-use crate::pallet::{MediaClass, Delivery, CollectionRole, Error};
 
-use frame_support::{assert_ok, assert_noop};
-use crate::mock::{new_test_ext, new_test_ext_with_default_collection, Test, EterraMedia};
 use crate::mock::RuntimeOrigin;
+use crate::mock::{new_test_ext, new_test_ext_with_default_collection, EterraMedia, Test};
+use frame_support::BoundedVec;
+use frame_support::{assert_noop, assert_ok};
+
+fn bounded_name(bytes: &[u8]) -> BoundedVec<u8, <Test as crate::pallet::Config>::MaxNameLen> {
+    BoundedVec::try_from(bytes.to_vec()).expect("within name limit")
+}
+
+fn bounded_desc(
+    bytes: &[u8],
+) -> BoundedVec<u8, <Test as crate::pallet::Config>::MaxDescriptionLen> {
+    BoundedVec::try_from(bytes.to_vec()).expect("within description limit")
+}
+
+fn bounded_uri(bytes: &[u8]) -> BoundedVec<u8, <Test as crate::pallet::Config>::MaxUriLen> {
+    BoundedVec::try_from(bytes.to_vec()).expect("within uri limit")
+}
+
+fn bounded_ct(bytes: &[u8]) -> BoundedVec<u8, <Test as crate::pallet::Config>::MaxContentTypeLen> {
+    BoundedVec::try_from(bytes.to_vec()).expect("within content-type limit")
+}
 
 #[test]
 fn create_collection_and_register_media_works() {
@@ -12,8 +31,8 @@ fn create_collection_and_register_media_works() {
         // new collection explicitly to test the extrinsic.
         assert_ok!(EterraMedia::create_collection(
             RuntimeOrigin::signed(1),
-            b"My Collection".to_vec(),
-            b"My collection description".to_vec(),
+            bounded_name(b"My Collection"),
+            bounded_desc(b"My collection description"),
         ));
 
         // This should be collection ID 0 or 1 depending on how many we create.
@@ -22,8 +41,8 @@ fn create_collection_and_register_media_works() {
         assert_ok!(EterraMedia::register_media(
             RuntimeOrigin::signed(1),
             Some(0), // explicit collection
-            b"ipfs://example_cid".to_vec(),
-            b"image/png".to_vec(),
+            bounded_uri(b"ipfs://example_cid"),
+            bounded_ct(b"image/png"),
             MediaClass::CoreAsset,
             Delivery::RemoteIpfs,
             Some(123),
@@ -43,8 +62,8 @@ fn non_admin_cannot_set_collection_role() {
         // Create collection owned by account 1.
         assert_ok!(EterraMedia::create_collection(
             RuntimeOrigin::signed(1),
-            b"Coll".to_vec(),
-            b"Desc".to_vec(),
+            bounded_name(b"Coll"),
+            bounded_desc(b"Desc"),
         ));
 
         // Account 2 is not an admin, so this should fail.
@@ -67,8 +86,8 @@ fn uploader_can_register_media_but_unauthorized_cannot() {
         // Create collection owned by account 1 (id 0).
         assert_ok!(EterraMedia::create_collection(
             RuntimeOrigin::signed(1),
-            b"Coll".to_vec(),
-            b"Desc".to_vec(),
+            bounded_name(b"Coll"),
+            bounded_desc(b"Desc"),
         ));
 
         // Grant Uploader role to account 2.
@@ -84,8 +103,8 @@ fn uploader_can_register_media_but_unauthorized_cannot() {
         assert_ok!(EterraMedia::register_media(
             RuntimeOrigin::signed(2),
             Some(0),
-            b"ipfs://cid_uploader".to_vec(),
-            b"image/png".to_vec(),
+            bounded_uri(b"ipfs://cid_uploader"),
+            bounded_ct(b"image/png"),
             MediaClass::Cosmetic,
             Delivery::RemoteIpfs,
             None,
@@ -96,8 +115,8 @@ fn uploader_can_register_media_but_unauthorized_cannot() {
             EterraMedia::register_media(
                 RuntimeOrigin::signed(3),
                 Some(0),
-                b"ipfs://cid_unauth".to_vec(),
-                b"image/png".to_vec(),
+                bounded_uri(b"ipfs://cid_unauth"),
+                bounded_ct(b"image/png"),
                 MediaClass::Cosmetic,
                 Delivery::RemoteIpfs,
                 None,
@@ -113,16 +132,16 @@ fn register_media_uses_default_collection_when_none() {
         // Create collection 0.
         assert_ok!(EterraMedia::create_collection(
             RuntimeOrigin::signed(1),
-            b"DefaultColl".to_vec(),
-            b"Default desc".to_vec(),
+            bounded_name(b"DefaultColl"),
+            bounded_desc(b"Default desc"),
         ));
 
         // Register media without specifying collection -> should use DefaultCollectionId (0).
         assert_ok!(EterraMedia::register_media(
             RuntimeOrigin::signed(1),
             None,
-            b"ipfs://cid_default".to_vec(),
-            b"image/png".to_vec(),
+            bounded_uri(b"ipfs://cid_default"),
+            bounded_ct(b"image/png"),
             MediaClass::CoreAsset,
             Delivery::RemoteIpfs,
             None,
@@ -139,14 +158,14 @@ fn deprecate_media_permissions_and_double_deprecate() {
         // Create collection and media owned by account 1.
         assert_ok!(EterraMedia::create_collection(
             RuntimeOrigin::signed(1),
-            b"Coll".to_vec(),
-            b"Desc".to_vec(),
+            bounded_name(b"Coll"),
+            bounded_desc(b"Desc"),
         ));
         assert_ok!(EterraMedia::register_media(
             RuntimeOrigin::signed(1),
             Some(0),
-            b"ipfs://cid".to_vec(),
-            b"image/png".to_vec(),
+            bounded_uri(b"ipfs://cid"),
+            bounded_ct(b"image/png"),
             MediaClass::CoreAsset,
             Delivery::RemoteIpfs,
             None,
@@ -178,50 +197,33 @@ fn create_collection_and_register_media_respect_length_limits() {
     new_test_ext().execute_with(|| {
         // Name too long (MaxNameLen = 64 in mock).
         let long_name = vec![b'a'; 65];
-        assert_noop!(
-            EterraMedia::create_collection(
-                RuntimeOrigin::signed(1),
-                long_name,
-                b"Valid description".to_vec(),
-            ),
-            Error::<Test>::NameTooLong
+        assert!(
+            BoundedVec::<u8, <Test as crate::pallet::Config>::MaxNameLen>::try_from(long_name)
+                .is_err(),
+            "name input should be bounded before dispatch"
         );
 
         // Create a valid collection to test URI / content-type limits.
         assert_ok!(EterraMedia::create_collection(
             RuntimeOrigin::signed(1),
-            b"Coll".to_vec(),
-            b"Desc".to_vec(),
+            bounded_name(b"Coll"),
+            bounded_desc(b"Desc"),
         ));
 
         // URI too long (MaxUriLen = 256 in mock).
         let long_uri = vec![b'u'; 257];
-        assert_noop!(
-            EterraMedia::register_media(
-                RuntimeOrigin::signed(1),
-                Some(0),
-                long_uri,
-                b"image/png".to_vec(),
-                MediaClass::CoreAsset,
-                Delivery::RemoteIpfs,
-                None,
-            ),
-            Error::<Test>::UriTooLong
+        assert!(
+            BoundedVec::<u8, <Test as crate::pallet::Config>::MaxUriLen>::try_from(long_uri)
+                .is_err(),
+            "uri input should be bounded before dispatch"
         );
 
         // Content-type too long (MaxContentTypeLen = 64 in mock).
         let long_ct = vec![b't'; 65];
-        assert_noop!(
-            EterraMedia::register_media(
-                RuntimeOrigin::signed(1),
-                Some(0),
-                b"ipfs://cid".to_vec(),
-                long_ct,
-                MediaClass::CoreAsset,
-                Delivery::RemoteIpfs,
-                None,
-            ),
-            Error::<Test>::ContentTypeTooLong
+        assert!(
+            BoundedVec::<u8, <Test as crate::pallet::Config>::MaxContentTypeLen>::try_from(long_ct)
+                .is_err(),
+            "content-type input should be bounded before dispatch"
         );
     });
 }
@@ -234,8 +236,8 @@ fn register_media_fails_for_unknown_collection() {
             EterraMedia::register_media(
                 RuntimeOrigin::signed(1),
                 Some(42),
-                b"ipfs://cid_unknown".to_vec(),
-                b"image/png".to_vec(),
+                bounded_uri(b"ipfs://cid_unknown"),
+                bounded_ct(b"image/png"),
                 MediaClass::CoreAsset,
                 Delivery::RemoteIpfs,
                 None,
@@ -251,16 +253,16 @@ fn freeze_collection_prevents_new_uploads() {
         // Create collection 0 owned by account 1.
         assert_ok!(EterraMedia::create_collection(
             RuntimeOrigin::signed(1),
-            b"Coll".to_vec(),
-            b"Desc".to_vec(),
+            bounded_name(b"Coll"),
+            bounded_desc(b"Desc"),
         ));
 
         // First upload succeeds.
         assert_ok!(EterraMedia::register_media(
             RuntimeOrigin::signed(1),
             Some(0),
-            b"ipfs://cid_before_freeze".to_vec(),
-            b"image/png".to_vec(),
+            bounded_uri(b"ipfs://cid_before_freeze"),
+            bounded_ct(b"image/png"),
             MediaClass::CoreAsset,
             Delivery::RemoteIpfs,
             None,
@@ -274,8 +276,8 @@ fn freeze_collection_prevents_new_uploads() {
             EterraMedia::register_media(
                 RuntimeOrigin::signed(1),
                 Some(0),
-                b"ipfs://cid_after_freeze".to_vec(),
-                b"image/png".to_vec(),
+                bounded_uri(b"ipfs://cid_after_freeze"),
+                bounded_ct(b"image/png"),
                 MediaClass::CoreAsset,
                 Delivery::RemoteIpfs,
                 None,

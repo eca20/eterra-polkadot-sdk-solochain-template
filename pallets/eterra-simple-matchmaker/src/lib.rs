@@ -14,10 +14,10 @@ const _BOARD_SIZE: usize = _GRID_DIM * _GRID_DIM; // 16
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
+    use crate::weights::WeightInfo;
     use frame_support::pallet_prelude::*;
     use frame_support::traits::StorageVersion;
     use frame_system::pallet_prelude::*;
-    use crate::weights::WeightInfo;
 
     #[pallet::config]
     pub trait Config: frame_system::Config {
@@ -81,21 +81,45 @@ pub mod pallet {
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        Joined { who: T::AccountId },
-        Left { who: T::AccountId },
-        Matched { players: [T::AccountId; 2] },
+        Joined {
+            who: T::AccountId,
+        },
+        Left {
+            who: T::AccountId,
+        },
+        Matched {
+            players: [T::AccountId; 2],
+        },
         /// Emitted right after a join increases live size to at least the players-per-match threshold.
-        TwoReadyToMatch { live_size: u32 },
+        TwoReadyToMatch {
+            live_size: u32,
+        },
         /// Emitted when `process_queue`/`join_queue` kicks off processing.
-        ProcessingStarted { live_size: u32, head: QIndex, tail: QIndex },
+        ProcessingStarted {
+            live_size: u32,
+            head: QIndex,
+            tail: QIndex,
+        },
         /// Emitted when we have popped two candidates to pair.
-        PairFound { a: T::AccountId, b: T::AccountId },
+        PairFound {
+            a: T::AccountId,
+            b: T::AccountId,
+        },
         /// Emitted immediately before calling into the game pallet to create a game.
-        GameCreateAttempt { a: T::AccountId, b: T::AccountId },
+        GameCreateAttempt {
+            a: T::AccountId,
+            b: T::AccountId,
+        },
         /// Emitted when the second pop was unavailable and the first player was requeued.
-        Requeued { who: T::AccountId },
+        Requeued {
+            who: T::AccountId,
+        },
         /// Emitted after processing finishes for this call.
-        ProcessingCompleted { remaining_live: u32, head: QIndex, tail: QIndex },
+        ProcessingCompleted {
+            remaining_live: u32,
+            head: QIndex,
+            tail: QIndex,
+        },
     }
 
     #[pallet::error]
@@ -169,7 +193,7 @@ pub mod pallet {
         #[pallet::call_index(2)]
         #[pallet::weight(T::WeightInfo::process_queue())]
         pub fn process_queue(origin: OriginFor<T>) -> DispatchResult {
-            let _ = ensure_signed(origin).ok();
+            let _ = ensure_signed(origin)?;
             let cap = T::QueueCapacity::get();
             ensure!(cap > 1, Error::<T>::BadCapacity);
             Self::deposit_event(Event::ProcessingStarted {
@@ -220,7 +244,13 @@ pub mod pallet {
                 head: Head::<T>::get(),
                 tail: Tail::<T>::get(),
             });
+            // Bound work per call so weight stays predictable and block execution cannot
+            // be dominated by large queue drains in a single extrinsic.
+            let mut pairs_processed: u32 = 0;
             loop {
+                if pairs_processed >= 1 {
+                    break;
+                }
                 if LiveSize::<T>::get() < 2 {
                     break;
                 }
@@ -242,7 +272,10 @@ pub mod pallet {
                         break;
                     }
                 };
-                Self::deposit_event(Event::PairFound { a: a.clone(), b: b.clone() });
+                Self::deposit_event(Event::PairFound {
+                    a: a.clone(),
+                    b: b.clone(),
+                });
 
                 if a == b {
                     // Extremely defensive: never match the same account with itself.
@@ -258,12 +291,16 @@ pub mod pallet {
                     break;
                 }
 
-                Self::deposit_event(Event::GameCreateAttempt { a: a.clone(), b: b.clone() });
+                Self::deposit_event(Event::GameCreateAttempt {
+                    a: a.clone(),
+                    b: b.clone(),
+                });
                 // Ask the game pallet to create a game for this pair. If it fails we still emit Matched.
                 let _ = T::GameCreator::create_from_matchmaking(&a, &b);
                 Self::deposit_event(Event::Matched {
                     players: [a.clone(), b.clone()],
                 });
+                pairs_processed = pairs_processed.saturating_add(1);
             }
             Self::deposit_event(Event::ProcessingCompleted {
                 remaining_live: LiveSize::<T>::get(),
@@ -274,7 +311,6 @@ pub mod pallet {
         }
     }
 }
-
 
 /// Abstraction over a game/cards pallet that can tell us whether a player
 /// has configured a current/preset hand suitable for matchmaking.

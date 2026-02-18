@@ -13,8 +13,8 @@ A minimal Substrate pallet that handles:
 - `Level: map AccountId -> u8`
 
 ## Calls
-- `set_gamer_tag(Vec<u8>)` — first set free; later changes transfer `ChangeFee` to `FeePalletId` account.
-- `set_avatar(Vec<u8>)` — CID must be printable ASCII; first set free; later changes transfer `ChangeFee`.
+- `set_gamer_tag(BoundedVec<u8, MaxTagLen>)` — first set free; later changes transfer `ChangeFee` to `FeePalletId` account.
+- `set_avatar(BoundedVec<u8, MaxAvatarCidLen>)` — CID must be printable ASCII; first set free; later changes transfer `ChangeFee`.
 - `grant_experience(AccountId, u128)` — privileged; mints EXP to `Experience`.
 - `redeem_levels()` — converts available EXP to level(s) until 99 or XP exhausted.
 

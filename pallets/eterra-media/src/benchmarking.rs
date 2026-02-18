@@ -1,8 +1,9 @@
 #![cfg(feature = "runtime-benchmarks")]
 
 use super::*;
-use frame_benchmarking::{benchmarks, whitelisted_caller, account};
+use frame_benchmarking::{account, benchmarks, whitelisted_caller};
 use frame_support::traits::Get;
+use frame_support::BoundedVec;
 use frame_system::RawOrigin;
 
 fn short_bytes(max: u32, fill: u8) -> Vec<u8> {
@@ -12,21 +13,26 @@ fn short_bytes(max: u32, fill: u8) -> Vec<u8> {
 
 fn create_collection_for_bench<T: Config>(owner: &T::AccountId) -> MediaCollectionId {
     let collection_id = NextCollectionId::<T>::get();
-    let name = short_bytes(T::MaxNameLen::get(), b'n');
-    let desc = short_bytes(T::MaxDescriptionLen::get(), b'd');
-    let _ = Pallet::<T>::create_collection(
-        RawOrigin::Signed(owner.clone()).into(),
-        name,
-        desc,
-    );
+    let name: BoundedVec<u8, <T as Config>::MaxNameLen> = short_bytes(T::MaxNameLen::get(), b'n')
+        .try_into()
+        .expect("within max len");
+    let desc: BoundedVec<u8, <T as Config>::MaxDescriptionLen> =
+        short_bytes(T::MaxDescriptionLen::get(), b'd')
+            .try_into()
+            .expect("within max len");
+    let _ = Pallet::<T>::create_collection(RawOrigin::Signed(owner.clone()).into(), name, desc);
     collection_id
 }
 
 benchmarks! {
     create_collection {
         let caller: T::AccountId = whitelisted_caller();
-        let name = short_bytes(T::MaxNameLen::get(), b'n');
-        let desc = short_bytes(T::MaxDescriptionLen::get(), b'd');
+        let name: BoundedVec<u8, <T as Config>::MaxNameLen> = short_bytes(T::MaxNameLen::get(), b'n')
+            .try_into()
+            .expect("within max len");
+        let desc: BoundedVec<u8, <T as Config>::MaxDescriptionLen> = short_bytes(T::MaxDescriptionLen::get(), b'd')
+            .try_into()
+            .expect("within max len");
     }: _(RawOrigin::Signed(caller.clone()), name, desc)
     verify {
         let id = NextCollectionId::<T>::get().saturating_sub(1);
@@ -46,8 +52,13 @@ benchmarks! {
     register_media {
         let caller: T::AccountId = whitelisted_caller();
         let collection_id = create_collection_for_bench::<T>(&caller);
-        let uri = short_bytes(T::MaxUriLen::get(), b'u');
-        let content_type = short_bytes(T::MaxContentTypeLen::get(), b'c');
+        let uri: BoundedVec<u8, <T as Config>::MaxUriLen> = short_bytes(T::MaxUriLen::get(), b'u')
+            .try_into()
+            .expect("within max len");
+        let content_type: BoundedVec<u8, <T as Config>::MaxContentTypeLen> =
+            short_bytes(T::MaxContentTypeLen::get(), b'c')
+                .try_into()
+                .expect("within max len");
         let class = MediaClass::CoreAsset;
         let delivery = Delivery::RemoteIpfs;
         let size_bytes = Some(123u64);
@@ -69,8 +80,13 @@ benchmarks! {
     deprecate_media {
         let caller: T::AccountId = whitelisted_caller();
         let collection_id = create_collection_for_bench::<T>(&caller);
-        let uri = short_bytes(T::MaxUriLen::get(), b'u');
-        let content_type = short_bytes(T::MaxContentTypeLen::get(), b'c');
+        let uri: BoundedVec<u8, <T as Config>::MaxUriLen> = short_bytes(T::MaxUriLen::get(), b'u')
+            .try_into()
+            .expect("within max len");
+        let content_type: BoundedVec<u8, <T as Config>::MaxContentTypeLen> =
+            short_bytes(T::MaxContentTypeLen::get(), b'c')
+                .try_into()
+                .expect("within max len");
         let class = MediaClass::CoreAsset;
         let delivery = Delivery::RemoteIpfs;
         let size_bytes = Some(123u64);
@@ -96,9 +112,5 @@ mod tests {
     use super::*;
     use frame_benchmarking::impl_benchmark_test_suite;
 
-    impl_benchmark_test_suite!(
-        Pallet,
-        crate::mock::new_test_ext(),
-        crate::mock::Test
-    );
+    impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);
 }
