@@ -69,6 +69,7 @@ substrate-wasm-builder = { optional = true, workspace = true, default-features =
 
 [features]
 default = ["std"]
+runtime-production = []
 std = [
 	"codec/std",
 	"scale-info/std",

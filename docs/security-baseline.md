@@ -32,6 +32,31 @@ Establish a minimum production-grade baseline for:
      - `register_media(..., BoundedVec uri, BoundedVec content_type, ...)`
 4. Updated impacted benchmarks and tests to compile and pass with bounded args.
 
+## Runtime Origin Matrix (Testnet vs Production)
+
+1. Runtime origin selector
+   - Default mode (testnet/dev): `PrivilegedControlOrigin = EnsureRoot<AccountId>`.
+   - Production mode (`runtime-production` feature): `PrivilegedControlOrigin = EnsureNever<AccountId>`.
+2. Pallets wired to `PrivilegedControlOrigin`
+   - `pallet-eterra-game-authority::AdminOrigin`
+   - `pallet-eterra-gamer::ExpIssuerOrigin`
+   - `pallet-node-authorization::{AddOrigin, RemoveOrigin, SwapOrigin, ResetOrigin}`
+3. Chain spec policy
+   - `dev` / `local_testnet` / `testnet`: Sudo key is set.
+   - `production` (`eterra_production`): Sudo key is `None`.
+4. Effect
+   - In production mode, privileged maintenance paths are intentionally disabled at origin level until governance origins are introduced.
+   - In testnet mode, root-controlled operations remain available for iteration speed.
+
+### Build And Run Modes
+
+1. Testnet/default runtime behavior
+   - `cargo build -p solochain-eterra-runtime --release --features runtime-benchmarks`
+   - `cargo run -p solochain-eterra-node -- --chain testnet`
+2. Production runtime behavior (privileged origins disabled)
+   - `cargo build -p solochain-eterra-runtime --release --features \"runtime-benchmarks,runtime-production\"`
+   - `cargo run -p solochain-eterra-node --features runtime-production -- --chain production`
+
 ## Origin/Access Audit (By Extrinsic)
 
 1. `pallet-eterra`

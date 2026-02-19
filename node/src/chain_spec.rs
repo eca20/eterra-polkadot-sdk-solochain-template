@@ -1,11 +1,11 @@
+use frame_support::PalletId;
 use sc_service::{ChainType, Properties};
 use solochain_eterra_runtime::{AccountId, Signature, WASM_BINARY};
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_consensus_grandpa::AuthorityId as GrandpaId;
 use sp_core::{sr25519, Pair, Public};
-use sp_runtime::traits::{IdentifyAccount, Verify};
-use frame_support::PalletId;
 use sp_runtime::traits::AccountIdConversion;
+use sp_runtime::traits::{IdentifyAccount, Verify};
 
 // The URL for the telemetry server.
 // const STAGING_TELEMETRY_URL: &str = "wss://telemetry.polkadot.io/submit/";
@@ -64,7 +64,7 @@ pub fn development_config() -> Result<ChainSpec, String> {
         // Initial PoA authorities
         vec![authority_keys_from_seed("Alice")],
         // Sudo account
-        get_account_id_from_seed::<sr25519::Public>("Alice"),
+        Some(get_account_id_from_seed::<sr25519::Public>("Alice")),
         // Pre-funded accounts
         vec![
             get_account_id_from_seed::<sr25519::Public>("Alice"),
@@ -76,7 +76,7 @@ pub fn development_config() -> Result<ChainSpec, String> {
         true,
         treasury,
         1_000_000_000_000_000u128,
-        vec![ get_account_id_from_seed::<sr25519::Public>("Alice") ],
+        vec![get_account_id_from_seed::<sr25519::Public>("Alice")],
     ))
     .build())
 }
@@ -105,7 +105,7 @@ pub fn local_testnet_config() -> Result<ChainSpec, String> {
             authority_keys_from_seed("Bob"),
         ],
         // Sudo account
-        get_account_id_from_seed::<sr25519::Public>("Alice"),
+        Some(get_account_id_from_seed::<sr25519::Public>("Alice")),
         // Pre-funded accounts
         vec![
             get_account_id_from_seed::<sr25519::Public>("Alice"),
@@ -133,10 +133,42 @@ pub fn local_testnet_config() -> Result<ChainSpec, String> {
     .build())
 }
 
+pub fn production_config() -> Result<ChainSpec, String> {
+    let treasury = treasury_account();
+
+    Ok(ChainSpec::builder(
+        WASM_BINARY.ok_or_else(|| "Development wasm not available".to_string())?,
+        None,
+    )
+    .with_name("Eterra Production")
+    .with_id("eterra_production")
+    .with_chain_type(ChainType::Live)
+    .with_properties(chain_properties())
+    .with_genesis_config_patch(testnet_genesis(
+        // Replace these with real validator keys in production chainspec JSON.
+        vec![
+            authority_keys_from_seed("Alice"),
+            authority_keys_from_seed("Bob"),
+        ],
+        // No sudo key in production baseline.
+        None,
+        vec![
+            get_account_id_from_seed::<sr25519::Public>("Alice"),
+            get_account_id_from_seed::<sr25519::Public>("Bob"),
+            treasury.clone(),
+        ],
+        true,
+        treasury,
+        1_000_000_000_000_000u128,
+        vec![],
+    ))
+    .build())
+}
+
 /// Configure initial storage state for FRAME modules.
 fn testnet_genesis(
     initial_authorities: Vec<(AuraId, GrandpaId)>,
-    root_key: AccountId,
+    sudo_key: Option<AccountId>,
     endowed_accounts: Vec<AccountId>,
     _enable_println: bool,
     faucet_account: AccountId,
@@ -156,7 +188,7 @@ fn testnet_genesis(
         },
         "sudo": {
             // Assign network admin rights.
-            "key": Some(root_key),
+            "key": sudo_key,
         },
         "eterraFaucet": {
             "faucetAccount": faucet_account,
@@ -180,6 +212,7 @@ pub fn load_spec(id: &str) -> Result<ChainSpec, String> {
         "dev" | "development" => development_config(),
         "local" | "local_testnet" => local_testnet_config(),
         "testnet" => testnet_config(),
+        "production" | "mainnet" | "eterra_production" => production_config(),
         "eterra_testnet" => local_testnet_config(),
         // Fallback: treat the argument as a path to a JSON chainspec file
         path => ChainSpec::from_json_file(std::path::PathBuf::from(path)),

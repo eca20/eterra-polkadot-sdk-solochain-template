@@ -107,3 +107,8 @@ try-runtime = [
 	"solochain-eterra-runtime/try-runtime",
 	"sp-runtime/try-runtime",
 ]
+
+# Switch runtime to production privileged-origin policy.
+runtime-production = [
+	"solochain-eterra-runtime/runtime-production",
+]

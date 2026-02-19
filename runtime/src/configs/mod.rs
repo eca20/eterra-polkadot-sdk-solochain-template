@@ -71,6 +71,14 @@ use super::{
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 
+// Runtime privileged-origin policy:
+// - default (testnet/dev): Root is allowed for operational velocity.
+// - runtime-production feature: privileged paths are disabled until governance origins are wired.
+#[cfg(feature = "runtime-production")]
+type PrivilegedControlOrigin = frame_system::EnsureNever<AccountId>;
+#[cfg(not(feature = "runtime-production"))]
+type PrivilegedControlOrigin = frame_system::EnsureRoot<AccountId>;
+
 parameter_types! {
     pub const BlockHashCount: BlockNumber = 2400;
     pub const Version: RuntimeVersion = VERSION;
@@ -237,11 +245,10 @@ impl pallet_node_authorization::Config for Runtime {
     type MaxWellKnownNodes = MaxWellKnownNodes;
     type MaxPeerIdLength = MaxPeerIdLength;
 
-    // While bootstrapping, keep it simple: Root controls the allowlist.
-    type AddOrigin   = frame_system::EnsureRoot<AccountId>;
-    type RemoveOrigin= frame_system::EnsureRoot<AccountId>;
-    type SwapOrigin  = frame_system::EnsureRoot<AccountId>;
-    type ResetOrigin = frame_system::EnsureRoot<AccountId>;
+    type AddOrigin   = PrivilegedControlOrigin;
+    type RemoveOrigin= PrivilegedControlOrigin;
+    type SwapOrigin  = PrivilegedControlOrigin;
+    type ResetOrigin = PrivilegedControlOrigin;
 
     type WeightInfo = ();
 }
@@ -362,7 +369,7 @@ parameter_types! {
 impl pallet_eterra_gamer::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Currency = Balances;
-    type ExpIssuerOrigin = frame_system::EnsureRoot<AccountId>;
+    type ExpIssuerOrigin = PrivilegedControlOrigin;
     type FaucetAccount = TreasuryAccount;
     type ChangeFee = GamerChangeFee;
     type MaxTagLen = GamerTagMaxLen;
@@ -412,7 +419,7 @@ impl frame_support::traits::Get<Balance> for RewardPerWinAmount {
 impl pallet_eterra_game_authority::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type MaxPlayersPerGame = MaxPlayersPerGameConst;
-    type AdminOrigin = frame_system::EnsureRoot<AccountId>;
+    type AdminOrigin = PrivilegedControlOrigin;
     type MaxExpirationsPerBlock = MaxExpirationsPerBlock;
     // If your BlockNumber is u32/u64, set 30 blocks:
     type MaxRoundBlocks = frame_support::traits::ConstU32<30>;
