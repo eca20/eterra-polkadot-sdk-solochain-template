@@ -1,103 +1,51 @@
 # Eterra Pallet Integration Guide
 
-This guide provides a detailed walkthrough for integrating the **Eterra pallet** with a Unity game using the Substrate.NET API. It enables seamless interaction with the blockchain for managing and synchronizing gameplay mechanics.
+This document reflects the current `pallet-eterra` interface used by the runtime.
 
-## Overview
+## Gameplay Flow
 
-The **Eterra pallet** allows for decentralized gameplay interactions using the Substrate framework. Key functionalities include:
+1. Player configures hand:
+   - `set_current_hand(card_ids)`
+   - `set_preset_hand(card_ids)` (deprecated alias)
+2. Player creates game:
+   - `create_game(players, game_mode)`
+3. Player submits in-game hand snapshot:
+   - `submit_hand(game_id, card_ids_compat)`
+4. Player takes turns:
+   - `play_from_hand(game_id, hand_index, x, y)`
+   - optional legacy move path: `play(game_id, move)`
+5. If opponent stalls beyond block limit:
+   - `force_finish_turn(game_id)`
 
-- **Game Creation**: Start a new game on-chain.
-- **Turn-Based Actions**: Submit moves and update game states.
-- **Score Management**: Track and synchronize scores for players.
+## Call Signatures (Current)
 
-This guide outlines how to integrate these features using the **Substrate.NET API** in Unity.
+- `create_game(origin, players: BoundedVec<AccountId, NumPlayers>, game_mode: GameMode)`
+  - `GameMode::PvP`: caller must be in `players`, exactly two distinct players.
+  - `GameMode::PvE`: players input is normalized to `[caller, AiAccount]`.
+- `set_current_hand(origin, card_ids: BoundedVec<u32, HandLimit>)`
+  - Requires exact `HandSize` and unique cards owned by caller.
+- `submit_hand(origin, game_id, _card_ids: BoundedVec<u32, HandLimit>)`
+  - Compatibility argument is ignored.
+  - Hand is loaded from `CurrentHandOf`.
 
----
+## Integration Notes
 
-## Prerequisites
+- Ensure each human player has `set_current_hand` completed before calling `create_game`.
+- For PvP, both players need active hand setups.
+- For PvE, AI hand generation and AI turns are handled by pallet internals.
+- Frontends should treat `set_preset_hand` as backward-compatible alias and prefer `set_current_hand`.
 
-1. **Unity**: Installed Unity editor.
-2. **Substrate.NET API**: Library for interacting with Substrate-based blockchains.
-3. **EterraSDK**: A custom SDK for accessing the Eterra pallet.
-4. **Local Node**: A Substrate-based node running the Eterra pallet.
+## Runtime Wiring (current shape)
 
----
-
-## Integration Steps
-
-### 1. Add Dependencies
-
-Include the following libraries in your Unity project:
-- `Substrate.NetApi`
-- `EterraSDK`
-
-### 2. Initialize Substrate Network Client
-
-Set up a connection to your Substrate-based blockchain in Unity.
-
-#### Code Example:
-```csharp
-private static SubstrateNetwork InitializeClient(string nodeUrl)
-{
-    var client = new SubstrateNetwork(EterraSDK.NetApiExt.Client.BaseClient.Alice, nodeUrl);
-
-    client.ExtrinsicManager.ExtrinsicUpdated += (id, info) =>
-    {
-        Debug.Log("ExtrinsicUpdated: " + id + " | " + info.TransactionEvent);
-    };
-
-    ConnectClientAsync(client, nodeUrl);
-    return client;
-}
-
-private static async Task ConnectClientAsync(SubstrateNetwork client, string nodeUrl)
-{
-    await client.ConnectAsync(true, true, CancellationToken.None);
-    Debug.Log("Connected to " + nodeUrl + " = " + client.IsConnected);
-}
-```
-
-##### Create Game
-```csharp
-public static async Task CreateGame(SubstrateNetwork client, Account creator, Account opponent)
-{
-    var gameId = await client.CallMethodAsync<GameId>(
-        "eterra.createGame",
-        new MultiAddress(creator),
-        new MultiAddress(opponent)
-    );
-
-    Debug.Log("Game created with ID: " + gameId);
-}
-```
-
-##### Submit Turn
-```csharp
-public static async Task SubmitTurn(SubstrateNetwork client, Account player, GameId gameId, int x, int y, Card card)
-{
-    var result = await client.CallMethodAsync<bool>(
-        "eterra.playTurn",
-        new MultiAddress(player),
-        gameId,
-        x,
-        y,
-        card
-    );
-
-    Debug.Log("Turn submitted: " + result);
-}
-```
-
-##### Fetch Game State
-```csharp
-public static async Task<GameState> GetGameState(SubstrateNetwork client, GameId gameId)
-{
-    var gameState = await client.QueryStorageAsync<GameState>(
-        "Eterra.GameBoard",
-        gameId
-    );
-
-    Debug.Log("Game state fetched: " + gameState);
-    return gameState;
+```rust
+impl pallet_eterra::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type NumPlayers = EterraNumPlayers; // currently 2
+    type MaxRounds = EterraMaxRounds;
+    type BlocksToPlayLimit = EterraBlocksToPlayLimit;
+    type HandSize = ConstU32<5>;
+    type AiAccount = AiBotAccountParam;
+    type AiDifficulty = ConstU8<60>;
+    type WeightInfo = pallet_eterra::weights::SubstrateWeight<Runtime>;
 }
 ```

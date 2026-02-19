@@ -1,96 +1,74 @@
-## ♻️ Updating Runtime After Adding or Modifying a Pallet
+# Runtime Upgrade Runbook
 
-When you modify the runtime (adding or changing a pallet, updating config, bumping `spec_version`, etc.), you must rebuild the runtime, regenerate chain specs, purge the old database, re‑insert keys, and restart the node.
+When runtime code changes (pallet logic, config constants, weights, `spec_version`, etc.), rebuild runtime/node and regenerate chain specs before restarting nodes.
 
-Below is the **complete, reliable, copy‑and‑paste sequence**.
+## 1) Build
 
----
-
-### ✅ **1. Build the updated runtime + node**
+### Testnet/default mode
 
 ```bash
 cargo build -r -p solochain-eterra-runtime -p solochain-eterra-node
 ```
 
----
-
-### ✅ **2. Remove old chain specs**
+### Production origin-policy mode
 
 ```bash
-rm -f chain-specs/testnet.json \
-      chain-specs/testnet-plain.json \
-      chain-specs/testnet-raw.json
+cargo build -r -p solochain-eterra-runtime -p solochain-eterra-node \
+  --features runtime-production
 ```
 
----
+## 2) Regenerate Chain Specs
 
-### ✅ **3. Generate a fresh chain spec (plain)**
+```bash
+mkdir -p chain-specs
+rm -f chain-specs/testnet-plain.json chain-specs/testnet-raw.json
+rm -f chain-specs/production-plain.json chain-specs/production-raw.json
+```
+
+### Testnet
 
 ```bash
 ./target/release/solochain-eterra-node build-spec \
   --chain testnet > chain-specs/testnet-plain.json
-```
 
----
-
-### ✅ **4. Generate the raw chain spec**
-
-```bash
 ./target/release/solochain-eterra-node build-spec \
   --chain chain-specs/testnet-plain.json --raw > chain-specs/testnet-raw.json
 ```
 
----
+### Production
 
-### ✅ **5. Completely purge the testnet DB**
+```bash
+./target/release/solochain-eterra-node build-spec \
+  --chain production > chain-specs/production-plain.json
+
+./target/release/solochain-eterra-node build-spec \
+  --chain chain-specs/production-plain.json --raw > chain-specs/production-raw.json
+```
+
+Note: built-in `production` config is a baseline template. Replace authority keys, balances, bootnodes, and allocations before real deployment.
+
+## 3) Optional: Purge Local Testnet DB
 
 ```bash
 BASE=/var/lib/eterra-testnet/alice
-
 rm -rf "$BASE"
 sudo rm -rf /var/lib/eterra-testnet
 sudo mkdir -p /var/lib/eterra-testnet/alice
 sudo chown -R "$USER":staff /var/lib/eterra-testnet
 ```
 
----
-
-### ✅ **6. Create networking directories**
+## 4) Optional: Insert Dev Keys (Alice)
 
 ```bash
 BASE=/var/lib/eterra-testnet/alice
 
-mkdir -p "$BASE/chains/eterra_testnet/network"
-```
-
----
-
-### ✅ **7. Generate libp2p networking key**
-
-```bash
-./target/release/solochain-eterra-node key generate-node-key \
-  --chain chain-specs/testnet-raw.json \
-  --file "$BASE/chains/eterra_testnet/network/secret_ed25519"
-```
-
----
-
-### ✅ **8. Insert AURA key for Alice**
-
-```bash
 ./target/release/solochain-eterra-node key insert \
   --base-path "$BASE" \
   --chain chain-specs/testnet-raw.json \
   --key-type aura \
   --scheme Sr25519 \
   --suri //Alice
-```
 
----
-
-### ✅ **9. Insert GRANDPA key for Alice**
-
-```bash
 ./target/release/solochain-eterra-node key insert \
   --base-path "$BASE" \
   --chain chain-specs/testnet-raw.json \
@@ -99,9 +77,9 @@ mkdir -p "$BASE/chains/eterra_testnet/network"
   --suri //Alice
 ```
 
----
+## 5) Start Node
 
-### ✅ **10. Start the node with the updated runtime**
+### Testnet
 
 ```bash
 BASE=/var/lib/eterra-testnet/alice
@@ -116,9 +94,17 @@ BASE=/var/lib/eterra-testnet/alice
   --unsafe-rpc-external --rpc-cors all
 ```
 
----
+### Production policy mode
 
-### 🔍 **Verify the runtime version**
+```bash
+./target/release/solochain-eterra-node \
+  --chain chain-specs/production-raw.json \
+  --base-path /var/lib/eterra-production/node1 \
+  --validator \
+  --port 30333 --rpc-port 9944
+```
+
+## 6) Verify Runtime Version
 
 ```bash
 curl -H "Content-Type: application/json" \
@@ -126,21 +112,15 @@ curl -H "Content-Type: application/json" \
   http://127.0.0.1:9944
 ```
 
-Expected output should contain:
+Expected response includes:
 
-```
+```text
 "specName":"solochain-eterra-runtime"
-"specVersion":<your new version>
+"specVersion":<new version>
 ```
 
----
+## Troubleshooting
 
-### 🛠 Troubleshooting
-
-- If runtime version does **not** update:
-  - Ensure no old node process is running.
-  - Ensure you regenerated the chain specs *after rebuilding the runtime*.
-  - Ensure you purged `/var/lib/eterra-testnet` entirely.
-  - Verify you are launching the binary from `./target/release`.
-
----
+- Rebuild before regenerating specs.
+- Ensure the node uses the correct binary (`./target/release/solochain-eterra-node`).
+- If version does not update, verify old process/database/spec artifacts are not being reused.

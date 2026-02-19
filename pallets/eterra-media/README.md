@@ -1,48 +1,46 @@
 # pallet-eterra-media
 
-Path: `pallet/eterra-media`
+Path: `pallets/eterra-media`
 
-Immutable media registry pallet for Eterra and other indie games. Designed to
-pair cleanly with `pallet-nfts` and game pallets that reference `MediaId` for
-artwork, audio, skins, etc.
+Immutable media registry with collections, roles, and delivery metadata.
+Designed to pair with gameplay and NFT-style pallets using stable on-chain media references.
 
-## Wiring into your runtime
+## Core Calls
 
-In `runtime/Cargo.toml` add:
+- `create_collection(name, description)`
+- `set_collection_role(collection_id, account, role, granted)`
+- `register_media(maybe_collection_id, uri, content_type, class, delivery, size_bytes)`
+- `freeze_collection(collection_id)`
+- `deprecate_media(media_id)`
 
-```toml
-[dependencies.pallet-eterra-media]
-default-features = false
-path = "../pallet/eterra-media"
-```
+All calls are signed and enforce collection ownership/role checks where required.
 
-And in `runtime/src/lib.rs`:
+## Runtime Wiring (current shape)
 
 ```rust
-impl pallet_eterra_media::Config for Runtime {
-    type RuntimeEvent = RuntimeEvent;
-    type MaxUriLen = ConstU32<256>;
-    type MaxContentTypeLen = ConstU32<64>;
-    type MaxNameLen = ConstU32<64>;
-    type MaxDescriptionLen = ConstU32<256>;
-    type MaxRolesPerAccount = ConstU32<8>;
-    type DefaultCollectionId = ConstU32<0>;
+parameter_types! {
+    pub const MaxMediaUriLen: u32 = 256;
+    pub const MaxMediaContentTypeLen: u32 = 64;
+    pub const MaxMediaNameLen: u32 = 64;
+    pub const MaxMediaDescriptionLen: u32 = 256;
+    pub const MaxMediaRolesPerAccount: u32 = 8;
+    pub const DefaultMediaCollectionId: u32 = 0;
 }
 
-construct_runtime!(
-    pub enum Runtime where
-        // ...
-    {
-        // ...
-        EterraMedia: pallet_eterra_media,
-    }
-);
+impl pallet_eterra_media::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type MaxUriLen = MaxMediaUriLen;
+    type MaxContentTypeLen = MaxMediaContentTypeLen;
+    type MaxNameLen = MaxMediaNameLen;
+    type MaxDescriptionLen = MaxMediaDescriptionLen;
+    type MaxRolesPerAccount = MaxMediaRolesPerAccount;
+    type DefaultCollectionId = DefaultMediaCollectionId;
+    type DefaultCollectionOwner = TreasuryAccount;
+    type WeightInfo = pallet_eterra_media::weights::SubstrateWeight<Runtime>;
+}
 ```
 
-You can then:
+## Notes
 
-1. Create a collection via `create_collection`.
-2. Or enable genesis creation of collection `DefaultCollectionId` (0) using the
-   pallet's `GenesisConfig`.
-3. Register immutable media via `register_media`, passing `None` for the
-   collection ID to use the default (0), or a specific collection ID.
+- `register_media` accepts `None` for collection id and then falls back to `DefaultCollectionId`.
+- A default collection can also be created at genesis via the pallet `GenesisConfig`.
