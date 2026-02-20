@@ -2,3 +2,4 @@ target/
 chain-specs/generated/
 chain-specs/production-overrides.json
 chain-specs/production-keys.json
+data/
