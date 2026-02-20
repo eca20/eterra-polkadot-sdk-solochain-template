@@ -13,6 +13,10 @@ Use the deployment helper to keep local and CI command paths aligned:
 # Same validation with production origin policy enabled
 ./scripts/deploy.sh pipeline-check production
 
+# Try-runtime gate (compile + on_runtime_upgrade checks)
+./scripts/deploy.sh try-runtime-check default
+./scripts/deploy.sh try-runtime-check production
+
 # Generate specs only (output: chain-specs/generated/<mode>)
 ./scripts/deploy.sh specs default
 ./scripts/deploy.sh specs production
@@ -26,6 +30,7 @@ cp chain-specs/production-keys.example.json chain-specs/production-keys.json
 ./scripts/generate-production-overrides.py \
   --in chain-specs/production-keys.json \
   --out chain-specs/production-overrides.json
+# enforces a separate sudo key (not one of validator aura keys) by default
 ./scripts/deploy.sh finalize-production-spec production chain-specs/production-overrides.json
 # outputs: chain-specs/finalized/production/production-{plain,raw}.json
 
@@ -43,6 +48,8 @@ Equivalent `make` shortcuts:
 ```bash
 make deploy-check-default
 make deploy-check-production
+make deploy-try-runtime-default
+make deploy-try-runtime-production
 make deploy-verify-production SPEC=chain-specs/production-plain.json
 make deploy-generate-production-overrides-production
 make deploy-finalize-production-production PROD_CONFIG=chain-specs/production-overrides.json

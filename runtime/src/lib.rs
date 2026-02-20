@@ -270,3 +270,25 @@ mod runtime {
     #[runtime::pallet_index(18)]
     pub type EterraMedia= pallet_eterra_media;
 }
+
+#[cfg(all(test, feature = "try-runtime"))]
+mod try_runtime_tests {
+    use super::*;
+    use frame_support::traits::UpgradeCheckSelect;
+    use sp_io::TestExternalities;
+    use sp_runtime::BuildStorage;
+
+    #[test]
+    fn try_runtime_upgrade_executes_on_genesis_state() {
+        let storage = RuntimeGenesisConfig::default()
+            .build_storage()
+            .expect("runtime genesis storage should build");
+        let mut ext = TestExternalities::new(storage);
+
+        ext.execute_with(|| {
+            System::set_block_number(1);
+            Executive::try_runtime_upgrade(UpgradeCheckSelect::PreAndPost)
+                .expect("try-runtime on_runtime_upgrade should succeed on genesis state");
+        });
+    }
+}

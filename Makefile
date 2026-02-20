@@ -12,9 +12,9 @@ KEY_CONFIG ?= chain-specs/production-keys.json
 NODE_BIN ?= ./target/debug/solochain-eterra-node
 
 .PHONY: help \
-	deploy-build deploy-specs deploy-verify deploy-verify-production deploy-generate-production-overrides deploy-finalize-production deploy-smoke deploy-check \
+	deploy-build deploy-specs deploy-verify deploy-verify-production deploy-generate-production-overrides deploy-finalize-production deploy-try-runtime deploy-smoke deploy-check \
 	deploy-check-default deploy-check-production \
-	deploy-specs-default deploy-specs-production deploy-generate-production-overrides-production deploy-finalize-production-default deploy-finalize-production-production \
+	deploy-specs-default deploy-specs-production deploy-generate-production-overrides-production deploy-finalize-production-default deploy-finalize-production-production deploy-try-runtime-default deploy-try-runtime-production \
 	deploy-verify-default deploy-verify-generated-production deploy-verify-production-path \
 	run-node run-default-testnet run-production
 
@@ -26,6 +26,7 @@ help:
 	@echo "  make deploy-verify-production SPEC=<path/to/production-plain.json>"
 	@echo "  make deploy-generate-production-overrides KEY_CONFIG=<path/to/keys.json> PROD_CONFIG=<path/to/overrides.json> NODE_BIN=<node-binary>"
 	@echo "  make deploy-finalize-production MODE=<default|production> PROD_CONFIG=<path/to/config.json> PROD_OUT_DIR=<path>"
+	@echo "  make deploy-try-runtime MODE=<default|production>"
 	@echo "  make deploy-smoke MODE=<default|production> OUT_DIR=<path>"
 	@echo "  make deploy-check MODE=<default|production>"
 	@echo "  make run-node MODE=<default|production> CHAIN=<dev|testnet|production> PROFILE=<debug|release> ROLE=<validator|full>"
@@ -38,6 +39,8 @@ help:
 	@echo "  make deploy-generate-production-overrides-production"
 	@echo "  make deploy-finalize-production-default"
 	@echo "  make deploy-finalize-production-production"
+	@echo "  make deploy-try-runtime-default"
+	@echo "  make deploy-try-runtime-production"
 	@echo "  make deploy-verify-default"
 	@echo "  make deploy-verify-generated-production"
 	@echo "  make deploy-verify-production"
@@ -61,6 +64,9 @@ deploy-generate-production-overrides:
 
 deploy-finalize-production:
 	./scripts/deploy.sh finalize-production-spec $(MODE) $(PROD_CONFIG) $(PROD_OUT_DIR)
+
+deploy-try-runtime:
+	./scripts/deploy.sh try-runtime-check $(MODE)
 
 deploy-smoke:
 	./scripts/deploy.sh smoke $(MODE) $(OUT_DIR)
@@ -88,6 +94,12 @@ deploy-finalize-production-default:
 
 deploy-finalize-production-production:
 	$(MAKE) deploy-finalize-production MODE=production
+
+deploy-try-runtime-default:
+	$(MAKE) deploy-try-runtime MODE=default
+
+deploy-try-runtime-production:
+	$(MAKE) deploy-try-runtime MODE=production
 
 deploy-verify-default:
 	$(MAKE) deploy-verify MODE=default OUT_DIR=chain-specs/generated/default

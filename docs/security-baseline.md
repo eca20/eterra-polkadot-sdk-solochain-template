@@ -69,9 +69,12 @@ Establish a minimum production-grade baseline for:
    - `./scripts/deploy.sh finalize-production-spec production chain-specs/production-overrides.json`
 5. Generate overrides from key material (SURI -> SS58)
    - `./scripts/generate-production-overrides.py --in chain-specs/production-keys.json --out chain-specs/production-overrides.json`
+6. Try-runtime upgrade gate
+   - `./scripts/deploy.sh try-runtime-check default`
+   - `./scripts/deploy.sh try-runtime-check production`
 
 These commands build runtime+node, generate dev/testnet/production specs with `--disable-default-bootnode`, verify spec invariants (including sudo policy), and smoke-test local block production.
-The strict production validator additionally enforces non-placeholder authorities, explicit bootnodes, required owner sudo key, and no Alice/Bob placeholder funding.
+The strict production validator additionally enforces non-placeholder authorities, explicit bootnodes, required owner sudo key, sudo/faucet/server funding in balances, and no Alice/Bob placeholder funding.
 
 ### Node Launch Safety Defaults
 

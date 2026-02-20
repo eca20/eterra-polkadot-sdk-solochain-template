@@ -120,6 +120,11 @@ def parse_args() -> argparse.Namespace:
         default="./target/debug/solochain-eterra-node",
         help="Node binary path used for `key inspect`.",
     )
+    parser.add_argument(
+        "--allow-sudo-validator",
+        action="store_true",
+        help="Allow sudo key to reuse a validator Aura key (not recommended).",
+    )
     return parser.parse_args()
 
 
@@ -140,6 +145,9 @@ def main() -> None:
     bootnodes: list[str] = []
     aura_authorities: list[str] = []
     grandpa_authorities: list[list[Any]] = []
+    aura_set: set[str] = set()
+    grandpa_set: set[str] = set()
+    bootnode_set: set[str] = set()
 
     for idx, raw in enumerate(validators):
         if not isinstance(raw, dict):
@@ -147,6 +155,9 @@ def main() -> None:
 
         bootnode = require_str(raw, "bootnode")
         ensure_non_local_bootnode(bootnode)
+        if bootnode in bootnode_set:
+            fail(f"duplicate bootnode in validators[{idx}]: {bootnode}")
+        bootnode_set.add(bootnode)
         bootnodes.append(bootnode)
 
         aura_suri = read_secret(require_str(raw, "aura_suri"))
@@ -154,6 +165,14 @@ def main() -> None:
 
         aura_address = inspect_ss58(args.node_bin, aura_suri, "sr25519")
         grandpa_address = inspect_ss58(args.node_bin, grandpa_suri, "ed25519")
+        if aura_address in aura_set:
+            fail(f"duplicate Aura authority derived for validators[{idx}]: {aura_address}")
+        if grandpa_address in grandpa_set:
+            fail(
+                f"duplicate Grandpa authority derived for validators[{idx}]: {grandpa_address}"
+            )
+        aura_set.add(aura_address)
+        grandpa_set.add(grandpa_address)
         aura_authorities.append(aura_address)
 
         weight = raw.get("grandpa_weight", 1)
@@ -163,6 +182,11 @@ def main() -> None:
 
     sudo_suri = read_secret(require_str(cfg, "sudo_suri"))
     sudo_key = inspect_ss58(args.node_bin, sudo_suri, "sr25519")
+    if not args.allow_sudo_validator and sudo_key in aura_set:
+        fail(
+            "sudo key matches a validator Aura key; use a separate cold owner key "
+            "(or pass --allow-sudo-validator to override)"
+        )
 
     faucet_suri_raw = cfg.get("faucet_suri")
     if faucet_suri_raw is None:

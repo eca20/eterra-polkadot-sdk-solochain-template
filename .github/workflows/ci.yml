@@ -88,6 +88,10 @@ jobs:
         run: ./scripts/deploy.sh pipeline-check ${{ matrix.mode }}
         timeout-minutes: 45
 
+      - name: Run try-runtime gate (${{ matrix.mode }})
+        run: ./scripts/deploy.sh try-runtime-check ${{ matrix.mode }}
+        timeout-minutes: 45
+
       - name: Ensure strict production validation rejects placeholder spec
         if: matrix.mode == 'production'
         run: |

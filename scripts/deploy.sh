@@ -13,6 +13,7 @@ Usage:
   scripts/deploy.sh verify-specs [out_dir]
   scripts/deploy.sh verify-production <production-plain.json>
   scripts/deploy.sh finalize-production-spec <default|production> <config.json> [out_dir]
+  scripts/deploy.sh try-runtime-check <default|production>
   scripts/deploy.sh smoke <default|production> [out_dir]
   scripts/deploy.sh pipeline-check <default|production>
 
@@ -21,10 +22,13 @@ Commands:
   specs          Generate plain/raw specs for dev, testnet, production.
   verify-specs   Validate generated chain-spec ids, sudo policy, and bootnode defaults.
   verify-production
-                 Strict production plain-spec checks (owner sudo required, no dev placeholders, explicit bootnodes).
+                 Strict production plain-spec checks (funded owner sudo required, no validator sudo reuse,
+                 no dev placeholders, explicit bootnodes).
   finalize-production-spec
                  Apply production overrides (authorities/bootnodes/balances) and emit strict-validated
                  production plain/raw specs.
+  try-runtime-check
+                 Run try-runtime compile + on_runtime_upgrade gate test for selected mode.
   smoke          Start local ephemeral validators on each generated raw spec and verify block production.
   pipeline-check Run build + spec generation + spec verification + smoke tests.
 USAGE
@@ -202,6 +206,8 @@ if not bootnodes:
 for bootnode in bootnodes:
     if "127.0.0.1" in bootnode or "localhost" in bootnode:
         raise SystemExit(f"[deploy] production spec contains localhost bootnode: {bootnode}")
+if len(set(bootnodes)) != len(bootnodes):
+    raise SystemExit("[deploy] production spec contains duplicate bootnodes")
 
 patch = (
     spec.get("genesis", {})
@@ -219,6 +225,10 @@ if not aura_authorities:
     raise SystemExit("[deploy] production spec must include at least one Aura authority")
 if not grandpa_authorities:
     raise SystemExit("[deploy] production spec must include at least one Grandpa authority")
+if len(aura_authorities) != len(grandpa_authorities):
+    raise SystemExit("[deploy] production spec must have equal Aura and Grandpa authority counts")
+if len(set(aura_authorities)) != len(aura_authorities):
+    raise SystemExit("[deploy] production spec contains duplicate Aura authorities")
 
 # Known dev placeholders from chain_spec.rs (Alice/Bob seeds).
 dev_aura = {
@@ -235,23 +245,52 @@ if any(a in dev_aura for a in aura_authorities):
 
 if sudo_key in dev_aura:
     raise SystemExit("[deploy] production sudo key must not use dev account (Alice/Bob)")
+if sudo_key in aura_authorities:
+    raise SystemExit("[deploy] production sudo key must not reuse a validator Aura key")
 
+grandpa_addresses = []
 for entry in grandpa_authorities:
     if not isinstance(entry, list) or len(entry) < 1:
         raise SystemExit(f"[deploy] invalid Grandpa authority entry: {entry!r}")
+    if not isinstance(entry[0], str) or not entry[0]:
+        raise SystemExit(f"[deploy] invalid Grandpa authority address: {entry!r}")
+    grandpa_addresses.append(entry[0])
     if entry[0] in dev_grandpa:
         raise SystemExit("[deploy] production spec still uses dev Grandpa authorities (Alice/Bob)")
+if len(set(grandpa_addresses)) != len(grandpa_addresses):
+    raise SystemExit("[deploy] production spec contains duplicate Grandpa authorities")
 
 balances = patch.get("balances", {}).get("balances", [])
 if not balances:
     raise SystemExit("[deploy] production spec must include non-empty balances allocation")
+balance_accounts = set()
 for entry in balances:
-    if isinstance(entry, list) and len(entry) >= 1 and entry[0] in dev_aura:
+    if not isinstance(entry, list) or len(entry) < 2:
+        raise SystemExit(f"[deploy] invalid balance entry: {entry!r}")
+    account = entry[0]
+    if not isinstance(account, str) or not account:
+        raise SystemExit(f"[deploy] invalid balance account: {entry!r}")
+    balance_accounts.add(account)
+    if account in dev_aura:
         raise SystemExit("[deploy] production balances still fund dev accounts (Alice/Bob)")
+if sudo_key not in balance_accounts:
+    raise SystemExit("[deploy] production balances must fund sudo key account")
 
 faucet_account = patch.get("eterraFaucet", {}).get("faucetAccount")
 if faucet_account in dev_aura:
     raise SystemExit("[deploy] production faucet account must not use dev account (Alice/Bob)")
+if isinstance(faucet_account, str) and faucet_account and faucet_account not in balance_accounts:
+    raise SystemExit("[deploy] production balances must fund faucet account")
+
+servers = patch.get("eterraGameAuthority", {}).get("initialServers", [])
+if servers is not None:
+    if not isinstance(servers, list):
+        raise SystemExit("[deploy] eterraGameAuthority.initialServers must be an array when present")
+    for server in servers:
+        if not isinstance(server, str) or not server:
+            raise SystemExit("[deploy] eterraGameAuthority.initialServers entries must be non-empty strings")
+        if server not in balance_accounts:
+            raise SystemExit("[deploy] production balances must fund all initialServers accounts")
 
 print(f"[deploy] strict production validation passed for {spec_path}")
 PY
@@ -323,18 +362,24 @@ for bootnode in bootnodes:
         raise SystemExit("[deploy] each bootnode must be a non-empty string")
     if "127.0.0.1" in bootnode or "localhost" in bootnode:
         raise SystemExit(f"[deploy] bootnode must not be localhost: {bootnode}")
+if len(set(bootnodes)) != len(bootnodes):
+    raise SystemExit("[deploy] bootnodes must not contain duplicates")
 
 for auth in aura:
     if not isinstance(auth, str) or not auth:
         raise SystemExit("[deploy] each aura authority must be a non-empty string")
+if len(set(aura)) != len(aura):
+    raise SystemExit("[deploy] aura_authorities must not contain duplicates")
 
 normalized_grandpa = []
+grandpa_addresses = []
 for entry in grandpa:
     if not isinstance(entry, list) or len(entry) != 2:
         raise SystemExit("[deploy] each grandpa authority entry must be [address, weight]")
     addr, weight = entry
     if not isinstance(addr, str) or not addr:
         raise SystemExit("[deploy] each grandpa authority address must be a non-empty string")
+    grandpa_addresses.append(addr)
     try:
         w = int(weight)
     except Exception as exc:
@@ -342,6 +387,8 @@ for entry in grandpa:
     if w <= 0:
         raise SystemExit(f"[deploy] grandpa weight must be > 0 for {addr}")
     normalized_grandpa.append([addr, w])
+if len(set(grandpa_addresses)) != len(grandpa_addresses):
+    raise SystemExit("[deploy] grandpa_authorities must not contain duplicate addresses")
 
 normalized_balances = []
 for entry in balances:
@@ -357,6 +404,7 @@ for entry in balances:
     if a <= 0:
         raise SystemExit(f"[deploy] balance amount must be > 0 for {account}")
     normalized_balances.append([account, a])
+balance_accounts = {entry[0] for entry in normalized_balances}
 
 if spec.get("id") != "eterra_production":
     raise SystemExit(f"[deploy] source spec id must be eterra_production, got {spec.get('id')!r}")
@@ -373,6 +421,10 @@ patch = runtime_genesis.setdefault("patch", {})
 sudo_key = cfg["sudo_key"]
 if not isinstance(sudo_key, str) or not sudo_key:
     raise SystemExit("[deploy] sudo_key must be a non-empty string")
+if sudo_key in aura:
+    raise SystemExit("[deploy] sudo_key must not reuse a validator aura authority account")
+if sudo_key not in balance_accounts:
+    raise SystemExit("[deploy] balances must include sudo_key account")
 patch.setdefault("sudo", {})["key"] = sudo_key
 patch.setdefault("aura", {})["authorities"] = aura
 patch.setdefault("grandpa", {})["authorities"] = normalized_grandpa
@@ -382,6 +434,8 @@ faucet = patch.setdefault("eterraFaucet", {})
 faucet_account = cfg.get("faucet_account", normalized_balances[0][0])
 if not isinstance(faucet_account, str) or not faucet_account:
     raise SystemExit("[deploy] faucet_account must be a non-empty string")
+if faucet_account not in balance_accounts:
+    raise SystemExit("[deploy] balances must include faucet_account")
 faucet["faucetAccount"] = faucet_account
 
 if "faucet_payout_amount" in cfg:
@@ -400,6 +454,8 @@ if "initial_servers" in cfg:
     for srv in servers:
         if not isinstance(srv, str) or not srv:
             raise SystemExit("[deploy] each initial_servers entry must be a non-empty string")
+        if srv not in balance_accounts:
+            raise SystemExit("[deploy] balances must include each initial_servers account")
     patch.setdefault("eterraGameAuthority", {})["initialServers"] = servers
 
 out_plain.write_text(json.dumps(spec, indent=2) + "\n")
@@ -409,6 +465,31 @@ PY
   "$node_bin" build-spec --disable-default-bootnode --chain "$out_plain" --raw > "$out_raw"
   verify_production_spec_cmd "$out_plain"
   echo "[deploy] wrote finalized production raw spec: ${out_raw}"
+}
+
+try_runtime_check_cmd() {
+  local mode="$1"
+  local features="try-runtime"
+
+  case "$mode" in
+    default)
+      ;;
+    production)
+      features="try-runtime,runtime-production"
+      ;;
+    *)
+      echo "[deploy] invalid mode for try-runtime-check: ${mode} (expected default|production)" >&2
+      exit 1
+      ;;
+  esac
+
+  pushd "$ROOT_DIR" >/dev/null
+  echo "[deploy] try-runtime gate (${mode}) with features: ${features}"
+  cargo check -p solochain-eterra-runtime --features "$features"
+  cargo check -p solochain-eterra-node --features "$features"
+  cargo test -p solochain-eterra-runtime --features "$features" \
+    try_runtime_upgrade_executes_on_genesis_state -- --nocapture
+  popd >/dev/null
 }
 
 wait_for_rpc() {
@@ -594,6 +675,10 @@ main() {
     finalize-production-spec)
       [[ $# -ge 2 ]] || { usage; exit 1; }
       finalize_production_spec_cmd "$@"
+      ;;
+    try-runtime-check)
+      [[ $# -eq 1 ]] || { usage; exit 1; }
+      try_runtime_check_cmd "$1"
       ;;
     smoke)
       [[ $# -ge 1 ]] || { usage; exit 1; }

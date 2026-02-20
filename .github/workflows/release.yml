@@ -57,6 +57,10 @@ jobs:
         run: cargo build --locked --release
         timeout-minutes: 90
 
+      - name: Run try-runtime gate (production policy)
+        run: ./scripts/deploy.sh try-runtime-check production
+        timeout-minutes: 45
+
       - name: Validate checked-in production spec (optional)
         run: |
           if [ -f chain-specs/production-plain.json ]; then
