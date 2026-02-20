@@ -88,6 +88,62 @@ jobs:
         run: ./scripts/deploy.sh pipeline-check ${{ matrix.mode }}
         timeout-minutes: 45
 
+      - name: Ensure strict production validation rejects placeholder spec
+        if: matrix.mode == 'production'
+        run: |
+          set +e
+          ./scripts/deploy.sh verify-production chain-specs/generated/production/production-plain.json
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "Expected strict production validation to fail on placeholder built-in spec."
+            exit 1
+          fi
+          echo "Strict production validator correctly rejected placeholder production spec."
+
+      - name: Generate overrides from key material, finalize production spec, and validate
+        if: matrix.mode == 'production'
+        run: |
+          set -euo pipefail
+          k1="$(mktemp)"
+          k2="$(mktemp)"
+          p1="$(./target/debug/solochain-eterra-node key generate-node-key --chain dev --file "$k1" 2>&1 >/dev/null | tail -n1)"
+          p2="$(./target/debug/solochain-eterra-node key generate-node-key --chain dev --file "$k2" 2>&1 >/dev/null | tail -n1)"
+
+          cat > /tmp/eterra-production-keys-ci.json <<JSON
+          {
+            "name": "Eterra Production",
+            "validators": [
+              {
+                "bootnode": "/dns4/validator-1.eterra.example/tcp/30333/p2p/${p1}",
+                "aura_suri": "//Charlie",
+                "grandpa_suri": "//Charlie",
+                "grandpa_weight": 1
+              },
+              {
+                "bootnode": "/dns4/validator-2.eterra.example/tcp/30333/p2p/${p2}",
+                "aura_suri": "//Dave",
+                "grandpa_suri": "//Dave",
+                "grandpa_weight": 1
+              }
+            ],
+            "sudo_suri": "//Eve",
+            "faucet_suri": "//Eve",
+            "initial_server_suris": [
+              "//Charlie"
+            ],
+            "extra_endowed_suris": [
+              "//Ferdie"
+            ],
+            "endowment": 1152921504606846976,
+            "faucet_payout_amount": 1000000000000000
+          }
+          JSON
+
+          ./scripts/generate-production-overrides.py --in /tmp/eterra-production-keys-ci.json --out /tmp/eterra-production-overrides-ci.json --node-bin ./target/debug/solochain-eterra-node
+          ./scripts/deploy.sh finalize-production-spec production /tmp/eterra-production-overrides-ci.json /tmp/eterra-finalized-production-ci
+          ./scripts/deploy.sh verify-production /tmp/eterra-finalized-production-ci/production-plain.json
+
   build-docker:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,28 @@
+{
+  "name": "Eterra Production",
+  "validators": [
+    {
+      "bootnode": "/dns4/validator-1.example.com/tcp/30333/p2p/REPLACE_WITH_PEER_ID_1",
+      "aura_suri": "@/secure/validator-1-aura.suri",
+      "grandpa_suri": "@/secure/validator-1-grandpa.suri",
+      "grandpa_weight": 1
+    },
+    {
+      "bootnode": "/dns4/validator-2.example.com/tcp/30333/p2p/REPLACE_WITH_PEER_ID_2",
+      "aura_suri": "@/secure/validator-2-aura.suri",
+      "grandpa_suri": "@/secure/validator-2-grandpa.suri",
+      "grandpa_weight": 1
+    }
+  ],
+  "sudo_suri": "@/secure/owner-sudo.suri",
+  "faucet_suri": "@/secure/faucet.suri",
+  "initial_server_suris": [
+    "@/secure/game-server-1.suri",
+    "@/secure/game-server-2.suri"
+  ],
+  "extra_endowed_suris": [
+    "@/secure/ops-wallet.suri"
+  ],
+  "endowment": 1152921504606846976,
+  "faucet_payout_amount": 1000000000000000
+}

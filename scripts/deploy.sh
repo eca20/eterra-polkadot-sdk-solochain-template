@@ -11,6 +11,8 @@ Usage:
   scripts/deploy.sh build <default|production> [debug|release]
   scripts/deploy.sh specs <default|production> [out_dir]
   scripts/deploy.sh verify-specs [out_dir]
+  scripts/deploy.sh verify-production <production-plain.json>
+  scripts/deploy.sh finalize-production-spec <default|production> <config.json> [out_dir]
   scripts/deploy.sh smoke <default|production> [out_dir]
   scripts/deploy.sh pipeline-check <default|production>
 
@@ -18,6 +20,11 @@ Commands:
   build          Build runtime + node for selected runtime mode.
   specs          Generate plain/raw specs for dev, testnet, production.
   verify-specs   Validate generated chain-spec ids, sudo policy, and bootnode defaults.
+  verify-production
+                 Strict production plain-spec checks (owner sudo required, no dev placeholders, explicit bootnodes).
+  finalize-production-spec
+                 Apply production overrides (authorities/bootnodes/balances) and emit strict-validated
+                 production plain/raw specs.
   smoke          Start local ephemeral validators on each generated raw spec and verify block production.
   pipeline-check Run build + spec generation + spec verification + smoke tests.
 USAGE
@@ -160,11 +167,248 @@ if not isinstance(dev_sudo, str) or not dev_sudo:
     raise SystemExit("[deploy] dev spec missing sudo key")
 if not isinstance(testnet_sudo, str) or not testnet_sudo:
     raise SystemExit("[deploy] testnet spec missing sudo key")
-if production_sudo is not None:
-    raise SystemExit("[deploy] production spec must not include sudo key")
+if not isinstance(production_sudo, str) or not production_sudo:
+    raise SystemExit("[deploy] production spec missing sudo key")
 
 print(f"[deploy] spec verification passed for {out_dir}")
 PY
+}
+
+verify_production_spec_cmd() {
+  local spec_path="$1"
+
+  require_cmd python3
+
+  python3 - "$spec_path" <<'PY'
+import json
+import pathlib
+import sys
+
+spec_path = pathlib.Path(sys.argv[1])
+if not spec_path.exists():
+    raise SystemExit(f"[deploy] missing production spec file: {spec_path}")
+
+spec = json.loads(spec_path.read_text())
+
+if spec.get("id") != "eterra_production":
+    raise SystemExit(f"[deploy] production spec id mismatch: {spec.get('id')} != eterra_production")
+
+if spec.get("chainType") != "Live":
+    raise SystemExit(f"[deploy] production spec chainType must be Live, got: {spec.get('chainType')}")
+
+bootnodes = spec.get("bootNodes", [])
+if not bootnodes:
+    raise SystemExit("[deploy] production spec must define at least one bootnode")
+for bootnode in bootnodes:
+    if "127.0.0.1" in bootnode or "localhost" in bootnode:
+        raise SystemExit(f"[deploy] production spec contains localhost bootnode: {bootnode}")
+
+patch = (
+    spec.get("genesis", {})
+    .get("runtimeGenesis", {})
+    .get("patch", {})
+)
+
+sudo_key = patch.get("sudo", {}).get("key")
+if not isinstance(sudo_key, str) or not sudo_key:
+    raise SystemExit("[deploy] production spec must include non-empty sudo key")
+
+aura_authorities = patch.get("aura", {}).get("authorities", [])
+grandpa_authorities = patch.get("grandpa", {}).get("authorities", [])
+if not aura_authorities:
+    raise SystemExit("[deploy] production spec must include at least one Aura authority")
+if not grandpa_authorities:
+    raise SystemExit("[deploy] production spec must include at least one Grandpa authority")
+
+# Known dev placeholders from chain_spec.rs (Alice/Bob seeds).
+dev_aura = {
+    "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+}
+dev_grandpa = {
+    "5FA9nQDVg267DEd8m1ZypXLBnvN7SFxYwV7ndqSYGiN9TTpu",
+    "5GoNkf6WdbxCFnPdAnYYQyCjAKPJgLNxXwPjwTh6DGg6gN3E",
+}
+
+if any(a in dev_aura for a in aura_authorities):
+    raise SystemExit("[deploy] production spec still uses dev Aura authorities (Alice/Bob)")
+
+if sudo_key in dev_aura:
+    raise SystemExit("[deploy] production sudo key must not use dev account (Alice/Bob)")
+
+for entry in grandpa_authorities:
+    if not isinstance(entry, list) or len(entry) < 1:
+        raise SystemExit(f"[deploy] invalid Grandpa authority entry: {entry!r}")
+    if entry[0] in dev_grandpa:
+        raise SystemExit("[deploy] production spec still uses dev Grandpa authorities (Alice/Bob)")
+
+balances = patch.get("balances", {}).get("balances", [])
+if not balances:
+    raise SystemExit("[deploy] production spec must include non-empty balances allocation")
+for entry in balances:
+    if isinstance(entry, list) and len(entry) >= 1 and entry[0] in dev_aura:
+        raise SystemExit("[deploy] production balances still fund dev accounts (Alice/Bob)")
+
+faucet_account = patch.get("eterraFaucet", {}).get("faucetAccount")
+if faucet_account in dev_aura:
+    raise SystemExit("[deploy] production faucet account must not use dev account (Alice/Bob)")
+
+print(f"[deploy] strict production validation passed for {spec_path}")
+PY
+}
+
+finalize_production_spec_cmd() {
+  local mode="$1"
+  local config_path="$2"
+  local out_dir="${3:-${ROOT_DIR}/chain-specs/finalized/${mode}}"
+  local source_dir="${ROOT_DIR}/chain-specs/generated/${mode}"
+  local source_plain="${source_dir}/production-plain.json"
+  local out_plain="${out_dir}/production-plain.json"
+  local out_raw="${out_dir}/production-raw.json"
+  local node_bin
+
+  node_bin="$(node_bin_for_profile debug)"
+  if [[ ! -x "$node_bin" ]]; then
+    echo "[deploy] node binary not found at ${node_bin}; building debug binaries first"
+    build_cmd "$mode" debug
+  fi
+
+  if [[ ! -f "$source_plain" ]]; then
+    echo "[deploy] source production plain spec missing at ${source_plain}; generating specs first"
+    specs_cmd "$mode" "$source_dir"
+  fi
+
+  if [[ ! -f "$config_path" ]]; then
+    echo "[deploy] finalize config missing: ${config_path}" >&2
+    exit 1
+  fi
+
+  mkdir -p "$out_dir"
+
+  python3 - "$source_plain" "$config_path" "$out_plain" <<'PY'
+import json
+import pathlib
+import sys
+
+source_plain = pathlib.Path(sys.argv[1])
+config_path = pathlib.Path(sys.argv[2])
+out_plain = pathlib.Path(sys.argv[3])
+
+spec = json.loads(source_plain.read_text())
+cfg = json.loads(config_path.read_text())
+
+required = ["bootnodes", "aura_authorities", "grandpa_authorities", "balances", "sudo_key"]
+missing = [k for k in required if k not in cfg]
+if missing:
+    raise SystemExit(f"[deploy] finalize config missing required fields: {', '.join(missing)}")
+
+bootnodes = cfg["bootnodes"]
+aura = cfg["aura_authorities"]
+grandpa = cfg["grandpa_authorities"]
+balances = cfg["balances"]
+
+if not isinstance(bootnodes, list) or not bootnodes:
+    raise SystemExit("[deploy] bootnodes must be a non-empty array")
+if not isinstance(aura, list) or not aura:
+    raise SystemExit("[deploy] aura_authorities must be a non-empty array")
+if not isinstance(grandpa, list) or not grandpa:
+    raise SystemExit("[deploy] grandpa_authorities must be a non-empty array")
+if len(aura) != len(grandpa):
+    raise SystemExit("[deploy] aura_authorities and grandpa_authorities must have equal lengths")
+if not isinstance(balances, list) or not balances:
+    raise SystemExit("[deploy] balances must be a non-empty array of [account, amount]")
+
+for bootnode in bootnodes:
+    if not isinstance(bootnode, str) or not bootnode:
+        raise SystemExit("[deploy] each bootnode must be a non-empty string")
+    if "127.0.0.1" in bootnode or "localhost" in bootnode:
+        raise SystemExit(f"[deploy] bootnode must not be localhost: {bootnode}")
+
+for auth in aura:
+    if not isinstance(auth, str) or not auth:
+        raise SystemExit("[deploy] each aura authority must be a non-empty string")
+
+normalized_grandpa = []
+for entry in grandpa:
+    if not isinstance(entry, list) or len(entry) != 2:
+        raise SystemExit("[deploy] each grandpa authority entry must be [address, weight]")
+    addr, weight = entry
+    if not isinstance(addr, str) or not addr:
+        raise SystemExit("[deploy] each grandpa authority address must be a non-empty string")
+    try:
+        w = int(weight)
+    except Exception as exc:
+        raise SystemExit(f"[deploy] invalid grandpa weight for {addr}: {weight!r}") from exc
+    if w <= 0:
+        raise SystemExit(f"[deploy] grandpa weight must be > 0 for {addr}")
+    normalized_grandpa.append([addr, w])
+
+normalized_balances = []
+for entry in balances:
+    if not isinstance(entry, list) or len(entry) != 2:
+        raise SystemExit("[deploy] each balances entry must be [account, amount]")
+    account, amount = entry
+    if not isinstance(account, str) or not account:
+        raise SystemExit("[deploy] each balance account must be a non-empty string")
+    try:
+        a = int(amount)
+    except Exception as exc:
+        raise SystemExit(f"[deploy] invalid balance amount for {account}: {amount!r}") from exc
+    if a <= 0:
+        raise SystemExit(f"[deploy] balance amount must be > 0 for {account}")
+    normalized_balances.append([account, a])
+
+if spec.get("id") != "eterra_production":
+    raise SystemExit(f"[deploy] source spec id must be eterra_production, got {spec.get('id')!r}")
+
+spec["chainType"] = "Live"
+if "name" in cfg:
+    spec["name"] = cfg["name"]
+spec["bootNodes"] = bootnodes
+
+genesis = spec.setdefault("genesis", {})
+runtime_genesis = genesis.setdefault("runtimeGenesis", {})
+patch = runtime_genesis.setdefault("patch", {})
+
+sudo_key = cfg["sudo_key"]
+if not isinstance(sudo_key, str) or not sudo_key:
+    raise SystemExit("[deploy] sudo_key must be a non-empty string")
+patch.setdefault("sudo", {})["key"] = sudo_key
+patch.setdefault("aura", {})["authorities"] = aura
+patch.setdefault("grandpa", {})["authorities"] = normalized_grandpa
+patch.setdefault("balances", {})["balances"] = normalized_balances
+
+faucet = patch.setdefault("eterraFaucet", {})
+faucet_account = cfg.get("faucet_account", normalized_balances[0][0])
+if not isinstance(faucet_account, str) or not faucet_account:
+    raise SystemExit("[deploy] faucet_account must be a non-empty string")
+faucet["faucetAccount"] = faucet_account
+
+if "faucet_payout_amount" in cfg:
+    try:
+        payout = int(cfg["faucet_payout_amount"])
+    except Exception as exc:
+        raise SystemExit(f"[deploy] invalid faucet_payout_amount: {cfg['faucet_payout_amount']!r}") from exc
+    if payout <= 0:
+        raise SystemExit("[deploy] faucet_payout_amount must be > 0")
+    faucet["payoutAmount"] = payout
+
+if "initial_servers" in cfg:
+    servers = cfg["initial_servers"]
+    if not isinstance(servers, list):
+        raise SystemExit("[deploy] initial_servers must be an array when provided")
+    for srv in servers:
+        if not isinstance(srv, str) or not srv:
+            raise SystemExit("[deploy] each initial_servers entry must be a non-empty string")
+    patch.setdefault("eterraGameAuthority", {})["initialServers"] = servers
+
+out_plain.write_text(json.dumps(spec, indent=2) + "\n")
+print(f"[deploy] wrote finalized production plain spec: {out_plain}")
+PY
+
+  "$node_bin" build-spec --disable-default-bootnode --chain "$out_plain" --raw > "$out_raw"
+  verify_production_spec_cmd "$out_plain"
+  echo "[deploy] wrote finalized production raw spec: ${out_raw}"
 }
 
 wait_for_rpc() {
@@ -342,6 +586,14 @@ main() {
       ;;
     verify-specs)
       verify_specs_cmd "$@"
+      ;;
+    verify-production)
+      [[ $# -eq 1 ]] || { usage; exit 1; }
+      verify_production_spec_cmd "$1"
+      ;;
+    finalize-production-spec)
+      [[ $# -ge 2 ]] || { usage; exit 1; }
+      finalize_production_spec_cmd "$@"
       ;;
     smoke)
       [[ $# -ge 1 ]] || { usage; exit 1; }

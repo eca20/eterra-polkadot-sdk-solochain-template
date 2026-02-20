@@ -1,0 +1,42 @@
+{
+  "name": "Eterra Production",
+  "bootnodes": [
+    "/dns4/validator-1.example.com/tcp/30333/p2p/REPLACE_WITH_PEER_ID_1",
+    "/dns4/validator-2.example.com/tcp/30333/p2p/REPLACE_WITH_PEER_ID_2"
+  ],
+  "aura_authorities": [
+    "REPLACE_WITH_AURA_SS58_1",
+    "REPLACE_WITH_AURA_SS58_2"
+  ],
+  "grandpa_authorities": [
+    [
+      "REPLACE_WITH_GRANDPA_SS58_1",
+      1
+    ],
+    [
+      "REPLACE_WITH_GRANDPA_SS58_2",
+      1
+    ]
+  ],
+  "balances": [
+    [
+      "REPLACE_WITH_ENDOWED_ACCOUNT_1",
+      1152921504606846976
+    ],
+    [
+      "REPLACE_WITH_ENDOWED_ACCOUNT_2",
+      1152921504606846976
+    ],
+    [
+      "REPLACE_WITH_ENDOWED_ACCOUNT_3",
+      1152921504606846976
+    ]
+  ],
+  "sudo_key": "REPLACE_WITH_OWNER_SUDO_ACCOUNT",
+  "faucet_account": "REPLACE_WITH_FAUCET_ACCOUNT",
+  "faucet_payout_amount": 1000000000000000,
+  "initial_servers": [
+    "REPLACE_WITH_SERVER_ACCOUNT_1",
+    "REPLACE_WITH_SERVER_ACCOUNT_2"
+  ]
+}

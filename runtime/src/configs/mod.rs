@@ -72,11 +72,8 @@ use super::{
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 
 // Runtime privileged-origin policy:
-// - default (testnet/dev): Root is allowed for operational velocity.
-// - runtime-production feature: privileged paths are disabled until governance origins are wired.
-#[cfg(feature = "runtime-production")]
-type PrivilegedControlOrigin = frame_system::EnsureNever<AccountId>;
-#[cfg(not(feature = "runtime-production"))]
+// centralized owner-control in both default and production modes.
+// This alias can be switched to governance origins when governance is introduced.
 type PrivilegedControlOrigin = frame_system::EnsureRoot<AccountId>;
 
 parameter_types! {

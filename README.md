@@ -17,9 +17,25 @@ Use the deployment helper to keep local and CI command paths aligned:
 ./scripts/deploy.sh specs default
 ./scripts/deploy.sh specs production
 
-# Start a local validator (inserts Alice keys and uses generated raw spec)
-./scripts/run-node.sh default testnet release
-./scripts/run-node.sh production production release
+# Strict validation for a finalized production plain spec (expects real keys + bootnodes + sudo key)
+./scripts/deploy.sh verify-production chain-specs/production-plain.json
+
+# Finalize production plain/raw specs from generated baseline + overrides config
+cp chain-specs/production-keys.example.json chain-specs/production-keys.json
+# fills addresses from suris (supports "@/path/to/secret" entries)
+./scripts/generate-production-overrides.py \
+  --in chain-specs/production-keys.json \
+  --out chain-specs/production-overrides.json
+./scripts/deploy.sh finalize-production-spec production chain-specs/production-overrides.json
+# outputs: chain-specs/finalized/production/production-{plain,raw}.json
+
+# Start local validator/full nodes (safe RPC defaults)
+./scripts/run-node.sh default testnet release validator
+./scripts/run-node.sh production production release full
+
+# Start a production validator (requires non-dev key suris)
+AURA_SURI="<sr25519_suri>" GRAN_SURI="<ed25519_suri>" \
+  ./scripts/run-node.sh production production release validator
 ```
 
 Equivalent `make` shortcuts:
@@ -27,10 +43,15 @@ Equivalent `make` shortcuts:
 ```bash
 make deploy-check-default
 make deploy-check-production
+make deploy-verify-production SPEC=chain-specs/production-plain.json
+make deploy-generate-production-overrides-production
+make deploy-finalize-production-production PROD_CONFIG=chain-specs/production-overrides.json
 make run-default-testnet
 make run-production
 make help
 ```
+
+`scripts/run-node.sh` defaults to local-only RPC (`EXPOSE_RPC=0`) and blocks unsafe RPC on production unless explicitly overridden.
 
 ## 1) Build
 
@@ -75,7 +96,7 @@ rm -f chain-specs/production-plain.json chain-specs/production-raw.json
   --chain chain-specs/production-plain.json --raw > chain-specs/production-raw.json
 ```
 
-Note: built-in `production` config is a baseline template. Replace authority keys, balances, bootnodes, and allocations before real deployment.
+Note: built-in `production` config is a baseline template. Replace authority keys, balances, bootnodes, and the sudo owner key before real deployment.
 
 ## 3) Optional: Purge Local Testnet DB
 

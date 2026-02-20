@@ -57,9 +57,23 @@ jobs:
         run: cargo build --locked --release
         timeout-minutes: 90
 
+      - name: Validate checked-in production spec (optional)
+        run: |
+          if [ -f chain-specs/production-plain.json ]; then
+            ./scripts/deploy.sh verify-production chain-specs/production-plain.json
+          else
+            echo "No chain-specs/production-plain.json found; skipping strict production spec validation."
+          fi
+
+      - name: Generate release checksums
+        run: |
+          sha256sum target/release/solochain-eterra-node > SHA256SUMS.txt
+          sha256sum target/release/wbuild/solochain-eterra-runtime/solochain_eterra_runtime.compact.compressed.wasm >> SHA256SUMS.txt
+
       - name: Upload the binaries
         uses: softprops/action-gh-release@v2
         with:
           files: |
             target/release/solochain-eterra-node
             target/release/wbuild/solochain-eterra-runtime/solochain_eterra_runtime.compact.compressed.wasm
+            SHA256SUMS.txt

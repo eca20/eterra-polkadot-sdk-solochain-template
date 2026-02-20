@@ -36,24 +36,24 @@ Establish a minimum production-grade baseline for:
 
 1. Runtime origin selector
    - Default mode (testnet/dev): `PrivilegedControlOrigin = EnsureRoot<AccountId>`.
-   - Production mode (`runtime-production` feature): `PrivilegedControlOrigin = EnsureNever<AccountId>`.
+   - Production mode (`runtime-production` feature): `PrivilegedControlOrigin = EnsureRoot<AccountId>`.
 2. Pallets wired to `PrivilegedControlOrigin`
    - `pallet-eterra-game-authority::AdminOrigin`
    - `pallet-eterra-gamer::ExpIssuerOrigin`
    - `pallet-node-authorization::{AddOrigin, RemoveOrigin, SwapOrigin, ResetOrigin}`
 3. Chain spec policy
    - `dev` / `local_testnet` / `testnet`: Sudo key is set.
-   - `production` (`eterra_production`): Sudo key is `None`.
+   - `production` (`eterra_production`): Sudo key is required (owner-control).
 4. Effect
-   - In production mode, privileged maintenance paths are intentionally disabled at origin level until governance origins are introduced.
-   - In testnet mode, root-controlled operations remain available for iteration speed.
+   - In production mode, root-controlled maintenance and runtime upgrades remain available to the owner key.
+   - Governance migration can later replace `EnsureRoot` with governance origins.
 
 ### Build And Run Modes
 
 1. Testnet/default runtime behavior
    - `cargo build -p solochain-eterra-runtime --release --features runtime-benchmarks`
    - `cargo run -p solochain-eterra-node -- --chain testnet`
-2. Production runtime behavior (privileged origins disabled)
+2. Production runtime behavior (owner-controlled privileged origins)
    - `cargo build -p solochain-eterra-runtime --release --features \"runtime-benchmarks,runtime-production\"`
    - `cargo run -p solochain-eterra-node --features runtime-production -- --chain production`
 
@@ -63,8 +63,25 @@ Establish a minimum production-grade baseline for:
    - `./scripts/deploy.sh pipeline-check default`
 2. Production policy validation
    - `./scripts/deploy.sh pipeline-check production`
+3. Strict production spec validation (for finalized human spec)
+   - `./scripts/deploy.sh verify-production chain-specs/production-plain.json`
+4. Finalize strict production plain/raw specs from override config
+   - `./scripts/deploy.sh finalize-production-spec production chain-specs/production-overrides.json`
+5. Generate overrides from key material (SURI -> SS58)
+   - `./scripts/generate-production-overrides.py --in chain-specs/production-keys.json --out chain-specs/production-overrides.json`
 
 These commands build runtime+node, generate dev/testnet/production specs with `--disable-default-bootnode`, verify spec invariants (including sudo policy), and smoke-test local block production.
+The strict production validator additionally enforces non-placeholder authorities, explicit bootnodes, required owner sudo key, and no Alice/Bob placeholder funding.
+
+### Node Launch Safety Defaults
+
+1. `scripts/run-node.sh` now defaults to:
+   - local-only RPC (`EXPOSE_RPC=0`)
+   - safe RPC methods
+   - `full` role when chain is `production` (to avoid accidental validator startup with dev keys)
+2. Production validator startup requires explicit key suris:
+   - `AURA_SURI=<sr25519> GRAN_SURI=<ed25519> ./scripts/run-node.sh production production release validator`
+3. Unsafe RPC on production is blocked unless explicitly overridden with `ALLOW_UNSAFE_RPC_IN_PRODUCTION=1`.
 
 ## Origin/Access Audit (By Extrinsic)
 

@@ -150,8 +150,8 @@ pub fn production_config() -> Result<ChainSpec, String> {
             authority_keys_from_seed("Alice"),
             authority_keys_from_seed("Bob"),
         ],
-        // No sudo key in production baseline.
-        None,
+        // Owner-controlled production baseline. Replace in finalized spec with your cold owner key.
+        Some(get_account_id_from_seed::<sr25519::Public>("Alice")),
         vec![
             get_account_id_from_seed::<sr25519::Public>("Alice"),
             get_account_id_from_seed::<sr25519::Public>("Bob"),
