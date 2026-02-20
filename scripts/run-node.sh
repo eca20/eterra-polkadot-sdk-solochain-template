@@ -1,49 +1,73 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build runtime + node
-cargo build -r -p solochain-eterra-runtime -p solochain-eterra-node
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+MODE="${1:-default}"          # default | production
+CHAIN="${2:-testnet}"         # dev | testnet | production
+PROFILE="${3:-release}"       # debug | release
 
-# Regenerate chain specs
-rm -f chain-specs/testnet-plain.json chain-specs/testnet-raw.json
+if [[ "$MODE" != "default" && "$MODE" != "production" ]]; then
+  echo "usage: scripts/run-node.sh [default|production] [dev|testnet|production] [debug|release]" >&2
+  exit 1
+fi
+if [[ "$CHAIN" != "dev" && "$CHAIN" != "testnet" && "$CHAIN" != "production" ]]; then
+  echo "usage: scripts/run-node.sh [default|production] [dev|testnet|production] [debug|release]" >&2
+  exit 1
+fi
+if [[ "$PROFILE" != "debug" && "$PROFILE" != "release" ]]; then
+  echo "usage: scripts/run-node.sh [default|production] [dev|testnet|production] [debug|release]" >&2
+  exit 1
+fi
 
-./target/release/solochain-eterra-node build-spec \
-  --chain testnet > chain-specs/testnet-plain.json
+OUT_DIR="${ROOT_DIR}/chain-specs/generated/${MODE}"
+BASE_PATH="${ROOT_DIR}/data/${MODE}-${CHAIN}-alice"
 
-./target/release/solochain-eterra-node build-spec \
-  --chain chain-specs/testnet-plain.json --raw > chain-specs/testnet-raw.json
+"${ROOT_DIR}/scripts/deploy.sh" build "$MODE" "$PROFILE"
+"${ROOT_DIR}/scripts/deploy.sh" specs "$MODE" "$OUT_DIR"
+"${ROOT_DIR}/scripts/deploy.sh" verify-specs "$OUT_DIR"
 
-# Fresh local base path
-BASE=./data/alice
-rm -rf "$BASE"
-mkdir -p "$BASE/chains/eterra_testnet/network"
+if [[ "$PROFILE" == "release" ]]; then
+  NODE_BIN="${ROOT_DIR}/target/release/solochain-eterra-node"
+else
+  NODE_BIN="${ROOT_DIR}/target/debug/solochain-eterra-node"
+fi
 
-# Generate libp2p key
-./target/release/solochain-eterra-node key generate-node-key \
-  --chain chain-specs/testnet-raw.json \
-  --file "$BASE/chains/eterra_testnet/network/secret_ed25519"
+RAW_SPEC="${OUT_DIR}/${CHAIN}-raw.json"
+mkdir -p "${BASE_PATH}/network"
 
-# Insert AURA and GRANDPA keys
-./target/release/solochain-eterra-node key insert \
-  --base-path "$BASE" \
-  --chain chain-specs/testnet-raw.json \
+# Keep a stable node key per base-path so p2p identity is persistent.
+if [[ ! -f "${BASE_PATH}/network/secret_ed25519" ]]; then
+  "$NODE_BIN" key generate-node-key \
+    --chain "$RAW_SPEC" \
+    --file "${BASE_PATH}/network/secret_ed25519" >/dev/null 2>&1
+fi
+
+# Insert validator keys for local single-validator operation.
+"$NODE_BIN" key insert \
+  --base-path "$BASE_PATH" \
+  --chain "$RAW_SPEC" \
   --key-type aura \
   --scheme Sr25519 \
-  --suri //Alice
+  --suri //Alice >/dev/null
 
-./target/release/solochain-eterra-node key insert \
-  --base-path "$BASE" \
-  --chain chain-specs/testnet-raw.json \
+"$NODE_BIN" key insert \
+  --base-path "$BASE_PATH" \
+  --chain "$RAW_SPEC" \
   --key-type gran \
   --scheme Ed25519 \
-  --suri //Alice
+  --suri //Alice >/dev/null
 
-# Run the node
-./target/release/solochain-eterra-node \
-  --chain chain-specs/testnet-raw.json \
-  --base-path "$BASE" \
-  --validator --alice \
+echo "[run-node] mode=${MODE} chain=${CHAIN} profile=${PROFILE}"
+echo "[run-node] base-path=${BASE_PATH}"
+
+exec "$NODE_BIN" \
+  --chain "$RAW_SPEC" \
+  --base-path "$BASE_PATH" \
+  --node-key-file "${BASE_PATH}/network/secret_ed25519" \
+  --validator \
   --force-authoring \
-  --port 30333 --rpc-port 9944 \
+  --port 30333 \
+  --rpc-port 9944 \
   --public-addr /ip4/127.0.0.1/tcp/30333 \
-  --unsafe-rpc-external --rpc-cors all
+  --unsafe-rpc-external \
+  --rpc-cors all

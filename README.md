@@ -2,6 +2,36 @@
 
 When runtime code changes (pallet logic, config constants, weights, `spec_version`, etc.), rebuild runtime/node and regenerate chain specs before restarting nodes.
 
+## Hardened Deployment Commands
+
+Use the deployment helper to keep local and CI command paths aligned:
+
+```bash
+# Full validation (build + specs + verification + smoke) for dev/testnet/prod chains
+./scripts/deploy.sh pipeline-check default
+
+# Same validation with production origin policy enabled
+./scripts/deploy.sh pipeline-check production
+
+# Generate specs only (output: chain-specs/generated/<mode>)
+./scripts/deploy.sh specs default
+./scripts/deploy.sh specs production
+
+# Start a local validator (inserts Alice keys and uses generated raw spec)
+./scripts/run-node.sh default testnet release
+./scripts/run-node.sh production production release
+```
+
+Equivalent `make` shortcuts:
+
+```bash
+make deploy-check-default
+make deploy-check-production
+make run-default-testnet
+make run-production
+make help
+```
+
 ## 1) Build
 
 ### Testnet/default mode

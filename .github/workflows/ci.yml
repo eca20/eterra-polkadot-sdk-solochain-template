@@ -72,6 +72,22 @@ jobs:
         shell: bash
         timeout-minutes: 5
 
+  deployment-pipeline:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [default, production]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/free-disk-space
+      - uses: ./.github/actions/ubuntu-dependencies
+
+      - name: Validate deployment pipeline (${{ matrix.mode }})
+        run: ./scripts/deploy.sh pipeline-check ${{ matrix.mode }}
+        timeout-minutes: 45
+
   build-docker:
     runs-on: ubuntu-latest
     steps:

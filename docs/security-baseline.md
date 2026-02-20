@@ -57,6 +57,15 @@ Establish a minimum production-grade baseline for:
    - `cargo build -p solochain-eterra-runtime --release --features \"runtime-benchmarks,runtime-production\"`
    - `cargo run -p solochain-eterra-node --features runtime-production -- --chain production`
 
+### Deployment Pipeline Commands
+
+1. Default mode validation
+   - `./scripts/deploy.sh pipeline-check default`
+2. Production policy validation
+   - `./scripts/deploy.sh pipeline-check production`
+
+These commands build runtime+node, generate dev/testnet/production specs with `--disable-default-bootnode`, verify spec invariants (including sudo policy), and smoke-test local block production.
+
 ## Origin/Access Audit (By Extrinsic)
 
 1. `pallet-eterra`
