@@ -288,6 +288,48 @@ fn freeze_collection_prevents_new_uploads() {
 }
 
 #[test]
+fn create_collection_fails_on_collection_id_overflow() {
+    new_test_ext().execute_with(|| {
+        NextCollectionId::<Test>::put(u32::MAX);
+
+        assert_noop!(
+            EterraMedia::create_collection(
+                RuntimeOrigin::signed(1),
+                bounded_name(b"Overflow"),
+                bounded_desc(b"Overflow"),
+            ),
+            Error::<Test>::CollectionIdOverflow
+        );
+    });
+}
+
+#[test]
+fn register_media_fails_on_media_id_overflow() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraMedia::create_collection(
+            RuntimeOrigin::signed(1),
+            bounded_name(b"Coll"),
+            bounded_desc(b"Desc"),
+        ));
+
+        NextMediaId::<Test>::put(u64::MAX);
+
+        assert_noop!(
+            EterraMedia::register_media(
+                RuntimeOrigin::signed(1),
+                Some(0),
+                bounded_uri(b"ipfs://overflow"),
+                bounded_ct(b"image/png"),
+                MediaClass::CoreAsset,
+                Delivery::RemoteIpfs,
+                None,
+            ),
+            Error::<Test>::MediaIdOverflow
+        );
+    });
+}
+
+#[test]
 fn genesis_creates_default_collection_and_roles() {
     new_test_ext_with_default_collection().execute_with(|| {
         // In the mock, DefaultCollectionId = 0 and DefaultCollectionOwnerForMock::get() = 1.

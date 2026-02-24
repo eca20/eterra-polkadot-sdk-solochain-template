@@ -66,17 +66,19 @@ pub trait GameAdapter {
 #[cfg(feature = "runtime-benchmarks")]
 pub trait BenchmarkHelper<A: GameAdapter> {
     fn bench_state() -> A::State;
-    fn bench_difficulty() -> u8 { 100 }
+    fn bench_difficulty() -> u8 {
+        100
+    }
 }
 
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
-    use frame_support::sp_runtime::traits::Hash as HashTrait;
-    use frame_support::{dispatch::DispatchResultWithPostInfo, pallet_prelude::*};
-    use frame_support::traits::StorageVersion;
-    use frame_system::pallet_prelude::*;
     use crate::weights::WeightInfo;
+    use frame_support::sp_runtime::traits::Hash as HashTrait;
+    use frame_support::traits::StorageVersion;
+    use frame_support::{dispatch::DispatchResultWithPostInfo, pallet_prelude::*};
+    use frame_system::pallet_prelude::*;
 
     const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
@@ -233,12 +235,14 @@ pub mod pallet {
             let sims_per_action = (iters / n as u32).max(1);
 
             let me = A::current_player(state);
-
-            let mut best_idx = 0usize;
             let mut best_score = i64::MIN;
+            let mut best_action: Option<A::Action> = None;
 
             for i in 0..n {
-                let action = actions[i].as_ref().unwrap();
+                let Some(action) = actions[i].as_ref() else {
+                    // Defensive: tolerate malformed adapters that report `n` but leave holes.
+                    continue;
+                };
                 let mut accum: i64 = 0;
                 for j in 0..sims_per_action {
                     let seed = Self::prng_u64::<T>((i as u64) << 32 | j as u64);
@@ -249,11 +253,11 @@ pub mod pallet {
                 let avg = accum / sims_per_action as i64;
                 if avg > best_score {
                     best_score = avg;
-                    best_idx = i;
+                    best_action = Some(action.clone());
                 }
             }
 
-            actions[best_idx].clone()
+            best_action
         }
 
         fn random_playout<A: GameAdapter>(start: &A::State, me: A::Player, mut seed: u64) -> i32 {

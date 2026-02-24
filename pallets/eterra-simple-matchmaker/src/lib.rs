@@ -340,3 +340,8 @@ pub trait GameCreator<AccountId> {
     /// the matchmaker only logs the attempt and the matched pair.
     fn create_from_matchmaking(a: &AccountId, b: &AccountId) -> sp_runtime::DispatchResult;
 }
+
+#[cfg(test)]
+mod mock;
+#[cfg(test)]
+mod tests;

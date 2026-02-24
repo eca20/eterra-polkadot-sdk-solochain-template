@@ -244,6 +244,10 @@ pub mod pallet {
         UnknownMedia,
         /// Media is already deprecated.
         AlreadyDeprecated,
+        /// The collection ID counter exhausted available `u32` values.
+        CollectionIdOverflow,
+        /// The media ID counter exhausted available `u64` values.
+        MediaIdOverflow,
     }
 
     #[pallet::genesis_config]
@@ -347,7 +351,8 @@ pub mod pallet {
             let who = ensure_signed(origin)?;
 
             let id = NextCollectionId::<T>::get();
-            NextCollectionId::<T>::put(id.checked_add(1).expect("overflow in collection id"));
+            let next_id = id.checked_add(1).ok_or(Error::<T>::CollectionIdOverflow)?;
+            NextCollectionId::<T>::put(next_id);
 
             let info = CollectionInfo {
                 owner: who.clone(),
@@ -440,7 +445,8 @@ pub mod pallet {
             ensure!(is_owner || can_upload, Error::<T>::NoPermission);
 
             let media_id = NextMediaId::<T>::get();
-            NextMediaId::<T>::put(media_id.checked_add(1).expect("overflow in media id"));
+            let next_media_id = media_id.checked_add(1).ok_or(Error::<T>::MediaIdOverflow)?;
+            NextMediaId::<T>::put(next_media_id);
 
             let metadata = MediaMetadata {
                 collection_id,

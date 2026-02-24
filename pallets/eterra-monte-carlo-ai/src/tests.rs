@@ -1,7 +1,7 @@
 use super::*;
+use crate::mock::NimAction;
 use crate::pallet::Pallet as EterraAi;
 use frame_support::assert_ok;
-use crate::mock::NimAction;
 
 struct AdapterShim;
 
@@ -303,5 +303,54 @@ fn ai_prefers_capture_when_available_high_difficulty() {
                 Some(eterra_card_ai_adapter::eterra_adapter::Possession::PlayerOne)
             );
         }
+    });
+}
+
+#[test]
+fn suggest_tolerates_sparse_action_buffer_without_panicking() {
+    struct SparseAdapter;
+
+    impl crate::GameAdapter for SparseAdapter {
+        type State = ();
+        type Action = u8;
+        type Player = u8;
+
+        fn list_actions<const MAX: usize>(
+            _state: &Self::State,
+            out: &mut [Option<Self::Action>; MAX],
+        ) -> usize {
+            if MAX >= 2 {
+                out[0] = Some(7);
+                // Intentionally leave out[1] as None while reporting 2 actions.
+                return 2;
+            }
+            0
+        }
+
+        fn apply(_state: &Self::State, _action: &Self::Action) -> Self::State {
+            ()
+        }
+
+        fn is_terminal(_state: &Self::State) -> bool {
+            false
+        }
+
+        fn current_player(_state: &Self::State) -> Self::Player {
+            0
+        }
+
+        fn score(_state: &Self::State, _for_player: Self::Player) -> i32 {
+            1
+        }
+
+        fn random_action(_state: &Self::State, _seed: u64) -> Option<Self::Action> {
+            None
+        }
+    }
+
+    let mut ext = crate::mock::new_test_ext();
+    ext.execute_with(|| {
+        let action = EterraAi::<crate::mock::Test>::suggest::<SparseAdapter>(&(), 90);
+        assert_eq!(action, Some(7));
     });
 }
