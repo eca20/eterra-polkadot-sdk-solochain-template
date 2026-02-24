@@ -21,7 +21,6 @@ use frame_support::traits::{Currency, ExistenceRequirement};
 use frame_support::{pallet_prelude::*, traits::Get, BoundedVec};
 // ===== New: utilities for in-pallet game logic =====
 
-
 use frame_support::pallet_prelude::ConstU32;
 use frame_system::{ensure_signed, pallet_prelude::OriginFor};
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
@@ -238,6 +237,8 @@ pub mod pallet {
         /// You do not own the card you’re trying to act upon.
         NotCardOwner,
         OwnedListFull,
+        /// No more card IDs are available.
+        CardIdExhausted,
         // --- Match errors ---
         CardNotFinalized,
         /// Card is not listed for sale.
@@ -398,6 +399,9 @@ pub mod pallet {
     impl<T: Config> Pallet<T> {
         /// Create a brand-new card with `owner`.
         fn create_new_card(owner: &T::AccountId) -> Result<u32, DispatchError> {
+            let card_id = NextCardId::<T>::get();
+            let next_card_id = card_id.checked_add(1).ok_or(Error::<T>::CardIdExhausted)?;
+
             // Charge the mint fee to the caller and send it to the faucet account.
             // This will fail with an error if the caller has insufficient funds.
             let fee: <<T as Config>::Currency as Currency<T::AccountId>>::Balance =
@@ -408,8 +412,6 @@ pub mod pallet {
                 fee,
                 ExistenceRequirement::KeepAlive,
             )?;
-
-            let card_id = NextCardId::<T>::get();
 
             // Derive pseudo-random bytes from block, owner, seed, and card_id
             let current_block = <frame_system::Pallet<T>>::block_number();
@@ -461,7 +463,7 @@ pub mod pallet {
                 Ok(())
             })?;
 
-            NextCardId::<T>::put(card_id + 1);
+            NextCardId::<T>::put(next_card_id);
 
             Ok(card_id)
         }

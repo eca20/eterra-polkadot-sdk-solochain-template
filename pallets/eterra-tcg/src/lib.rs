@@ -25,9 +25,10 @@ use sp_std::prelude::*;
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
-    use frame_support::traits::ConstU32;
-    use frame_system::pallet_prelude::BlockNumberFor;
     use crate::weights::WeightInfo;
+    use frame_support::traits::ConstU32;
+    use frame_support::transactional;
+    use frame_system::pallet_prelude::BlockNumberFor;
 
     const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
@@ -206,6 +207,8 @@ pub mod pallet {
         NotCardOwner,
         /// The card was already finalized and cannot be mutated.
         CardAlreadyFinalized,
+        /// No more card IDs are available.
+        CardIdExhausted,
     }
 
     // ------------------
@@ -218,6 +221,7 @@ pub mod pallet {
         /// Each card is stored globally in `Cards<T>`.
         #[pallet::call_index(0)]
         #[pallet::weight(T::WeightInfo::mint_pack())]
+        #[transactional]
         pub fn mint_pack(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
 
@@ -261,6 +265,7 @@ pub mod pallet {
         /// Generate new slot values for the user’s current (active) card, up to `MaxAttempts`.
         #[pallet::call_index(1)]
         #[pallet::weight(T::WeightInfo::generate_slot())]
+        #[transactional]
         pub fn generate_slot(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
 
@@ -320,6 +325,7 @@ pub mod pallet {
         /// Accept (finalize) the user’s current card’s slot values immediately.
         #[pallet::call_index(2)]
         #[pallet::weight(T::WeightInfo::accept_slot())]
+        #[transactional]
         pub fn accept_slot(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
 
@@ -356,6 +362,7 @@ pub mod pallet {
         /// changes to `to`.
         #[pallet::call_index(3)]
         #[pallet::weight(T::WeightInfo::transfer_card())]
+        #[transactional]
         pub fn transfer_card(
             origin: OriginFor<T>,
             card_id: u32,
@@ -389,6 +396,7 @@ pub mod pallet {
         /// Create a brand-new card with `owner`.
         fn create_new_card(owner: &T::AccountId) -> Result<u32, DispatchError> {
             let card_id = NextCardId::<T>::get();
+            let next_card_id = card_id.checked_add(1).ok_or(Error::<T>::CardIdExhausted)?;
             let new_card_info = CardInfo {
                 owner: owner.clone(),
                 finalized: false,
@@ -396,7 +404,7 @@ pub mod pallet {
             };
 
             Cards::<T>::insert(card_id, new_card_info);
-            NextCardId::<T>::put(card_id + 1);
+            NextCardId::<T>::put(next_card_id);
 
             Ok(card_id)
         }
@@ -488,5 +496,4 @@ pub mod pallet {
             Ok(())
         }
     }
-
 }

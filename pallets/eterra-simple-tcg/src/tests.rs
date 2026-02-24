@@ -168,3 +168,23 @@ fn buy_card_fails_if_not_listed() {
         );
     });
 }
+
+#[test]
+fn mint_card_fails_when_card_ids_exhausted_without_charging_fee() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        NextCardId::<Test>::put(u32::MAX);
+
+        let faucet_before = Balances::free_balance(ALICE);
+        let bob_before = Balances::free_balance(BOB);
+
+        assert_noop!(
+            EterraSimpleTCGConfig::mint_card(RuntimeOrigin::signed(BOB)),
+            Error::<Test>::CardIdExhausted
+        );
+
+        // No fee transfer should happen on ID exhaustion.
+        assert_eq!(Balances::free_balance(ALICE), faucet_before);
+        assert_eq!(Balances::free_balance(BOB), bob_before);
+    });
+}

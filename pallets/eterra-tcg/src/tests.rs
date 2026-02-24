@@ -1,5 +1,5 @@
 use crate::pallet::Config as EterraSlotsConfig;
-use crate::{mock::*, ActiveCard, Error, Event, PlayerPacks};
+use crate::{mock::*, ActiveCard, Cards, Error, Event, NextCardId, PlayerPacks};
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok};
 use log::{debug, Level, Metadata, Record};
@@ -164,6 +164,26 @@ fn test_mint_pack_storage_and_events() {
 }
 
 #[test]
+fn mint_pack_rolls_back_when_card_ids_exhausted() {
+    new_test_ext().execute_with(|| {
+        let player = 1u64;
+        NextCardId::<Test>::put(u32::MAX - 1);
+
+        assert_noop!(
+            EterraSlots::mint_pack(RuntimeOrigin::signed(player)),
+            Error::<Test>::CardIdExhausted
+        );
+
+        // Ensure transactional rollback: no partial cards or pack state persisted.
+        assert_eq!(NextCardId::<Test>::get(), u32::MAX - 1);
+        assert!(Cards::<Test>::get(u32::MAX - 1).is_none());
+        assert!(Cards::<Test>::get(u32::MAX).is_none());
+        assert!(PlayerPacks::<Test>::get(player).is_empty());
+        assert_eq!(ActiveCard::<Test>::get(player), None);
+    });
+}
+
+#[test]
 fn test_generate_slot_success() {
     init_logger();
     new_test_ext().execute_with(|| {
@@ -236,12 +256,7 @@ fn test_accept_slot_success() {
 
         // The event is now `SlotAccepted { card_id }`, no player field
         assert_event_found(
-            |e| {
-                matches!(
-                    e,
-                    RuntimeEvent::EterraSlots(Event::SlotAccepted { .. })
-                )
-            },
+            |e| matches!(e, RuntimeEvent::EterraSlots(Event::SlotAccepted { .. })),
             "SlotAccepted",
         );
     });

@@ -149,6 +149,9 @@ pub mod pallet {
             }
 
             let window = T::SponsoredClaimWindowBlocks::get();
+            if window.is_zero() {
+                return false;
+            }
             match SponsoredWindowStart::<T>::get(who) {
                 None => true,
                 Some(start) => {
@@ -190,7 +193,7 @@ pub mod pallet {
         fn note_sponsored_claim(who: &T::AccountId, now: BlockNumberFor<T>) {
             let window = T::SponsoredClaimWindowBlocks::get();
             let max = T::SponsoredClaimMaxCount::get();
-            if max == 0 {
+            if max == 0 || window.is_zero() {
                 return;
             }
 
