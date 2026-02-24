@@ -194,8 +194,7 @@ impl OnChargeTransaction<Runtime> for FreeFaucetOrCurrencyAdapter {
         if let RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { dest }) = call {
             let zero_balance = Balances::free_balance(who).is_zero();
             let now = System::block_number();
-            let sponsored_ok =
-                pallet_eterra_faucet::Pallet::<Runtime>::can_receive_sponsored_claim(who, now);
+            let sponsored_ok = pallet_eterra_faucet::Pallet::<Runtime>::can_receive_sponsored_claim_pre_dispatch(who, now);
             if dest == who && zero_balance && sponsored_ok {
                 return Ok(Default::default());
             }

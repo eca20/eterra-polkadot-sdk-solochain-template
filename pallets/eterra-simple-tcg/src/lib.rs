@@ -33,6 +33,7 @@ use sp_std::prelude::*;
 pub mod pallet {
     use super::*;
     use crate::weights::WeightInfo;
+    use frame_support::transactional;
     use frame_system::pallet_prelude::BlockNumberFor;
 
     /// Convenience type aliases for IDs/balance types used in cards.
@@ -254,6 +255,7 @@ pub mod pallet {
         /// Mint a single card for the caller.
         #[pallet::call_index(0)]
         #[pallet::weight(<T as Config>::WeightInfo::mint_card())]
+        #[transactional]
         pub fn mint_card(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
             let card_id = Self::create_new_card(&player)?;
@@ -266,6 +268,7 @@ pub mod pallet {
         /// changes to `to`.
         #[pallet::call_index(1)]
         #[pallet::weight(<T as Config>::WeightInfo::transfer_card())]
+        #[transactional]
         pub fn transfer_card(
             origin: OriginFor<T>,
             card_id: u32,
@@ -295,6 +298,7 @@ pub mod pallet {
         /// List a card for sale at a fixed `price` (in chain base units).
         #[pallet::call_index(2)]
         #[pallet::weight(<T as Config>::WeightInfo::set_price())]
+        #[transactional]
         pub fn set_price(
             origin: OriginFor<T>,
             card_id: CardId,
@@ -329,6 +333,7 @@ pub mod pallet {
         /// Remove a card from sale.
         #[pallet::call_index(3)]
         #[pallet::weight(<T as Config>::WeightInfo::remove_price())]
+        #[transactional]
         pub fn remove_price(origin: OriginFor<T>, card_id: CardId) -> DispatchResult {
             let who = ensure_signed(origin)?;
             // Verify ownership
@@ -350,6 +355,7 @@ pub mod pallet {
         /// Buy a listed card at the asking price.
         #[pallet::call_index(4)]
         #[pallet::weight(<T as Config>::WeightInfo::buy_card())]
+        #[transactional]
         pub fn buy_card(origin: OriginFor<T>, card_id: CardId) -> DispatchResult {
             let buyer = ensure_signed(origin)?;
 

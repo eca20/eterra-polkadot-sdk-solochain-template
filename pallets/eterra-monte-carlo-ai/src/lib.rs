@@ -179,7 +179,7 @@ pub mod pallet {
                 action: action.clone(),
             });
 
-            Ok(Pays::No.into())
+            Ok(Pays::Yes.into())
         }
     }
 

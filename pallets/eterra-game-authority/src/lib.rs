@@ -216,8 +216,6 @@ pub mod pallet {
                 started: true,
                 ended: false,
             };
-            Games::<T>::insert(id, info);
-            NextGameId::<T>::put(id.saturating_add(1));
 
             // Schedule automatic end of game after MaxRoundBlocks from now.
             let now = <frame_system::Pallet<T>>::block_number();
@@ -226,6 +224,10 @@ pub mod pallet {
                 list.try_push(id).map_err(|_| Error::<T>::TooManyExpirations)?;
                 Ok(())
             })?;
+
+            // Persist game only after scheduling succeeded.
+            Games::<T>::insert(id, info);
+            NextGameId::<T>::put(id.saturating_add(1));
 
             Self::deposit_event(Event::GameCreated(id, server));
             Ok(())

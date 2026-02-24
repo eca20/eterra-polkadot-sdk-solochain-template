@@ -161,6 +161,31 @@ pub mod pallet {
             }
         }
 
+        /// Pre-dispatch sponsorship check used by transaction-fee charging.
+        /// This intentionally includes cooldown and faucet liquidity checks so
+        /// failing claims are not repeatedly fee-sponsored.
+        pub fn can_receive_sponsored_claim_pre_dispatch(
+            who: &T::AccountId,
+            now: BlockNumberFor<T>,
+        ) -> bool {
+            if !Self::can_receive_sponsored_claim(who, now) {
+                return false;
+            }
+
+            if let Some(last) = LastClaim::<T>::get(who) {
+                let next_allowed = last.saturating_add(T::ClaimCooldownBlocks::get());
+                if now < next_allowed {
+                    return false;
+                }
+            }
+
+            let Some(faucet) = FaucetAccount::<T>::get() else {
+                return false;
+            };
+            let amount: BalanceOf<T> = PayoutAmount::<T>::get();
+            T::Currency::free_balance(&faucet) >= amount
+        }
+
         /// Records one sponsored claim usage for `who` at block `now`.
         fn note_sponsored_claim(who: &T::AccountId, now: BlockNumberFor<T>) {
             let window = T::SponsoredClaimWindowBlocks::get();

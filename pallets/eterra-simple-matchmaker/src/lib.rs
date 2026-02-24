@@ -110,6 +110,11 @@ pub mod pallet {
             a: T::AccountId,
             b: T::AccountId,
         },
+        /// Emitted when game creation failed and players were requeued.
+        MatchCreateFailed {
+            a: T::AccountId,
+            b: T::AccountId,
+        },
         /// Emitted when the second pop was unavailable and the first player was requeued.
         Requeued {
             who: T::AccountId,
@@ -206,6 +211,16 @@ pub mod pallet {
     }
 
     impl<T: Config> Pallet<T> {
+        fn requeue_player(cap: QIndex, who: &T::AccountId) {
+            Tail::<T>::mutate(|tail| {
+                let idx = *tail % cap;
+                Ring::<T>::insert(idx, who);
+                *tail = tail.wrapping_add(1);
+            });
+            InQueue::<T>::insert(who, ());
+            LiveSize::<T>::mutate(|n| *n = n.saturating_add(1));
+        }
+
         fn pop_live(cap: QIndex) -> Option<T::AccountId> {
             Head::<T>::mutate(|head| {
                 // We’ll search up to `cap` slots (one full cycle) to find a live account.
@@ -261,13 +276,7 @@ pub mod pallet {
                 let b = match Self::pop_live(cap) {
                     Some(x) => x,
                     None => {
-                        Tail::<T>::mutate(|tail| {
-                            let idx = *tail % cap;
-                            Ring::<T>::insert(idx, &a);
-                            *tail = tail.wrapping_add(1);
-                        });
-                        InQueue::<T>::insert(&a, ());
-                        LiveSize::<T>::mutate(|n| *n = n.saturating_add(1));
+                        Self::requeue_player(cap, &a);
                         Self::deposit_event(Event::Requeued { who: a.clone() });
                         break;
                     }
@@ -280,13 +289,7 @@ pub mod pallet {
                 if a == b {
                     // Extremely defensive: never match the same account with itself.
                     // Requeue `a` and stop this processing round.
-                    Tail::<T>::mutate(|tail| {
-                        let idx = *tail % cap;
-                        Ring::<T>::insert(idx, &a);
-                        *tail = tail.wrapping_add(1);
-                    });
-                    InQueue::<T>::insert(&a, ());
-                    LiveSize::<T>::mutate(|n| *n = n.saturating_add(1));
+                    Self::requeue_player(cap, &a);
                     Self::deposit_event(Event::Requeued { who: a.clone() });
                     break;
                 }
@@ -295,8 +298,18 @@ pub mod pallet {
                     a: a.clone(),
                     b: b.clone(),
                 });
-                // Ask the game pallet to create a game for this pair. If it fails we still emit Matched.
-                let _ = T::GameCreator::create_from_matchmaking(&a, &b);
+                // Ask the game pallet to create a game for this pair.
+                if T::GameCreator::create_from_matchmaking(&a, &b).is_err() {
+                    Self::deposit_event(Event::MatchCreateFailed {
+                        a: a.clone(),
+                        b: b.clone(),
+                    });
+                    Self::requeue_player(cap, &a);
+                    Self::deposit_event(Event::Requeued { who: a.clone() });
+                    Self::requeue_player(cap, &b);
+                    Self::deposit_event(Event::Requeued { who: b.clone() });
+                    break;
+                }
                 Self::deposit_event(Event::Matched {
                     players: [a.clone(), b.clone()],
                 });
