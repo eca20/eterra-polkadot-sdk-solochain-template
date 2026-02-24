@@ -39,10 +39,8 @@ use sp_runtime::{
     traits::{One, AccountIdConversion},
     Perbill,
 };
-use sp_version::RuntimeVersion;
 use scale_info::TypeInfo;
-use codec::{Encode, Decode};
-use frame_support::traits::Get;
+use sp_version::RuntimeVersion;
 use frame_support::PalletId;
 
 // Bring in UNIT and HandProviderAdapter from the parent module (lib.rs)
@@ -173,6 +171,7 @@ parameter_types! {
 use pallet_transaction_payment::OnChargeTransaction;
 use sp_runtime::traits::{DispatchInfoOf, PostDispatchInfoOf};
 use sp_runtime::transaction_validity::TransactionValidityError;
+use sp_runtime::traits::Zero;
 
 pub struct FreeFaucetOrCurrencyAdapter;
 
@@ -190,12 +189,16 @@ impl OnChargeTransaction<Runtime> for FreeFaucetOrCurrencyAdapter {
         tip: Self::Balance,
         fee: Self::Balance,
     ) -> Result<Self::LiquidityInfo, TransactionValidityError> {
-        // If the call is the faucet claim, skip withdrawing any fee (including tip).
-        if matches!(
-            call,
-            RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { .. })
-        ) {
-            return Ok(Default::default());
+        // Sponsor only capped faucet claims from zero-balance accounts.
+        // This preserves onboarding/recovery while limiting abuse.
+        if let RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { dest }) = call {
+            let zero_balance = Balances::free_balance(who).is_zero();
+            let now = System::block_number();
+            let sponsored_ok =
+                pallet_eterra_faucet::Pallet::<Runtime>::can_receive_sponsored_claim(who, now);
+            if dest == who && zero_balance && sponsored_ok {
+                return Ok(Default::default());
+            }
         }
         // Otherwise delegate to the default adapter.
         <pallet_transaction_payment::FungibleAdapter<Balances, ()> as OnChargeTransaction<
@@ -250,91 +253,35 @@ impl pallet_node_authorization::Config for Runtime {
     type WeightInfo = ();
 }
 
-
-#[derive(Encode, Decode, TypeInfo, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, TypeInfo)]
 pub struct EterraNumPlayers;
-impl Get<u32> for EterraNumPlayers {
+impl frame_support::traits::Get<u32> for EterraNumPlayers {
     fn get() -> u32 {
-        2 // The number of players in the game
+        2
     }
 }
 
-pub struct EterraMaxRounds;
-impl Get<u8> for EterraMaxRounds {
-    fn get() -> u8 {
-        5 // The number of players in the game
-    }
-}
-
-pub struct MaxRollHistoryLength;
-impl Get<u32> for MaxRollHistoryLength {
-    fn get() -> u32 {
-        100 // The number of players in the game
-    }
-}
-
-pub struct EterraBlocksToPlayLimit;
-impl Get<u8> for EterraBlocksToPlayLimit {
-    fn get() -> u8 {
-        6 // The limit in blocks each player has until their turn is force finished
-          // Eventually, the force finish may allow the opponent to click to force finish
-          // but forcing the node to finish turns prevents stale games from laying around
-          // while risking bots accruing rewards.
-    }
-}
-
-pub struct MaxSlotLength;
-impl Get<u32> for MaxSlotLength {
-    fn get() -> u32 {
-        3 // The number of slots per slot roll
-    }
-}
-
-pub struct MaxOptionsPerSlot;
-impl Get<u32> for MaxOptionsPerSlot {
-    fn get() -> u32 {
-        10 // The number of players in the game
-    }
-}
-
-pub struct MaxRollsPerRound;
-impl Get<u32> for MaxRollsPerRound {
-    fn get() -> u32 {
-        3 // The number of players in the game
-    }
-}
-
-pub struct MaxWeightEntries;
-impl Get<u32> for MaxWeightEntries {
-    fn get() -> u32 {
-        100 // max symbol entries per reel (example)
-    }
-}
-
-pub struct MaxDrawingEntries;
-impl Get<u32> for MaxDrawingEntries {
-    fn get() -> u32 {
-        1_000 // max ticket holders processed per weekly draw
-    }
-}
 
 parameter_types! {
+    pub const EterraMaxRounds: u8 = 5;
+    // The limit in blocks each player has until their turn is force finished.
+    pub const EterraBlocksToPlayLimit: u8 = 6;
+    pub const MaxSlotLength: u32 = 3;
+    pub const MaxOptionsPerSlot: u32 = 10;
+    pub const MaxRollsPerRound: u32 = 3;
+    pub const MaxRollHistoryLength: u32 = 100;
+    pub const MaxWeightEntries: u32 = 100;
+    pub const MaxDrawingEntries: u32 = 1_000;
+
     // 6 seconds per block → ~30 blocks for ~3 minutes
     pub const MaxExpirationsPerBlock: u32 = 256; // tune as needed
-}
-
-parameter_types! {
     pub const MaxPlayersPerGameConst: u32 = 128; // tune as needed
-}
-
-parameter_types! {
     pub const MaxWellKnownNodes: u32 = 128;   // adjust as you like
     pub const MaxPeerIdLength: u32 = 128;     // libp2p PeerId length upper bound
-}
+    pub const FaucetClaimCooldownBlocks: BlockNumber = 14_400; // ~24h at 6s block time
+    pub const FaucetSponsoredClaimMaxCount: u32 = 3;
+    pub const FaucetSponsoredClaimWindowBlocks: BlockNumber = 432_000; // ~30 days
 
-// === Faucet configuration parameters ===
-
-parameter_types! {
     // Treasury account derived from a fixed PalletId; do not change after genesis.
     pub const TreasuryPalletId: PalletId = PalletId(*b"py/trsry");
     pub TreasuryAccount: AccountId = TreasuryPalletId::get().into_account_truncating();
@@ -348,11 +295,15 @@ parameter_types! {
 
     // Payout is 1000 whole tokens (adjust UNIT to your decimals)
     pub FaucetPayoutAmount: Balance = 1_000 * UNIT;
+    pub RewardPerWinAmount: Balance = 100 * UNIT;
 }
 
 impl pallet_eterra_faucet::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Currency = Balances;
+    type ClaimCooldownBlocks = FaucetClaimCooldownBlocks;
+    type SponsoredClaimMaxCount = FaucetSponsoredClaimMaxCount;
+    type SponsoredClaimWindowBlocks = FaucetSponsoredClaimWindowBlocks;
     type WeightInfo = pallet_eterra_faucet::weights::SubstrateWeight<Runtime>;
 }
 
@@ -361,7 +312,7 @@ impl pallet_eterra_faucet::Config for Runtime {
 parameter_types! {
     pub const GamerTagMaxLen: u32 = 32;
     pub const AvatarCidMaxLen: u32 = 96; // or 128
-    pub const GamerChangeFee: Balance = 100u128;
+    pub const GamerChangeFee: Balance = 100 * UNIT;
 }
 impl pallet_eterra_gamer::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
@@ -402,15 +353,6 @@ impl pallet_eterra_monte_carlo_ai::pallet::Config for Runtime {
 
     #[cfg(feature = "runtime-benchmarks")]
     type BenchmarkHelper = MonteCarloBenchHelper;
-}
-
-
-
-pub struct RewardPerWinAmount;
-impl frame_support::traits::Get<Balance> for RewardPerWinAmount {
-    fn get() -> Balance {
-        100 * UNIT
-    }
 }
 
 impl pallet_eterra_game_authority::Config for Runtime {
@@ -503,11 +445,6 @@ impl pallet_eterra_tcg::Config for Runtime {
     type CardsPerPack = ConstU8<5>; // Set number of cards per pack to 5
     type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
     type WeightInfo = pallet_eterra_tcg::weights::SubstrateWeight<Runtime>;
-}
-
-pub struct AiBotDifficulty;
-impl Get<u8> for AiBotDifficulty {
-    fn get() -> u8 { 60 }
 }
 
 impl pallet_eterra::Config for Runtime {

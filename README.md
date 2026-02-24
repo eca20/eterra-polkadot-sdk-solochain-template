@@ -60,6 +60,8 @@ make help
 
 `scripts/run-node.sh` defaults to local-only RPC (`EXPOSE_RPC=0`) and blocks unsafe RPC on production unless explicitly overridden.
 
+Faucet policy: faucet claim sponsorship is only for zero-balance accounts (`dest == signer`), capped per on-chain window; claims are also cooldown-limited on-chain.
+
 ## 1) Build
 
 ### Testnet/default mode

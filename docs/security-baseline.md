@@ -96,7 +96,7 @@ The strict production validator additionally enforces non-placeholder authoritie
    - Root: `set_reel_weights`, `set_all_reel_weights`.
 3. `pallet-eterra-faucet`
    - Signed: `claim`.
-   - Runtime checks: `dest == caller`, per-block throttling, faucet balance checks.
+   - Runtime checks: `dest == caller`, cooldown throttling, faucet balance checks.
 4. `pallet-eterra-game-authority`
    - `AdminOrigin`: `add_server`, `remove_server`.
    - Signed: `create_game`, `add_player`, `add_players_batch`, `create_game_with_batch_add`, `record_eliminations`, `end_game`.
@@ -130,7 +130,7 @@ The strict production validator additionally enforces non-placeholder authoritie
 
 1. Most extrinsics are normal signed transactions and therefore fee-metered by transaction-payment.
 2. Additional anti-spam checks:
-   - Faucet: one claim per account per block.
+   - Faucet: sponsorship is limited to zero-balance accounts and capped by a per-window quota; claims are cooldown-limited on-chain.
    - Gamer: repeat profile updates charge `ChangeFee`.
    - Matchmaker: per-call processing work is capped.
 

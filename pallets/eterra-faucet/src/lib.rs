@@ -20,6 +20,7 @@ pub mod pallet {
     use frame_support::{
         dispatch::DispatchResult,
         pallet_prelude::*,
+        sp_runtime::traits::{Saturating, Zero},
         traits::{tokens::ExistenceRequirement, BuildGenesisConfig, StorageVersion},
     };
     use frame_system::pallet_prelude::*;
@@ -32,11 +33,25 @@ pub mod pallet {
         /// The currency used for faucet payouts.
         type Currency: Currency<Self::AccountId>;
 
+        /// Minimum number of blocks between claims by the same account.
+        /// Set to 0 to disable cooldown.
+        #[pallet::constant]
+        type ClaimCooldownBlocks: Get<BlockNumberFor<Self>>;
+
+        /// Max number of fee-sponsored claims in one sponsorship window.
+        /// Set to 0 to disable sponsorship entirely.
+        #[pallet::constant]
+        type SponsoredClaimMaxCount: Get<u32>;
+
+        /// Sponsorship window size in blocks.
+        #[pallet::constant]
+        type SponsoredClaimWindowBlocks: Get<BlockNumberFor<Self>>;
+
         /// Weight information for extrinsics in this pallet.
         type WeightInfo: WeightInfo;
     }
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
 
     #[pallet::pallet]
     #[pallet::without_storage_info]
@@ -70,6 +85,18 @@ pub mod pallet {
     #[pallet::getter(fn last_claim)]
     pub type LastClaim<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, BlockNumberFor<T>, OptionQuery>;
+
+    /// Start block of the current sponsorship window for an account.
+    #[pallet::storage]
+    #[pallet::getter(fn sponsored_window_start)]
+    pub type SponsoredWindowStart<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, BlockNumberFor<T>, OptionQuery>;
+
+    /// Number of sponsored claims used by the account in the current window.
+    #[pallet::storage]
+    #[pallet::getter(fn sponsored_claims_used)]
+    pub type SponsoredClaimsUsed<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, u32, ValueQuery>;
 
     #[pallet::genesis_config]
     #[derive(frame_support::DefaultNoBound)]
@@ -107,30 +134,72 @@ pub mod pallet {
         TransferFailed,
         /// Faucet was not configured in genesis.
         NotConfigured,
-        /// Destination already claimed this block (rate limit).
+        /// Destination claimed too recently (cooldown not elapsed).
         TooFrequent,
         /// Destination must be the caller.
         InvalidDestination,
+    }
+
+    impl<T: Config> Pallet<T> {
+        /// Returns true if `who` can receive sponsorship at block `now`.
+        pub fn can_receive_sponsored_claim(who: &T::AccountId, now: BlockNumberFor<T>) -> bool {
+            let max = T::SponsoredClaimMaxCount::get();
+            if max == 0 {
+                return false;
+            }
+
+            let window = T::SponsoredClaimWindowBlocks::get();
+            match SponsoredWindowStart::<T>::get(who) {
+                None => true,
+                Some(start) => {
+                    let in_window = now < start.saturating_add(window);
+                    if !in_window {
+                        return true;
+                    }
+                    SponsoredClaimsUsed::<T>::get(who) < max
+                }
+            }
+        }
+
+        /// Records one sponsored claim usage for `who` at block `now`.
+        fn note_sponsored_claim(who: &T::AccountId, now: BlockNumberFor<T>) {
+            let window = T::SponsoredClaimWindowBlocks::get();
+            let max = T::SponsoredClaimMaxCount::get();
+            if max == 0 {
+                return;
+            }
+
+            match SponsoredWindowStart::<T>::get(who) {
+                Some(start) if now < start.saturating_add(window) => {
+                    SponsoredClaimsUsed::<T>::mutate(who, |count| {
+                        *count = count.saturating_add(1);
+                    });
+                }
+                _ => {
+                    SponsoredWindowStart::<T>::insert(who, now);
+                    SponsoredClaimsUsed::<T>::insert(who, 1);
+                }
+            }
+        }
     }
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         /// Claim faucet funds. Transfers `PayoutAmount` from `FaucetAccount` to `dest`.
         ///
-        /// This is a **signed** extrinsic. Rate-limited to once per block per `dest`.
+        /// This is a **signed** extrinsic. Rate-limited by `ClaimCooldownBlocks` per `dest`.
         #[pallet::call_index(0)]
         #[pallet::weight(T::WeightInfo::claim())]
         pub fn claim(origin: OriginFor<T>, dest: T::AccountId) -> DispatchResult {
             let who = ensure_signed(origin)?;
             ensure!(who == dest, Error::<T>::InvalidDestination);
+            let was_zero_balance = T::Currency::free_balance(&who).is_zero();
 
-            // Basic rate limit: once per block per destination
+            // Basic rate limit: one claim per configured cooldown interval per destination.
             let now = frame_system::Pallet::<T>::block_number();
             if let Some(last) = LastClaim::<T>::get(&dest) {
-                // If already claimed this exact block, reject
-                if last == now {
-                    return Err(Error::<T>::TooFrequent.into());
-                }
+                let next_allowed = last.saturating_add(T::ClaimCooldownBlocks::get());
+                ensure!(now >= next_allowed, Error::<T>::TooFrequent);
             }
 
             let faucet = FaucetAccount::<T>::get().ok_or(Error::<T>::NotConfigured)?;
@@ -146,6 +215,11 @@ pub mod pallet {
 
             // Record the claim block
             LastClaim::<T>::insert(&dest, now);
+
+            // Track sponsored usage on successful claims from zero-balance accounts.
+            if was_zero_balance && Self::can_receive_sponsored_claim(&dest, now) {
+                Self::note_sponsored_claim(&dest, now);
+            }
 
             Self::deposit_event(Event::Claimed { who: dest, amount });
             Ok(())
