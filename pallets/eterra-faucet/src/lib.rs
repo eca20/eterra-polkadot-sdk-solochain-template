@@ -122,6 +122,10 @@ pub mod pallet {
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
+        /// Transaction fee sponsorship was applied for this account's faucet claim.
+        FeeSponsorshipApplied {
+            who: T::AccountId,
+        },
         /// A faucet claim was paid.
         /// (who, amount)
         Claimed {
@@ -174,6 +178,7 @@ pub mod pallet {
         pub fn can_receive_sponsored_claim_pre_dispatch(
             who: &T::AccountId,
             now: BlockNumberFor<T>,
+            required_fee: BalanceOf<T>,
         ) -> bool {
             if !Self::can_receive_sponsored_claim(who, now) {
                 return false;
@@ -190,7 +195,16 @@ pub mod pallet {
                 return false;
             };
             let amount: BalanceOf<T> = PayoutAmount::<T>::get();
-            T::Currency::free_balance(&faucet) >= amount
+            if T::Currency::free_balance(&faucet) < amount {
+                return false;
+            }
+
+            // Sponsor only when the signer cannot afford normal fee withdrawal
+            // while preserving account liveness.
+            let free = T::Currency::free_balance(who);
+            let min_balance = T::Currency::minimum_balance();
+            let required = required_fee.saturating_add(min_balance);
+            free < required
         }
 
         /// Records one sponsored claim usage for `who` at block `now`.
@@ -225,7 +239,6 @@ pub mod pallet {
         pub fn claim(origin: OriginFor<T>, dest: T::AccountId) -> DispatchResult {
             let who = ensure_signed(origin)?;
             ensure!(who == dest, Error::<T>::InvalidDestination);
-            let was_zero_balance = T::Currency::free_balance(&who).is_zero();
 
             // Basic rate limit: one claim per configured cooldown interval per destination.
             let now = frame_system::Pallet::<T>::block_number();
@@ -248,8 +261,9 @@ pub mod pallet {
             // Record the claim block
             LastClaim::<T>::insert(&dest, now);
 
-            // Track sponsored usage on successful claims from zero-balance accounts.
-            if was_zero_balance && Self::can_receive_sponsored_claim(&dest, now) {
+            // Track usage on every successful claim while quota is still available.
+            // This prevents low-balance claimers from bypassing sponsorship limits.
+            if Self::can_receive_sponsored_claim(&dest, now) {
                 Self::note_sponsored_claim(&dest, now);
             }
 

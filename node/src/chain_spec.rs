@@ -209,6 +209,9 @@ pub fn testnet_config() -> Result<ChainSpec, String> {
 pub fn load_spec(id: &str) -> Result<ChainSpec, String> {
     match id {
         // Built-in configs
+        // Some CLI paths pass an empty chain identifier when `--chain` is omitted.
+        // Treat it as `dev` instead of trying to open an empty filename.
+        "" => development_config(),
         "dev" | "development" => development_config(),
         "local" | "local_testnet" => local_testnet_config(),
         "testnet" => testnet_config(),

@@ -1,5 +1,5 @@
 use crate::{mock::*, Error, LastClaim, PayoutAmount, SponsoredClaimsUsed, SponsoredWindowStart};
-use frame_support::{assert_noop, assert_ok};
+use frame_support::{assert_noop, assert_ok, traits::Currency};
 
 #[test]
 fn claim_transfers_and_records_state() {
@@ -57,20 +57,25 @@ fn sponsored_quota_resets_after_window() {
 fn pre_dispatch_requires_cooldown_and_liquidity() {
     new_test_ext().execute_with(|| {
         assert!(EterraFaucet::can_receive_sponsored_claim_pre_dispatch(
-            &BOB, 1
+            &BOB, 1, 10
         ));
 
         LastClaim::<Test>::insert(BOB, 1);
         assert!(!EterraFaucet::can_receive_sponsored_claim_pre_dispatch(
-            &BOB, 5
+            &BOB, 5, 10
         ));
         assert!(EterraFaucet::can_receive_sponsored_claim_pre_dispatch(
-            &BOB, 11
+            &BOB, 11, 10
+        ));
+
+        let _ = <Balances as Currency<u64>>::deposit_creating(&BOB, 1_000);
+        assert!(!EterraFaucet::can_receive_sponsored_claim_pre_dispatch(
+            &BOB, 12, 10
         ));
 
         PayoutAmount::<Test>::put(2_000_000u128);
         assert!(!EterraFaucet::can_receive_sponsored_claim_pre_dispatch(
-            &BOB, 30
+            &BOB, 30, 10
         ));
     });
 }

@@ -7,6 +7,7 @@ pub mod apis;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarks;
 pub mod configs;
+pub mod signed_extensions;
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -37,6 +38,8 @@ pub use pallet_eterra_media;
 pub struct HandProviderAdapter;
 
 pub use pallet_timestamp::Call as TimestampCall;
+
+pub use signed_extensions::CheckNonceWithFaucet;
 
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
@@ -170,7 +173,7 @@ pub type SignedExtra = (
     frame_system::CheckTxVersion<Runtime>,
     frame_system::CheckGenesis<Runtime>,
     frame_system::CheckEra<Runtime>,
-    frame_system::CheckNonce<Runtime>,
+    CheckNonceWithFaucet,
     frame_system::CheckWeight<Runtime>,
     pallet_transaction_payment::ChargeTransactionPayment<Runtime>,
     frame_metadata_hash_extension::CheckMetadataHash<Runtime>,
@@ -270,6 +273,9 @@ mod runtime {
     #[runtime::pallet_index(18)]
     pub type EterraMedia= pallet_eterra_media;
 }
+
+#[cfg(test)]
+mod tests;
 
 #[cfg(all(test, feature = "try-runtime"))]
 mod try_runtime_tests {

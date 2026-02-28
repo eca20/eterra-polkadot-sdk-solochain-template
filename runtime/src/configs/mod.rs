@@ -171,6 +171,7 @@ parameter_types! {
 use pallet_transaction_payment::OnChargeTransaction;
 use sp_runtime::traits::{DispatchInfoOf, PostDispatchInfoOf};
 use sp_runtime::transaction_validity::TransactionValidityError;
+#[cfg(feature = "runtime-production")]
 use sp_runtime::traits::Zero;
 
 pub struct FreeFaucetOrCurrencyAdapter;
@@ -186,32 +187,54 @@ impl OnChargeTransaction<Runtime> for FreeFaucetOrCurrencyAdapter {
         who: &AccountId,
         call: &RuntimeCall,
         info: &DispatchInfoOf<RuntimeCall>,
-        tip: Self::Balance,
         fee: Self::Balance,
+        tip: Self::Balance,
     ) -> Result<Self::LiquidityInfo, TransactionValidityError> {
-        // Sponsor only capped faucet claims from zero-balance accounts.
-        // This preserves onboarding/recovery while limiting abuse.
-        if let RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { dest }) = call {
-            let zero_balance = Balances::free_balance(who).is_zero();
-            let now = System::block_number();
-            let sponsored_ok = pallet_eterra_faucet::Pallet::<Runtime>::can_receive_sponsored_claim_pre_dispatch(who, now);
-            // Prevent free-priority abuse via sponsored tips.
-            if dest == who && zero_balance && sponsored_ok && tip.is_zero() {
-                return Ok(Default::default());
+        #[cfg(not(feature = "runtime-production"))]
+        {
+            // Dev/test mode: sponsor all self-claims for fast onboarding/testing.
+            if let RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { dest }) = call {
+                if dest == who {
+                    System::deposit_event(RuntimeEvent::EterraFaucet(
+                        pallet_eterra_faucet::Event::<Runtime>::FeeSponsorshipApplied {
+                            who: who.clone(),
+                        },
+                    ));
+                    return Ok(Default::default());
+                }
             }
         }
+
+        #[cfg(feature = "runtime-production")]
+        {
+            // Production mode: sponsor only capped self-claims where signer cannot
+            // afford normal fee withdrawal, and only with zero tip.
+            if let RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { dest }) = call {
+                let now = System::block_number();
+                let sponsored_ok = pallet_eterra_faucet::Pallet::<Runtime>::can_receive_sponsored_claim_pre_dispatch(who, now, fee);
+                if dest == who && sponsored_ok && tip.is_zero() {
+                    System::deposit_event(RuntimeEvent::EterraFaucet(
+                        pallet_eterra_faucet::Event::<Runtime>::FeeSponsorshipApplied {
+                            who: who.clone(),
+                        },
+                    ));
+                    return Ok(Default::default());
+                }
+            }
+        }
+
         // Otherwise delegate to the default adapter.
         <pallet_transaction_payment::FungibleAdapter<Balances, ()> as OnChargeTransaction<
             Runtime,
-        >>::withdraw_fee(who, call, info, tip, fee)
+        >>::withdraw_fee(who, call, info, fee, tip)
     }
 
     fn correct_and_deposit_fee(
         who: &AccountId,
         info: &DispatchInfoOf<RuntimeCall>,
         post_info: &PostDispatchInfoOf<RuntimeCall>,
+        corrected_fee: Self::Balance,
         tip: Self::Balance,
-        fee: Self::Balance,
         paid: Self::LiquidityInfo,
     ) -> Result<(), TransactionValidityError> {
         // If we skipped withdrawing (paid is default/None), do nothing on deposit.
@@ -221,7 +244,7 @@ impl OnChargeTransaction<Runtime> for FreeFaucetOrCurrencyAdapter {
         // Otherwise delegate to the default adapter.
         <pallet_transaction_payment::FungibleAdapter<Balances, ()> as OnChargeTransaction<
             Runtime,
-        >>::correct_and_deposit_fee(who, info, post_info, tip, fee, paid)
+        >>::correct_and_deposit_fee(who, info, post_info, corrected_fee, tip, paid)
     }
 }
 
@@ -278,10 +301,6 @@ parameter_types! {
     pub const MaxPlayersPerGameConst: u32 = 128; // tune as needed
     pub const MaxWellKnownNodes: u32 = 128;   // adjust as you like
     pub const MaxPeerIdLength: u32 = 128;     // libp2p PeerId length upper bound
-    pub const FaucetClaimCooldownBlocks: BlockNumber = 14_400; // ~24h at 6s block time
-    pub const FaucetSponsoredClaimMaxCount: u32 = 3;
-    pub const FaucetSponsoredClaimWindowBlocks: BlockNumber = 432_000; // ~30 days
-
     // Treasury account derived from a fixed PalletId; do not change after genesis.
     pub const TreasuryPalletId: PalletId = PalletId(*b"py/trsry");
     pub TreasuryAccount: AccountId = TreasuryPalletId::get().into_account_truncating();
@@ -296,6 +315,22 @@ parameter_types! {
     // Payout is 1000 whole tokens (adjust UNIT to your decimals)
     pub FaucetPayoutAmount: Balance = 1_000 * UNIT;
     pub RewardPerWinAmount: Balance = 100 * UNIT;
+}
+
+#[cfg(not(feature = "runtime-production"))]
+parameter_types! {
+    // Dev/test defaults: no cooldown and generous sponsorship for rapid iteration.
+    pub const FaucetClaimCooldownBlocks: BlockNumber = 0;
+    pub const FaucetSponsoredClaimMaxCount: u32 = 10_000;
+    pub const FaucetSponsoredClaimWindowBlocks: BlockNumber = 432_000; // ~30 days
+}
+
+#[cfg(feature = "runtime-production")]
+parameter_types! {
+    // Production defaults: conservative anti-abuse limits.
+    pub const FaucetClaimCooldownBlocks: BlockNumber = 14_400; // ~24h at 6s block time
+    pub const FaucetSponsoredClaimMaxCount: u32 = 3;
+    pub const FaucetSponsoredClaimWindowBlocks: BlockNumber = 432_000; // ~30 days
 }
 
 impl pallet_eterra_faucet::Config for Runtime {
