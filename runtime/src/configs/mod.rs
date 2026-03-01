@@ -36,8 +36,9 @@ use frame_system::limits::{BlockLength, BlockWeights};
 use pallet_transaction_payment::{ConstFeeMultiplier, Multiplier};
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_runtime::{
-    traits::{One, AccountIdConversion},
+    traits::{AccountIdConversion, Morph, One},
     Perbill,
+    Permill,
 };
 use scale_info::TypeInfo;
 use sp_version::RuntimeVersion;
@@ -62,7 +63,7 @@ use super::{
 
 // Local module imports
 use super::{
-    AccountId, Aura, Balance, Balances, Block, BlockNumber, Hash, Nonce, PalletInfo, Runtime,
+    AccountId, Aura, Balance, Balances, Block, BlockNumber, Council, Hash, Nonce, PalletInfo, Runtime,
     RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
     System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION,
 };
@@ -261,6 +262,114 @@ impl pallet_sudo::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type RuntimeCall = RuntimeCall;
     type WeightInfo = pallet_sudo::weights::SubstrateWeight<Runtime>;
+}
+
+// --- Governance (Council) ---
+parameter_types! {
+    // ~24h at 6s blocks.
+    pub const CouncilMotionDuration: BlockNumber = 14_400;
+    pub const CouncilMaxProposals: u32 = 100;
+    pub const CouncilMaxMembers: u32 = 7;
+
+    // Allow dispatching up to 1s of weight via council motions.
+    pub const CouncilMaxProposalWeight: Weight =
+        Weight::from_parts(WEIGHT_REF_TIME_PER_SECOND, u64::MAX);
+}
+
+type CouncilCollective = pallet_collective::Instance1;
+
+impl pallet_collective::Config<CouncilCollective> for Runtime {
+    type RuntimeOrigin = RuntimeOrigin;
+    type Proposal = RuntimeCall;
+    type RuntimeEvent = RuntimeEvent;
+    type MotionDuration = CouncilMotionDuration;
+    type MaxProposals = CouncilMaxProposals;
+    type MaxMembers = CouncilMaxMembers;
+    type DefaultVote = pallet_collective::PrimeDefaultVote;
+    type WeightInfo = pallet_collective::weights::SubstrateWeight<Runtime>;
+    type SetMembersOrigin = PrivilegedControlOrigin;
+    type MaxProposalWeight = CouncilMaxProposalWeight;
+}
+
+type CouncilMembershipInstance = pallet_membership::Instance1;
+
+impl pallet_membership::Config<CouncilMembershipInstance> for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type AddOrigin = PrivilegedControlOrigin;
+    type RemoveOrigin = PrivilegedControlOrigin;
+    type SwapOrigin = PrivilegedControlOrigin;
+    type ResetOrigin = PrivilegedControlOrigin;
+    type PrimeOrigin = PrivilegedControlOrigin;
+    type MembershipInitialized = Council;
+    type MembershipChanged = Council;
+    type MaxMembers = CouncilMaxMembers;
+    type WeightInfo = pallet_membership::weights::SubstrateWeight<Runtime>;
+}
+
+// --- Treasury ---
+parameter_types! {
+    // ~24h at 6s blocks.
+    pub const TreasurySpendPeriod: BlockNumber = 14_400;
+    // How long an approved spend can be claimed for.
+    pub const TreasuryPayoutPeriod: BlockNumber = 14_400;
+    pub const TreasuryBurn: Permill = Permill::from_percent(0);
+    pub const TreasuryMaxApprovals: u32 = 100;
+}
+
+pub struct MaxTreasurySpend;
+impl Morph<()> for MaxTreasurySpend {
+    type Outcome = Balance;
+    fn morph(_: ()) -> Balance {
+        Balance::MAX
+    }
+}
+
+type CouncilMajorityOrigin =
+    pallet_collective::EnsureProportionAtLeast<AccountId, CouncilCollective, 1, 2>;
+
+type TreasuryApproveRejectOrigin =
+    frame_support::traits::EitherOfDiverse<PrivilegedControlOrigin, CouncilMajorityOrigin>;
+
+type RootAsMaxSpend = frame_support::traits::MapSuccess<PrivilegedControlOrigin, MaxTreasurySpend>;
+type CouncilAsMaxSpend = frame_support::traits::MapSuccess<CouncilMajorityOrigin, MaxTreasurySpend>;
+type TreasurySpendOrigin = frame_support::traits::EitherOf<RootAsMaxSpend, CouncilAsMaxSpend>;
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct TreasuryBenchHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_treasury::ArgumentsFactory<(), AccountId> for TreasuryBenchHelper {
+    fn create_asset_kind(_: u32) -> () {
+        ()
+    }
+
+    fn create_beneficiary(seed: [u8; 32]) -> AccountId {
+        AccountId::from(seed)
+    }
+}
+
+impl pallet_treasury::Config for Runtime {
+    type Currency = Balances;
+    type RejectOrigin = TreasuryApproveRejectOrigin;
+    type RuntimeEvent = RuntimeEvent;
+    type SpendPeriod = TreasurySpendPeriod;
+    type Burn = TreasuryBurn;
+    type PalletId = TreasuryPalletId;
+    type BurnDestination = ();
+    type WeightInfo = pallet_treasury::weights::SubstrateWeight<Runtime>;
+    type SpendFunds = ();
+    type MaxApprovals = TreasuryMaxApprovals;
+    type SpendOrigin = TreasurySpendOrigin;
+
+    type AssetKind = ();
+    type Beneficiary = AccountId;
+    type BeneficiaryLookup = <Runtime as frame_system::Config>::Lookup;
+    type Paymaster = frame_support::traits::tokens::PayFromAccount<Balances, TreasuryAccount>;
+    type BalanceConverter = frame_support::traits::tokens::UnityAssetBalanceConversion;
+    type PayoutPeriod = TreasuryPayoutPeriod;
+
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHelper = TreasuryBenchHelper;
 }
 
 impl pallet_node_authorization::Config for Runtime {

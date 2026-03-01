@@ -240,6 +240,9 @@ mod runtime {
     #[runtime::pallet_index(6)]
     pub type Sudo = pallet_sudo;
 
+    #[runtime::pallet_index(7)]
+    pub type Council = pallet_collective<Instance1>;
+
     #[runtime::pallet_index(8)]
     pub type Eterra = pallet_eterra;
 
@@ -272,6 +275,12 @@ mod runtime {
 
     #[runtime::pallet_index(18)]
     pub type EterraMedia= pallet_eterra_media;
+
+    #[runtime::pallet_index(19)]
+    pub type CouncilMembership = pallet_membership<Instance1>;
+
+    #[runtime::pallet_index(20)]
+    pub type Treasury = pallet_treasury;
 }
 
 #[cfg(test)]

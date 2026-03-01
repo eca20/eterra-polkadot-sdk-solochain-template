@@ -27,10 +27,13 @@ frame-executive.workspace = true
 frame-metadata-hash-extension.workspace = true
 pallet-aura.workspace = true
 pallet-balances.workspace = true
+pallet-collective.workspace = true
 pallet-grandpa.workspace = true
+pallet-membership.workspace = true
 pallet-node-authorization.workspace = true
 pallet-sudo.workspace = true
 pallet-timestamp.workspace = true
+pallet-treasury.workspace = true
 pallet-transaction-payment.workspace = true
 sp-api.workspace = true
 sp-block-builder.workspace = true
@@ -87,10 +90,13 @@ std = [
 
 	"pallet-aura/std",
 	"pallet-balances/std",
+	"pallet-collective/std",
 	"pallet-grandpa/std",
+	"pallet-membership/std",
   "pallet-node-authorization/std",   
 	"pallet-sudo/std",
 	"pallet-timestamp/std",
+	"pallet-treasury/std",
 	"pallet-transaction-payment-rpc-runtime-api/std",
 	"pallet-transaction-payment/std",
 
@@ -125,9 +131,12 @@ runtime-benchmarks = [
 	"frame-system-benchmarking/runtime-benchmarks",
 	"frame-system/runtime-benchmarks",
 	"pallet-balances/runtime-benchmarks",
+	"pallet-collective/runtime-benchmarks",
 	"pallet-grandpa/runtime-benchmarks",
+	"pallet-membership/runtime-benchmarks",
 	"pallet-sudo/runtime-benchmarks",
 	"pallet-timestamp/runtime-benchmarks",
+	"pallet-treasury/runtime-benchmarks",
 	"pallet-eterra/runtime-benchmarks",
 	"pallet-eterra-simple-tcg/runtime-benchmarks",
 	"pallet-eterra-simple-matchmaker/runtime-benchmarks",
@@ -148,10 +157,13 @@ try-runtime = [
 	"frame-try-runtime/try-runtime",
 	"pallet-aura/try-runtime",
 	"pallet-balances/try-runtime",
+	"pallet-collective/try-runtime",
 	"pallet-grandpa/try-runtime",
+	"pallet-membership/try-runtime",
 	"pallet-sudo/try-runtime",
 	"pallet-timestamp/try-runtime",
 	"pallet-transaction-payment/try-runtime",
+	"pallet-treasury/try-runtime",
 	"sp-runtime/try-runtime",
 ]
 

@@ -78,8 +78,11 @@ frame-try-runtime = { version = "0.44.0", default-features = false }
 pallet-aura = { version = "37.0.0", default-features = false }
 pallet-balances = { version = "39.0.0", default-features = false }
 pallet-grandpa = { version = "38.0.0", default-features = false }
+pallet-collective = { version = "=38.0.0", default-features = false }
+pallet-membership = { version = "=38.0.0", default-features = false }
 pallet-node-authorization = { version = "38.0.0", default-features = false}
 pallet-sudo = { version = "38.0.0", default-features = false }
+pallet-treasury = { version = "=37.0.0", default-features = false }
 pallet-timestamp = { version = "37.0.0", default-features = false }
 pallet-transaction-payment-rpc-runtime-api = { version = "38.0.0", default-features = false }
 scale-info = { version = "2.11.1", default-features = false }
@@ -105,4 +108,3 @@ eterra-card-ai-adapter                  = { path = "crates/eterra-card-ai-adapte
 pallet-eterra-gamer                     = { path = "pallets/eterra-gamer", default-features = false }
 pallet-eterra-game-authority            = { path = "pallets/eterra-game-authority", default-features = false }
 pallet-eterra-media                     = { path = "pallets/eterra-media", default-features = false }
-

@@ -1,6 +1,6 @@
 use frame_support::PalletId;
 use sc_service::{ChainType, Properties};
-use solochain_eterra_runtime::{AccountId, Signature, WASM_BINARY};
+use solochain_eterra_runtime::{AccountId, Signature, UNIT, WASM_BINARY};
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_consensus_grandpa::AuthorityId as GrandpaId;
 use sp_core::{sr25519, Pair, Public};
@@ -77,6 +77,7 @@ pub fn development_config() -> Result<ChainSpec, String> {
         treasury,
         1_000_000_000_000_000u128,
         vec![get_account_id_from_seed::<sr25519::Public>("Alice")],
+        vec![get_account_id_from_seed::<sr25519::Public>("Alice")],
     ))
     .build())
 }
@@ -129,6 +130,10 @@ pub fn local_testnet_config() -> Result<ChainSpec, String> {
             get_account_id_from_seed::<sr25519::Public>("Alice"),
             get_account_id_from_seed::<sr25519::Public>("Bob"),
         ],
+        vec![
+            get_account_id_from_seed::<sr25519::Public>("Alice"),
+            get_account_id_from_seed::<sr25519::Public>("Bob"),
+        ],
     ))
     .build())
 }
@@ -161,6 +166,10 @@ pub fn production_config() -> Result<ChainSpec, String> {
         treasury,
         1_000_000_000_000_000u128,
         vec![],
+        vec![
+            get_account_id_from_seed::<sr25519::Public>("Alice"),
+            get_account_id_from_seed::<sr25519::Public>("Bob"),
+        ],
     ))
     .build())
 }
@@ -174,11 +183,20 @@ fn testnet_genesis(
     faucet_account: AccountId,
     payout_amount: u128,
     initial_servers: Vec<AccountId>,
+    council_members: Vec<AccountId>,
 ) -> serde_json::Value {
+    // Initialize the Treasury account with 200 million COIN (12 decimals via UNIT = 1e12).
+    let treasury_endowment: u128 = 200_000_000u128.saturating_mul(UNIT);
+    let treasury_account = treasury_account();
+    let council_members_for_membership = council_members.clone();
+
     serde_json::json!({
         "balances": {
-            // Configure endowed accounts with initial balance of 1 << 60.
-            "balances": endowed_accounts.iter().cloned().map(|k| (k, (1u128 << 60))).collect::<Vec<_>>(),
+            // Configure endowed accounts with initial balance of 1 << 60, except the Treasury.
+            "balances": endowed_accounts.iter().cloned().map(|k| {
+                let amount = if k == treasury_account { treasury_endowment } else { 1u128 << 60 };
+                (k, amount)
+            }).collect::<Vec<_>>(),
         },
         "aura": {
             "authorities": initial_authorities.iter().map(|x| (x.0.clone())).collect::<Vec<_>>(),
@@ -189,6 +207,12 @@ fn testnet_genesis(
         "sudo": {
             // Assign network admin rights.
             "key": sudo_key,
+        },
+        "council": {
+            "members": council_members,
+        },
+        "councilMembership": {
+            "members": council_members_for_membership,
         },
         "eterraFaucet": {
             "faucetAccount": faucet_account,
