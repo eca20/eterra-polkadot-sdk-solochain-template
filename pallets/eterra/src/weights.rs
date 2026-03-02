@@ -41,6 +41,10 @@ pub trait WeightInfo {
 	fn force_finish_turn() -> Weight;
 	fn set_current_hand() -> Weight;
 	fn set_preset_hand() -> Weight;
+	fn set_ai_difficulty() -> Weight;
+	fn set_ai_difficulty_controller() -> Weight;
+	fn disable_ai_difficulty_controller() -> Weight;
+	fn on_initialize() -> Weight;
 }
 
 impl WeightInfo for () {
@@ -63,6 +67,18 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn set_preset_hand() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn set_ai_difficulty() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn set_ai_difficulty_controller() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn disable_ai_difficulty_controller() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn on_initialize() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 }
@@ -175,5 +191,35 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 			.saturating_add(Weight::from_parts(0, 14135))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(1))
+	}
+
+	/// Storage: `Eterra::CurrentAiDifficulty` (r:1 w:1)
+	fn set_ai_difficulty() -> Weight {
+		Weight::from_parts(200_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+
+	/// Storage: `Eterra::AiDifficultyController` (w:1)
+	/// Storage: `Eterra::AiPayoutWindowState` (w:1)
+	fn set_ai_difficulty_controller() -> Weight {
+		Weight::from_parts(300_000_000, 0)
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+
+	/// Storage: `Eterra::AiDifficultyController` (w:1)
+	/// Storage: `Eterra::AiPayoutWindowState` (w:1)
+	fn disable_ai_difficulty_controller() -> Weight {
+		Weight::from_parts(200_000_000, 0)
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+
+	/// Storage: `Eterra::AiDifficultyController` (r:1)
+	/// Storage: `Eterra::AiPayoutWindowState` (r:1 w:1)
+	/// Storage: `Eterra::CurrentAiDifficulty` (r:1 w:1)
+	fn on_initialize() -> Weight {
+		Weight::from_parts(300_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(2))
 	}
 }

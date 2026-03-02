@@ -6,7 +6,7 @@ use crate::Error;
 use crate::GameStorage;
 use crate::Move;
 use crate::{mock::*, types::card::Card};
-use frame_support::traits::Get;
+use frame_support::traits::{Get, Hooks};
 use frame_support::BoundedVec;
 use frame_support::{assert_err, assert_noop, assert_ok};
 use frame_system::pallet_prelude::BlockNumberFor;
@@ -1153,6 +1153,47 @@ fn winner_receives_coin_assets_and_xp_rewards() {
             beta_before_opp
         );
         assert_eq!(Gamer::exp(opponent), xp_before_opp);
+    });
+}
+
+#[test]
+fn ai_difficulty_controller_adjusts_based_on_tracked_payouts() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        // Set a known starting difficulty.
+        assert_ok!(Eterra::set_ai_difficulty(RawOrigin::Root.into(), 50));
+
+        // Enable controller:
+        // - track native COIN payouts
+        // - window = hour (10 blocks in mock runtime)
+        // - target = 100
+        // - adjust every block
+        // - step = 10
+        assert_ok!(Eterra::set_ai_difficulty_controller(
+            RawOrigin::Root.into(),
+            pallet::TrackedPayoutCurrency::Coin,
+            pallet::PayoutWindow::Hour,
+            100u128,
+            1u64.into(),
+            0,
+            100,
+            10,
+            0u128,
+        ));
+
+        // With no payouts, at block 6 expected = 100 * 5/10 = 50, so difficulty should go down.
+        System::set_block_number(6);
+        let _ = <Eterra as Hooks<BlockNumberFor<Test>>>::on_initialize(6u64.into());
+        assert_eq!(Eterra::current_ai_difficulty(), 40);
+
+        // Now simulate payouts above expected and ensure difficulty goes up.
+        crate::AiPayoutWindowState::<Test>::mutate(|s| {
+            s.paid_coin = 80u128;
+        });
+
+        System::set_block_number(7);
+        let _ = <Eterra as Hooks<BlockNumberFor<Test>>>::on_initialize(7u64.into());
+        assert_eq!(Eterra::current_ai_difficulty(), 50);
     });
 }
 

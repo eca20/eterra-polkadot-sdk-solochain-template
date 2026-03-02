@@ -194,6 +194,14 @@ impl Get<u8> for MockBlocksToPlayLimit {
 }
 
 parameter_types! {
+    // Keep these small for unit tests.
+    pub const BlocksPerHourConst: u64 = 10;
+    pub const BlocksPerDayConst: u64 = 240;
+    pub const BlocksPerWeekConst: u64 = 7 * 240;
+    pub const BlocksPerMonthConst: u64 = 30 * 240;
+}
+
+parameter_types! {
     pub const HandSizeConst: u32 = 5;
 }
 
@@ -210,6 +218,11 @@ impl pallet_eterra::Config for Test {
     type HandSize = HandSizeConst;
     type AiAccount = FaucetAccountId;
     type AiDifficulty = ConstU8<60>;
+    type AdminOrigin = frame_system::EnsureRoot<u64>;
+    type BlocksPerHour = BlocksPerHourConst;
+    type BlocksPerDay = BlocksPerDayConst;
+    type BlocksPerWeek = BlocksPerWeekConst;
+    type BlocksPerMonth = BlocksPerMonthConst;
     type Assets = Assets;
     type ExperienceManager = Gamer;
     type DevCoinAssetId = DevCoinAssetIdConst;

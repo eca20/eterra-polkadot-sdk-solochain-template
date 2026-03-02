@@ -65,7 +65,7 @@ use super::{
 use super::{
     AccountId, Aura, Assets, Balance, Balances, Block, BlockNumber, Council, EterraGamer, Hash, Nonce, PalletInfo, Runtime,
     RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
-    System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION,
+    System, DAYS, HOURS, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION,
 };
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
@@ -443,6 +443,11 @@ parameter_types! {
     pub const EterraMaxRounds: u8 = 5;
     // The limit in blocks each player has until their turn is force finished.
     pub const EterraBlocksToPlayLimit: u8 = 6;
+    // AI controller window lengths (blocks).
+    pub const EterraBlocksPerHour: BlockNumber = HOURS;
+    pub const EterraBlocksPerDay: BlockNumber = DAYS;
+    pub const EterraBlocksPerWeek: BlockNumber = DAYS.saturating_mul(7);
+    pub const EterraBlocksPerMonth: BlockNumber = DAYS.saturating_mul(30);
     pub const MaxSlotLength: u32 = 3;
     pub const MaxOptionsPerSlot: u32 = 10;
     pub const MaxRollsPerRound: u32 = 3;
@@ -654,6 +659,11 @@ impl pallet_eterra::Config for Runtime {
     type HandSize = ConstU32<5>; // <<—— added
     type AiAccount = AiBotAccountParam;
     type AiDifficulty = ConstU8<60>;
+    type AdminOrigin = PrivilegedControlOrigin;
+    type BlocksPerHour = EterraBlocksPerHour;
+    type BlocksPerDay = EterraBlocksPerDay;
+    type BlocksPerWeek = EterraBlocksPerWeek;
+    type BlocksPerMonth = EterraBlocksPerMonth;
     type Assets = Assets;
     type ExperienceManager = EterraGamer;
     type DevCoinAssetId = DevCoinAssetId;

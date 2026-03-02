@@ -23,7 +23,7 @@ use frame_support::traits::Get;
 use frame_support::BoundedVec;
 use frame_system::pallet_prelude::BlockNumberFor;
 use parity_scale_codec::Encode;
-use sp_runtime::traits::Hash;
+use sp_runtime::{traits::Hash, Saturating};
 pub use types::board::Board;
 pub use types::card::Card;
 pub use types::card::Possession as Player; // PlayerOne / PlayerTwo
@@ -43,6 +43,7 @@ pub mod pallet {
     use frame_system::pallet_prelude::*;
     use sp_runtime::traits::Hash;
     use sp_runtime::Saturating;
+    use sp_runtime::traits::Zero;
 
     pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
     pub type BalanceOf<T> =
@@ -77,6 +78,12 @@ pub mod pallet {
             }
             weight
         }
+
+        fn on_initialize(n: BlockNumberFor<T>) -> Weight {
+            // If enabled, adjust AI difficulty based on PvE payouts in the configured window.
+            Self::maybe_adjust_ai_difficulty(n);
+            <T as Config>::WeightInfo::on_initialize()
+        }
     }
 
     #[pallet::config]
@@ -96,6 +103,19 @@ pub mod pallet {
         type AiAccount: Get<Self::AccountId>;
         /// Default AI difficulty (0..=100)
         type AiDifficulty: Get<u8>;
+
+        /// Origin permitted to change AI difficulty/controller settings.
+        type AdminOrigin: EnsureOrigin<Self::RuntimeOrigin>;
+
+        /// Block counts for controller window options (hour/day/week/month).
+        #[pallet::constant]
+        type BlocksPerHour: Get<BlockNumberFor<Self>>;
+        #[pallet::constant]
+        type BlocksPerDay: Get<BlockNumberFor<Self>>;
+        #[pallet::constant]
+        type BlocksPerWeek: Get<BlockNumberFor<Self>>;
+        #[pallet::constant]
+        type BlocksPerMonth: Get<BlockNumberFor<Self>>;
 
         /// Multi-currency assets interface used to reward devCOIN/betaCOIN.
         type Assets: fungibles::Mutate<Self::AccountId, AssetId = u32, Balance = BalanceOf<Self>>;
@@ -130,6 +150,92 @@ pub mod pallet {
         /// Weight information for extrinsics in this pallet.
         type WeightInfo: crate::weights::WeightInfo;
     }
+
+    /// Which fungible payout the AI controller should target.
+    #[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+    pub enum TrackedPayoutCurrency {
+        Coin,
+        DevCoin,
+        BetaCoin,
+    }
+
+    /// Rolling window length used to compare payouts against a target.
+    #[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+    pub enum PayoutWindow {
+        Hour,
+        Day,
+        Week,
+        Month,
+    }
+
+    /// Configuration for the on-chain AI difficulty controller.
+    ///
+    /// The controller adjusts `CurrentAiDifficulty` to target a payout schedule for PvE wins.
+    #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+    pub struct AiDifficultyControllerConfig<BlockNumber, Balance> {
+        pub tracked_currency: TrackedPayoutCurrency,
+        pub window: PayoutWindow,
+        pub target_per_window: Balance,
+        /// How frequently (in blocks) to run adjustments in `on_initialize`.
+        pub adjust_period: BlockNumber,
+        pub min_difficulty: u8,
+        pub max_difficulty: u8,
+        /// Step size to change difficulty by (0 disables adjustments).
+        pub step: u8,
+        /// Absolute deadband around the expected payout (prevents oscillation).
+        pub deadband: Balance,
+    }
+
+    /// Tracks payouts in the current controller window.
+    #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+    pub struct PayoutWindowState<BlockNumber, Balance> {
+        pub window_start: BlockNumber,
+        pub last_adjust: BlockNumber,
+        pub paid_coin: Balance,
+        pub paid_dev_coin: Balance,
+        pub paid_beta_coin: Balance,
+    }
+
+    #[pallet::type_value]
+    pub fn DefaultAiDifficulty<T: Config>() -> u8 {
+        T::AiDifficulty::get()
+    }
+
+    /// Current AI difficulty used for PvE suggestions (0..=100).
+    #[pallet::storage]
+    #[pallet::getter(fn current_ai_difficulty)]
+    pub type CurrentAiDifficulty<T: Config> =
+        StorageValue<_, u8, ValueQuery, DefaultAiDifficulty<T>>;
+
+    /// Optional controller configuration. When `None`, difficulty remains whatever was set manually.
+    #[pallet::storage]
+    #[pallet::getter(fn ai_difficulty_controller)]
+    pub type AiDifficultyController<T: Config> = StorageValue<
+        _,
+        AiDifficultyControllerConfig<BlockNumberFor<T>, BalanceOf<T>>,
+        OptionQuery,
+    >;
+
+    #[pallet::type_value]
+    pub fn DefaultPayoutWindowState<T: Config>() -> PayoutWindowState<BlockNumberFor<T>, BalanceOf<T>> {
+        PayoutWindowState {
+            window_start: Zero::zero(),
+            last_adjust: Zero::zero(),
+            paid_coin: Zero::zero(),
+            paid_dev_coin: Zero::zero(),
+            paid_beta_coin: Zero::zero(),
+        }
+    }
+
+    /// Controller window state (payout counters + timing).
+    #[pallet::storage]
+    #[pallet::getter(fn ai_payout_window_state)]
+    pub type AiPayoutWindowState<T: Config> = StorageValue<
+        _,
+        PayoutWindowState<BlockNumberFor<T>, BalanceOf<T>>,
+        ValueQuery,
+        DefaultPayoutWindowState<T>,
+    >;
 
     #[pallet::storage]
     #[pallet::getter(fn game_board)]
@@ -193,6 +299,32 @@ pub mod pallet {
             beta_coin: BalanceOf<T>,
             exp: u128,
         },
+        /// AI difficulty was set manually by an admin origin.
+        AiDifficultySet {
+            old: u8,
+            new: u8,
+        },
+        /// AI difficulty controller configuration was updated (and the window was reset).
+        AiDifficultyControllerSet {
+            tracked_currency: TrackedPayoutCurrency,
+            window: PayoutWindow,
+            target_per_window: BalanceOf<T>,
+            adjust_period: BlockNumberFor<T>,
+            min_difficulty: u8,
+            max_difficulty: u8,
+            step: u8,
+            deadband: BalanceOf<T>,
+        },
+        /// AI difficulty controller was disabled (config removed).
+        AiDifficultyControllerDisabled,
+        /// AI difficulty was adjusted automatically by the controller.
+        AiDifficultyAdjusted {
+            old: u8,
+            new: u8,
+            tracked_currency: TrackedPayoutCurrency,
+            paid: BalanceOf<T>,
+            expected: BalanceOf<T>,
+        },
         //New Turn
         NewTurn {
             game_id: GameId<T>,
@@ -232,6 +364,8 @@ pub mod pallet {
         PlayerAlreadyInGame,
         PresetHandMissing,
         GameNotActive,
+        InvalidAiDifficulty,
+        InvalidControllerConfig,
     }
 
     /// Limit of cards per hand (defaults to 5 via Config::HandSize)
@@ -836,6 +970,100 @@ pub mod pallet {
         ) -> DispatchResult {
             Self::set_current_hand(origin, card_ids)
         }
+
+        /// Manually set the AI difficulty used for PvE games.
+        ///
+        /// This is an on-chain setting (stored in `CurrentAiDifficulty`) so all nodes agree.
+        #[pallet::call_index(7)]
+        #[pallet::weight(<T as Config>::WeightInfo::set_ai_difficulty())]
+        pub fn set_ai_difficulty(origin: OriginFor<T>, new: u8) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            ensure!(new <= 100, Error::<T>::InvalidAiDifficulty);
+            let old = CurrentAiDifficulty::<T>::get();
+            CurrentAiDifficulty::<T>::put(new);
+            Self::deposit_event(Event::AiDifficultySet { old, new });
+            Ok(())
+        }
+
+        /// Configure the automatic AI difficulty controller.
+        ///
+        /// Only PvE wins against the AI are counted toward payouts in the window.
+        #[pallet::call_index(8)]
+        #[pallet::weight(<T as Config>::WeightInfo::set_ai_difficulty_controller())]
+        pub fn set_ai_difficulty_controller(
+            origin: OriginFor<T>,
+            tracked_currency: TrackedPayoutCurrency,
+            window: PayoutWindow,
+            target_per_window: BalanceOf<T>,
+            adjust_period: BlockNumberFor<T>,
+            min_difficulty: u8,
+            max_difficulty: u8,
+            step: u8,
+            deadband: BalanceOf<T>,
+        ) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+
+            // Basic sanity checks.
+            ensure!(!adjust_period.is_zero(), Error::<T>::InvalidControllerConfig);
+            ensure!(min_difficulty <= max_difficulty, Error::<T>::InvalidControllerConfig);
+            ensure!(max_difficulty <= 100, Error::<T>::InvalidControllerConfig);
+
+            // Validate that the selected window has a non-zero length.
+            let win_len = Self::window_len_blocks(window);
+            ensure!(!win_len.is_zero(), Error::<T>::InvalidControllerConfig);
+
+            let cfg = AiDifficultyControllerConfig {
+                tracked_currency,
+                window,
+                target_per_window,
+                adjust_period,
+                min_difficulty,
+                max_difficulty,
+                step,
+                deadband,
+            };
+            AiDifficultyController::<T>::put(cfg.clone());
+
+            // Reset the rolling window.
+            let now = <frame_system::Pallet<T>>::block_number();
+            AiPayoutWindowState::<T>::put(PayoutWindowState {
+                window_start: now,
+                last_adjust: now,
+                paid_coin: Zero::zero(),
+                paid_dev_coin: Zero::zero(),
+                paid_beta_coin: Zero::zero(),
+            });
+
+            Self::deposit_event(Event::AiDifficultyControllerSet {
+                tracked_currency,
+                window,
+                target_per_window,
+                adjust_period,
+                min_difficulty,
+                max_difficulty,
+                step,
+                deadband,
+            });
+
+            Ok(())
+        }
+
+        /// Disable (remove) the automatic AI difficulty controller config.
+        #[pallet::call_index(9)]
+        #[pallet::weight(<T as Config>::WeightInfo::disable_ai_difficulty_controller())]
+        pub fn disable_ai_difficulty_controller(origin: OriginFor<T>) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            AiDifficultyController::<T>::kill();
+            AiPayoutWindowState::<T>::put(PayoutWindowState {
+                window_start: Zero::zero(),
+                last_adjust: Zero::zero(),
+                paid_coin: Zero::zero(),
+                paid_dev_coin: Zero::zero(),
+                paid_beta_coin: Zero::zero(),
+            });
+            Self::deposit_event(Event::AiDifficultyControllerDisabled);
+            Ok(())
+        }
     }
 }
 
@@ -949,6 +1177,152 @@ impl<T: Config> Pallet<T> {
             }),
         }
     }
+
+    fn window_len_blocks(window: PayoutWindow) -> BlockNumberFor<T> {
+        match window {
+            PayoutWindow::Hour => T::BlocksPerHour::get(),
+            PayoutWindow::Day => T::BlocksPerDay::get(),
+            PayoutWindow::Week => T::BlocksPerWeek::get(),
+            PayoutWindow::Month => T::BlocksPerMonth::get(),
+        }
+    }
+
+    fn paid_for_currency(
+        s: &PayoutWindowState<BlockNumberFor<T>, BalanceOf<T>>,
+        c: TrackedPayoutCurrency,
+    ) -> BalanceOf<T> {
+        match c {
+            TrackedPayoutCurrency::Coin => s.paid_coin,
+            TrackedPayoutCurrency::DevCoin => s.paid_dev_coin,
+            TrackedPayoutCurrency::BetaCoin => s.paid_beta_coin,
+        }
+    }
+
+    /// Add payouts from a PvE win to the rolling controller window (if enabled).
+    fn note_pve_payout(
+        game_id: &GameId<T>,
+        paid_coin: BalanceOf<T>,
+        paid_dev: BalanceOf<T>,
+        paid_beta: BalanceOf<T>,
+    ) {
+        // Only track PvE wins vs the AI.
+        if !matches!(GameModes::<T>::get(game_id), Some(GameMode::PvE)) {
+            return;
+        }
+
+        // Only track if the controller is enabled.
+        if AiDifficultyController::<T>::get().is_none() {
+            return;
+        }
+
+        AiPayoutWindowState::<T>::mutate(|s| {
+            s.paid_coin = s.paid_coin.saturating_add(paid_coin);
+            s.paid_dev_coin = s.paid_dev_coin.saturating_add(paid_dev);
+            s.paid_beta_coin = s.paid_beta_coin.saturating_add(paid_beta);
+        });
+    }
+
+    /// Adjust the AI difficulty (if controller is configured) to target payouts in the current window.
+    fn maybe_adjust_ai_difficulty(now: BlockNumberFor<T>) {
+        let cfg = match AiDifficultyController::<T>::get() {
+            Some(c) => c,
+            None => return,
+        };
+        if cfg.step == 0 {
+            return;
+        }
+
+        let window_len = Self::window_len_blocks(cfg.window);
+        if sp_runtime::traits::Zero::is_zero(&window_len) {
+            return;
+        }
+
+        AiPayoutWindowState::<T>::mutate(|s| {
+            // Initialize window on first use.
+            if sp_runtime::traits::Zero::is_zero(&s.window_start) {
+                s.window_start = now;
+                s.last_adjust = now;
+                return;
+            }
+
+            // If the window elapsed, settle against the full target and reset.
+            let elapsed = now.saturating_sub(s.window_start);
+            if elapsed >= window_len {
+                let paid = Self::paid_for_currency(s, cfg.tracked_currency);
+                let expected = cfg.target_per_window;
+                Self::adjust_difficulty(&cfg, paid, expected);
+
+                // Start a fresh window.
+                s.window_start = now;
+                s.last_adjust = now;
+                s.paid_coin = sp_runtime::traits::Zero::zero();
+                s.paid_dev_coin = sp_runtime::traits::Zero::zero();
+                s.paid_beta_coin = sp_runtime::traits::Zero::zero();
+                return;
+            }
+
+            // Throttle adjustments.
+            if now.saturating_sub(s.last_adjust) < cfg.adjust_period {
+                return;
+            }
+
+            let paid = Self::paid_for_currency(s, cfg.tracked_currency);
+
+            // expected = target * elapsed / window_len
+            let elapsed_u128: u128 =
+                sp_runtime::traits::SaturatedConversion::saturated_into(elapsed);
+            let window_u128: u128 =
+                sp_runtime::traits::SaturatedConversion::saturated_into(window_len);
+            let target_u128: u128 =
+                sp_runtime::traits::SaturatedConversion::saturated_into(cfg.target_per_window);
+            let expected_u128: u128 = if window_u128 == 0 {
+                target_u128
+            } else {
+                target_u128
+                    .saturating_mul(elapsed_u128)
+                    .saturating_div(window_u128)
+            };
+            let expected: BalanceOf<T> =
+                sp_runtime::traits::SaturatedConversion::saturated_into(expected_u128);
+
+            Self::adjust_difficulty(&cfg, paid, expected);
+            s.last_adjust = now;
+        });
+    }
+
+    fn adjust_difficulty(
+        cfg: &AiDifficultyControllerConfig<BlockNumberFor<T>, BalanceOf<T>>,
+        paid: BalanceOf<T>,
+        expected: BalanceOf<T>,
+    ) {
+        // Clamp the current setting into the configured range first.
+        let old_raw = CurrentAiDifficulty::<T>::get();
+        let old = old_raw.clamp(cfg.min_difficulty, cfg.max_difficulty);
+        if old != old_raw {
+            CurrentAiDifficulty::<T>::put(old);
+        }
+
+        let up_threshold = expected.saturating_add(cfg.deadband);
+        let down_threshold = expected.saturating_sub(cfg.deadband);
+
+        let mut new = old;
+        if paid > up_threshold {
+            new = old.saturating_add(cfg.step).min(cfg.max_difficulty);
+        } else if paid < down_threshold {
+            new = old.saturating_sub(cfg.step).max(cfg.min_difficulty);
+        }
+
+        if new != old {
+            CurrentAiDifficulty::<T>::put(new);
+            Self::deposit_event(Event::AiDifficultyAdjusted {
+                old,
+                new,
+                tracked_currency: cfg.tracked_currency,
+                paid,
+                expected,
+            });
+        }
+    }
     /// If the next player is the AI in a PvE game, let the AI take its move immediately.
     fn maybe_ai_take_turn(
         game_id: &GameId<T>,
@@ -969,7 +1343,7 @@ impl<T: Config> Pallet<T> {
             Some(s) => s,
             None => return,
         };
-        let diff = T::AiDifficulty::get();
+        let diff = CurrentAiDifficulty::<T>::get();
 
         if let Some(action) = mc_ai::pallet::Pallet::<T>::suggest::<ai::Adapter>(&state, diff) {
             let x = action.x;
@@ -1391,8 +1765,13 @@ impl<T: Config> Pallet<T> {
                     let beta = T::WinRewardBetaCoin::get();
                     let exp = T::WinRewardExperience::get();
 
+                    let mut paid_coin: BalanceOf<T> = sp_runtime::traits::Zero::zero();
+                    let mut paid_dev: BalanceOf<T> = sp_runtime::traits::Zero::zero();
+                    let mut paid_beta: BalanceOf<T> = sp_runtime::traits::Zero::zero();
+
                     if !sp_runtime::traits::Zero::is_zero(&coin) {
                         let _ = <<T as pallet_eterra_simple_tcg::pallet::Config>::Currency as frame_support::traits::Currency<AccountIdOf<T>>>::deposit_creating(winner_acc, coin);
+                        paid_coin = coin;
                     }
                     if !sp_runtime::traits::Zero::is_zero(&dev) {
                         if let Err(e) = <T::Assets as frame_support::traits::fungibles::Mutate<AccountIdOf<T>>>::mint_into(T::DevCoinAssetId::get(), winner_acc, dev) {
@@ -1402,6 +1781,8 @@ impl<T: Config> Pallet<T> {
                                 winner_acc,
                                 e
                             );
+                        } else {
+                            paid_dev = dev;
                         }
                     }
                     if !sp_runtime::traits::Zero::is_zero(&beta) {
@@ -1412,6 +1793,8 @@ impl<T: Config> Pallet<T> {
                                 winner_acc,
                                 e
                             );
+                        } else {
+                            paid_beta = beta;
                         }
                     }
                     if exp != 0 {
@@ -1426,6 +1809,9 @@ impl<T: Config> Pallet<T> {
                         beta_coin: beta,
                         exp,
                     });
+
+                    // Track PvE payouts for the AI controller (if enabled).
+                    Self::note_pve_payout(game_id, paid_coin, paid_dev, paid_beta);
                 }
             }
 
