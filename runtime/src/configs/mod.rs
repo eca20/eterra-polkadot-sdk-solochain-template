@@ -164,6 +164,51 @@ impl pallet_balances::Config for Runtime {
     type RuntimeFreezeReason = RuntimeHoldReason;
 }
 
+// --- Assets (multi-currency fungibles) ---
+parameter_types! {
+    // Keep these low while we are iterating; increase for production if needed.
+    pub const AssetDeposit: Balance = 0;
+    pub const AssetAccountDeposit: Balance = EXISTENTIAL_DEPOSIT;
+    pub const MetadataDepositBase: Balance = 0;
+    pub const MetadataDepositPerByte: Balance = 0;
+    pub const ApprovalDeposit: Balance = 0;
+    pub const AssetsStringLimit: u32 = 64;
+}
+
+pub struct RootToAssetOwner;
+impl Morph<()> for RootToAssetOwner {
+    type Outcome = AccountId;
+    fn morph(_: ()) -> AccountId {
+        // Root has no inherent account id. We return a fixed owner for the `create` origin
+        // and rely on `force_create`/`set_team` for explicit ownership assignment.
+        TreasuryAccount::get()
+    }
+}
+
+type RootAsAssetOwner = frame_support::traits::MapSuccess<PrivilegedControlOrigin, RootToAssetOwner>;
+type AssetsCreateOrigin = frame_support::traits::AsEnsureOriginWithArg<RootAsAssetOwner>;
+
+impl pallet_assets::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type Balance = Balance;
+    type AssetId = u32;
+    type AssetIdParameter = u32;
+    type Currency = Balances;
+    type CreateOrigin = AssetsCreateOrigin;
+    type ForceOrigin = PrivilegedControlOrigin;
+    type AssetDeposit = AssetDeposit;
+    type AssetAccountDeposit = AssetAccountDeposit;
+    type MetadataDepositBase = MetadataDepositBase;
+    type MetadataDepositPerByte = MetadataDepositPerByte;
+    type ApprovalDeposit = ApprovalDeposit;
+    type StringLimit = AssetsStringLimit;
+    type Freezer = ();
+    type Extra = ();
+    type CallbackHandle = ();
+    type WeightInfo = pallet_assets::weights::SubstrateWeight<Runtime>;
+    type RemoveItemsLimit = ConstU32<1_000>;
+}
+
 parameter_types! {
     pub FeeMultiplier: Multiplier = Multiplier::one();
 }

@@ -281,6 +281,9 @@ mod runtime {
 
     #[runtime::pallet_index(20)]
     pub type Treasury = pallet_treasury;
+
+    #[runtime::pallet_index(21)]
+    pub type Assets = pallet_assets;
 }
 
 #[cfg(test)]
