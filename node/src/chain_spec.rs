@@ -189,6 +189,16 @@ fn testnet_genesis(
     let treasury_endowment: u128 = 200_000_000u128.saturating_mul(UNIT);
     let treasury_account = treasury_account();
 
+    // Multi-currency fungible assets via `pallet-assets`.
+    // Use the sudo key as the initial owner so it can mint/burn/transfer without Root calls.
+    let asset_owner: AccountId = sudo_key.clone().unwrap_or_else(|| treasury_account.clone());
+    let dev_coin_id: u32 = 1;
+    let beta_coin_id: u32 = 2;
+    // Give the initial owner a large supply of each asset for testing/distribution.
+    let initial_asset_supply: u128 = 1_000_000_000u128.saturating_mul(UNIT);
+    // `pallet-assets` requires a non-zero minimum balance.
+    let asset_min_balance: u128 = 1;
+
     serde_json::json!({
         "balances": {
             // Configure endowed accounts with initial balance of 1 << 60, except the Treasury.
@@ -210,6 +220,25 @@ fn testnet_genesis(
         "councilMembership": {
             // `pallet-membership` drives council membership and initializes the collective.
             "members": council_members,
+        },
+        "assets": {
+            // Genesis assets: (id, owner, is_sufficient, min_balance)
+            "assets": [
+                [dev_coin_id, asset_owner, false, asset_min_balance],
+                [beta_coin_id, asset_owner, false, asset_min_balance],
+            ],
+            // Genesis metadata: (id, name, symbol, decimals)
+            "metadata": [
+                [dev_coin_id, b"devCOIN".to_vec(), b"devCOIN".to_vec(), 12],
+                [beta_coin_id, b"betaCOIN".to_vec(), b"betaCOIN".to_vec(), 12],
+            ],
+            // Genesis balances: (id, account, amount)
+            "accounts": [
+                [dev_coin_id, asset_owner, initial_asset_supply],
+                [beta_coin_id, asset_owner, initial_asset_supply],
+            ],
+            // Reserve ids 1 and 2; future assets should start at 3.
+            "nextAssetId": 3,
         },
         "eterraFaucet": {
             "faucetAccount": faucet_account,
