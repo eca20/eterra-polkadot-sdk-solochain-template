@@ -1091,6 +1091,72 @@ fn game_winner_is_correctly_emitted() {
 }
 
 #[test]
+fn winner_receives_coin_assets_and_xp_rewards() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+
+        let coin_before = Balances::free_balance(creator);
+        let dev_before = Assets::balance(DevCoinAssetIdConst::get(), creator);
+        let beta_before = Assets::balance(BetaCoinAssetIdConst::get(), creator);
+        let xp_before = Gamer::exp(creator);
+
+        let coin_before_opp = Balances::free_balance(opponent);
+        let dev_before_opp = Assets::balance(DevCoinAssetIdConst::get(), opponent);
+        let beta_before_opp = Assets::balance(BetaCoinAssetIdConst::get(), opponent);
+        let xp_before_opp = Gamer::exp(opponent);
+
+        // Force the game to be ready to end with creator as the winner.
+        GameStorage::<Test>::mutate(&game_id, |maybe_game| {
+            let g = maybe_game.as_mut().expect("game should exist");
+            g.round = g.max_rounds;
+            g.scores = (6, 5); // player[0] (creator) wins
+            g.last_played_block = 0u64.into();
+        });
+
+        // Call `force_finish_turn` from the non-current player after the block limit passes.
+        let g_now = Eterra::game_board(game_id).expect("game should exist");
+        let current_player = g_now.players[g_now.player_turn as usize];
+        let caller = if current_player == creator { opponent } else { creator };
+
+        let limit = <Test as crate::Config>::BlocksToPlayLimit::get() as u64;
+        run_to_block(limit + 1);
+
+        assert_ok!(Eterra::force_finish_turn(
+            frame_system::RawOrigin::Signed(caller).into(),
+            game_id,
+        ));
+
+        // Winner (creator) received rewards.
+        assert_eq!(
+            Balances::free_balance(creator),
+            coin_before + WinRewardCoinConst::get()
+        );
+        assert_eq!(
+            Assets::balance(DevCoinAssetIdConst::get(), creator),
+            dev_before + WinRewardDevCoinConst::get()
+        );
+        assert_eq!(
+            Assets::balance(BetaCoinAssetIdConst::get(), creator),
+            beta_before + WinRewardBetaCoinConst::get()
+        );
+        assert_eq!(Gamer::exp(creator), xp_before + WinRewardExperienceConst::get());
+
+        // Non-winner did not receive rewards.
+        assert_eq!(Balances::free_balance(opponent), coin_before_opp);
+        assert_eq!(
+            Assets::balance(DevCoinAssetIdConst::get(), opponent),
+            dev_before_opp
+        );
+        assert_eq!(
+            Assets::balance(BetaCoinAssetIdConst::get(), opponent),
+            beta_before_opp
+        );
+        assert_eq!(Gamer::exp(opponent), xp_before_opp);
+    });
+}
+
+#[test]
 fn exceeding_max_moves_marks_finished_and_keeps_game_in_storage() {
     init_logger();
     new_test_ext().execute_with(|| {

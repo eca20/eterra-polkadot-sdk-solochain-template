@@ -37,6 +37,7 @@ pub mod pallet {
     use crate::weights::WeightInfo;
     use frame_support::pallet_prelude::ConstU32;
     use frame_support::traits::StorageVersion;
+    use frame_support::traits::{Currency, fungibles};
     use frame_support::BoundedVec;
     use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
     use frame_system::pallet_prelude::*;
@@ -44,6 +45,10 @@ pub mod pallet {
     use sp_runtime::Saturating;
 
     pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
+    pub type BalanceOf<T> =
+        <<T as pallet_eterra_simple_tcg::pallet::Config>::Currency as Currency<
+            <T as frame_system::Config>::AccountId,
+        >>::Balance;
 
     use crate::types::board::Board;
     use crate::types::card::Card;
@@ -91,6 +96,37 @@ pub mod pallet {
         type AiAccount: Get<Self::AccountId>;
         /// Default AI difficulty (0..=100)
         type AiDifficulty: Get<u8>;
+
+        /// Multi-currency assets interface used to reward devCOIN/betaCOIN.
+        type Assets: fungibles::Mutate<Self::AccountId, AssetId = u32, Balance = BalanceOf<Self>>;
+
+        /// Experience manager used to reward XP on wins.
+        type ExperienceManager: pallet_eterra_gamer::ExperienceManager<Self::AccountId>;
+
+        /// `pallet-assets` id for devCOIN.
+        #[pallet::constant]
+        type DevCoinAssetId: Get<u32>;
+
+        /// `pallet-assets` id for betaCOIN.
+        #[pallet::constant]
+        type BetaCoinAssetId: Get<u32>;
+
+        /// COIN minted to the winner on each win.
+        #[pallet::constant]
+        type WinRewardCoin: Get<BalanceOf<Self>>;
+
+        /// devCOIN minted to the winner on each win.
+        #[pallet::constant]
+        type WinRewardDevCoin: Get<BalanceOf<Self>>;
+
+        /// betaCOIN minted to the winner on each win.
+        #[pallet::constant]
+        type WinRewardBetaCoin: Get<BalanceOf<Self>>;
+
+        /// Experience granted to the winner on each win.
+        #[pallet::constant]
+        type WinRewardExperience: Get<u128>;
+
         /// Weight information for extrinsics in this pallet.
         type WeightInfo: crate::weights::WeightInfo;
     }
@@ -147,6 +183,15 @@ pub mod pallet {
         GameFinished {
             game_id: GameId<T>,
             winner: Option<T::AccountId>,
+        },
+        /// Rewards were issued to a winner (if any) as part of finishing a game.
+        WinRewardsIssued {
+            game_id: GameId<T>,
+            winner: T::AccountId,
+            coin: BalanceOf<T>,
+            dev_coin: BalanceOf<T>,
+            beta_coin: BalanceOf<T>,
+            exp: u128,
         },
         //New Turn
         NewTurn {
@@ -1337,6 +1382,52 @@ impl<T: Config> Pallet<T> {
                 game_id: *game_id,
                 winner: winner.clone(),
             });
+
+            // If there is a winner, reward them (skip AI account).
+            if let Some(ref winner_acc) = winner {
+                if *winner_acc != T::AiAccount::get() {
+                    let coin = T::WinRewardCoin::get();
+                    let dev = T::WinRewardDevCoin::get();
+                    let beta = T::WinRewardBetaCoin::get();
+                    let exp = T::WinRewardExperience::get();
+
+                    if !sp_runtime::traits::Zero::is_zero(&coin) {
+                        let _ = <<T as pallet_eterra_simple_tcg::pallet::Config>::Currency as frame_support::traits::Currency<AccountIdOf<T>>>::deposit_creating(winner_acc, coin);
+                    }
+                    if !sp_runtime::traits::Zero::is_zero(&dev) {
+                        if let Err(e) = <T::Assets as frame_support::traits::fungibles::Mutate<AccountIdOf<T>>>::mint_into(T::DevCoinAssetId::get(), winner_acc, dev) {
+                            log::warn!(
+                                target: "runtime::eterra",
+                                "failed to mint devCOIN reward for {:?}: {:?}",
+                                winner_acc,
+                                e
+                            );
+                        }
+                    }
+                    if !sp_runtime::traits::Zero::is_zero(&beta) {
+                        if let Err(e) = <T::Assets as frame_support::traits::fungibles::Mutate<AccountIdOf<T>>>::mint_into(T::BetaCoinAssetId::get(), winner_acc, beta) {
+                            log::warn!(
+                                target: "runtime::eterra",
+                                "failed to mint betaCOIN reward for {:?}: {:?}",
+                                winner_acc,
+                                e
+                            );
+                        }
+                    }
+                    if exp != 0 {
+                        <T::ExperienceManager as pallet_eterra_gamer::ExperienceManager<_>>::grant_experience(winner_acc, exp);
+                    }
+
+                    Self::deposit_event(Event::WinRewardsIssued {
+                        game_id: *game_id,
+                        winner: winner_acc.clone(),
+                        coin,
+                        dev_coin: dev,
+                        beta_coin: beta,
+                        exp,
+                    });
+                }
+            }
 
             // Clear active-game markers for human participants
             if let Some(a) = g.players.get(0).cloned() {

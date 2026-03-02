@@ -119,6 +119,14 @@ benchmarks! {
         let game_id = seed_game::<T>(sp_std::vec![who.clone(), ai.clone()], GameMode::PvE, 0);
         HandsOfGame::<T>::insert(&game_id, &who, human_hand);
         HandsOfGame::<T>::insert(&game_id, &ai, ai_hand);
+        // Make this a worst-case path: ensure the move ends the game with a non-draw winner,
+        // triggering win rewards (COIN + devCOIN + betaCOIN + XP).
+        GameStorage::<T>::mutate(&game_id, |maybe_game| {
+            if let Some(g) = maybe_game {
+                g.round = g.max_rounds;
+                g.scores = (6, 5); // player 0 (who) wins
+            }
+        });
     }: _(RawOrigin::Signed(who.clone()), game_id, 0u8, 0u8, 0u8)
     verify {
         let game = GameStorage::<T>::get(&game_id).expect("game exists");
@@ -136,6 +144,9 @@ benchmarks! {
         GameStorage::<T>::mutate(&game_id, |maybe_game| {
             if let Some(game) = maybe_game {
                 game.last_played_block = 0u32.into();
+                // Ensure this path ends the game and triggers rewards.
+                game.round = game.max_rounds;
+                game.scores = (6, 5); // player 0 (p0) wins
             }
         });
     }: _(RawOrigin::Signed(p1.clone()), game_id)

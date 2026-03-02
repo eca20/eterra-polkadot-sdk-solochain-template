@@ -19,6 +19,14 @@ use frame_support::{
 use frame_system::pallet_prelude::*;
 use sp_std::vec::Vec;
 
+/// Minimal interface for other pallets to grant experience to an account.
+///
+/// This avoids needing to dispatch the privileged `grant_experience` extrinsic from within
+/// runtime logic.
+pub trait ExperienceManager<AccountId> {
+    fn grant_experience(to: &AccountId, amount: u128);
+}
+
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
@@ -289,5 +297,15 @@ pub mod pallet {
             Self::deposit_event(Event::LevelUp { who, new_level });
             Ok(())
         }
+    }
+}
+
+impl<T: pallet::Config> ExperienceManager<T::AccountId> for pallet::Pallet<T> {
+    fn grant_experience(to: &T::AccountId, amount: u128) {
+        pallet::Experience::<T>::mutate(to, |xp| *xp = xp.saturating_add(amount));
+        pallet::Pallet::<T>::deposit_event(pallet::Event::<T>::ExperienceGranted {
+            to: to.clone(),
+            amount,
+        });
     }
 }

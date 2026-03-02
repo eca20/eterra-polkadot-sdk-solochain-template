@@ -4,7 +4,9 @@ use frame_support::{
     traits::{ConstU16, ConstU32, ConstU64, ConstU8, Currency, Get},
 };
 use frame_system as system;
+use pallet_assets;
 use pallet_balances;
+use pallet_eterra_gamer;
 use pallet_eterra_monte_carlo_ai as mc_ai;
 use pallet_eterra_simple_tcg;
 use parity_scale_codec::{Decode, Encode}; 
@@ -21,6 +23,8 @@ frame_support::construct_runtime!(
     pub enum Test {
         System: frame_system,
         Balances: pallet_balances,
+        Assets: pallet_assets,
+        Gamer: pallet_eterra_gamer,
         Cards: pallet_eterra_simple_tcg,
         Eterra: pallet_eterra,
         EterraMonteCarloAi: pallet_eterra_monte_carlo_ai,
@@ -35,10 +39,39 @@ parameter_types! {
     pub const ExistentialDeposit: u128 = 1;
 }
 
+const UNIT: u128 = 1_000_000_000_000;
+
 parameter_types! {
     pub const FaucetAccountId: u64 = 999; // arbitrary faucet for tests
     pub const RandomnessSeedConst: u64 = 42;
     pub const MintFeeConst: u128 = 0; // zero-fee minting in tests to avoid funding hassle
+}
+
+// --- Multi-currency + XP reward configuration (tests) ---
+parameter_types! {
+    pub const DevCoinAssetIdConst: u32 = 1;
+    pub const BetaCoinAssetIdConst: u32 = 2;
+    pub const WinRewardCoinConst: u128 = 10 * UNIT;
+    pub const WinRewardDevCoinConst: u128 = 100 * UNIT;
+    pub const WinRewardBetaCoinConst: u128 = 100 * UNIT;
+    pub const WinRewardExperienceConst: u128 = 100;
+}
+
+// --- Assets pallet test config ---
+parameter_types! {
+    pub const AssetDeposit: u128 = 0;
+    pub const AssetAccountDeposit: u128 = 0;
+    pub const MetadataDepositBase: u128 = 0;
+    pub const MetadataDepositPerByte: u128 = 0;
+    pub const ApprovalDeposit: u128 = 0;
+    pub const AssetsStringLimit: u32 = 64;
+}
+
+// --- Gamer pallet test config ---
+parameter_types! {
+    pub const GamerChangeFee: u128 = 0;
+    pub const GamerTagMaxLen: u32 = 32;
+    pub const GamerAvatarCidMaxLen: u32 = 96;
 }
 
 impl system::Config for Test {
@@ -88,6 +121,40 @@ impl pallet_balances::Config for Test {
     type MaxFreezes = ();
     type RuntimeHoldReason = ();
     type RuntimeFreezeReason = ();
+}
+
+impl pallet_assets::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type Balance = u128;
+    type AssetId = u32;
+    type AssetIdParameter = u32;
+    type Currency = Balances;
+    // Allow signed accounts to `create` in tests; we mainly use `force_create` via Root.
+    type CreateOrigin =
+        frame_support::traits::AsEnsureOriginWithArg<frame_system::EnsureSigned<u64>>;
+    type ForceOrigin = frame_system::EnsureRoot<u64>;
+    type AssetDeposit = AssetDeposit;
+    type AssetAccountDeposit = AssetAccountDeposit;
+    type MetadataDepositBase = MetadataDepositBase;
+    type MetadataDepositPerByte = MetadataDepositPerByte;
+    type ApprovalDeposit = ApprovalDeposit;
+    type StringLimit = AssetsStringLimit;
+    type Freezer = ();
+    type Extra = ();
+    type CallbackHandle = ();
+    type WeightInfo = ();
+    type RemoveItemsLimit = ConstU32<1_000>;
+}
+
+impl pallet_eterra_gamer::Config for Test {
+    type Currency = Balances;
+    type ExpIssuerOrigin = frame_system::EnsureRoot<u64>;
+    type FaucetAccount = FaucetAccountId;
+    type ChangeFee = GamerChangeFee;
+    type MaxTagLen = GamerTagMaxLen;
+    type MaxAvatarCidLen = GamerAvatarCidMaxLen;
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = ();
 }
 
 impl pallet_eterra_simple_tcg::Config for Test {
@@ -143,6 +210,14 @@ impl pallet_eterra::Config for Test {
     type HandSize = HandSizeConst;
     type AiAccount = FaucetAccountId;
     type AiDifficulty = ConstU8<60>;
+    type Assets = Assets;
+    type ExperienceManager = Gamer;
+    type DevCoinAssetId = DevCoinAssetIdConst;
+    type BetaCoinAssetId = BetaCoinAssetIdConst;
+    type WinRewardCoin = WinRewardCoinConst;
+    type WinRewardDevCoin = WinRewardDevCoinConst;
+    type WinRewardBetaCoin = WinRewardBetaCoinConst;
+    type WinRewardExperience = WinRewardExperienceConst;
     type WeightInfo = ();
 }
 
@@ -165,10 +240,25 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
     ext.execute_with(|| {
         System::set_block_number(1); // Reset block number
                                      // fund some accounts
-        let _ = <Balances as Currency<u64>>::deposit_creating(&1u64, 1_000_000_000_000);
-        let _ = <Balances as Currency<u64>>::deposit_creating(&2u64, 1_000_000_000_000);
-        let _ = <Balances as Currency<u64>>::deposit_creating(&999u64, 1_000_000_000_000);
-        // faucet
+        let _ = <Balances as Currency<u64>>::deposit_creating(&1u64, 1 * UNIT);
+        let _ = <Balances as Currency<u64>>::deposit_creating(&2u64, 1 * UNIT);
+        let _ = <Balances as Currency<u64>>::deposit_creating(&999u64, 1 * UNIT);
+
+        // Create devCOIN (asset 1) and betaCOIN (asset 2) for reward tests.
+        let _ = Assets::force_create(
+            frame_system::RawOrigin::Root.into(),
+            DevCoinAssetIdConst::get(),
+            FaucetAccountId::get(),
+            false,
+            1u128,
+        );
+        let _ = Assets::force_create(
+            frame_system::RawOrigin::Root.into(),
+            BetaCoinAssetIdConst::get(),
+            FaucetAccountId::get(),
+            false,
+            1u128,
+        );
     });
     ext
 }

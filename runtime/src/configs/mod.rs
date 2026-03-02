@@ -63,7 +63,7 @@ use super::{
 
 // Local module imports
 use super::{
-    AccountId, Aura, Balance, Balances, Block, BlockNumber, Council, Hash, Nonce, PalletInfo, Runtime,
+    AccountId, Aura, Assets, Balance, Balances, Block, BlockNumber, Council, EterraGamer, Hash, Nonce, PalletInfo, Runtime,
     RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
     System, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION,
 };
@@ -469,6 +469,16 @@ parameter_types! {
     // Payout is 1000 whole tokens (adjust UNIT to your decimals)
     pub FaucetPayoutAmount: Balance = 1_000 * UNIT;
     pub RewardPerWinAmount: Balance = 100 * UNIT;
+
+    // `pallet-assets` ids for additional fungible currencies.
+    pub const DevCoinAssetId: u32 = 1;
+    pub const BetaCoinAssetId: u32 = 2;
+
+    // Per-win rewards for the Eterra game.
+    pub EterraWinRewardCoin: Balance = 10 * UNIT;
+    pub EterraWinRewardDevCoin: Balance = 100 * UNIT;
+    pub EterraWinRewardBetaCoin: Balance = 100 * UNIT;
+    pub const EterraWinRewardExperience: u128 = 100;
 }
 
 #[cfg(not(feature = "runtime-production"))]
@@ -644,6 +654,14 @@ impl pallet_eterra::Config for Runtime {
     type HandSize = ConstU32<5>; // <<—— added
     type AiAccount = AiBotAccountParam;
     type AiDifficulty = ConstU8<60>;
+    type Assets = Assets;
+    type ExperienceManager = EterraGamer;
+    type DevCoinAssetId = DevCoinAssetId;
+    type BetaCoinAssetId = BetaCoinAssetId;
+    type WinRewardCoin = EterraWinRewardCoin;
+    type WinRewardDevCoin = EterraWinRewardDevCoin;
+    type WinRewardBetaCoin = EterraWinRewardBetaCoin;
+    type WinRewardExperience = EterraWinRewardExperience;
     type WeightInfo = pallet_eterra::weights::SubstrateWeight<Runtime>;
 }
 
