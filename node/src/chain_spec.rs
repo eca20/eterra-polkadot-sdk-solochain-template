@@ -188,7 +188,6 @@ fn testnet_genesis(
     // Initialize the Treasury account with 200 million COIN (12 decimals via UNIT = 1e12).
     let treasury_endowment: u128 = 200_000_000u128.saturating_mul(UNIT);
     let treasury_account = treasury_account();
-    let council_members_for_membership = council_members.clone();
 
     serde_json::json!({
         "balances": {
@@ -208,11 +207,9 @@ fn testnet_genesis(
             // Assign network admin rights.
             "key": sudo_key,
         },
-        "council": {
-            "members": council_members,
-        },
         "councilMembership": {
-            "members": council_members_for_membership,
+            // `pallet-membership` drives council membership and initializes the collective.
+            "members": council_members,
         },
         "eterraFaucet": {
             "faucetAccount": faucet_account,
