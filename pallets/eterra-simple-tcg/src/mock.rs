@@ -24,7 +24,6 @@ construct_runtime!(
 type Block = frame_system::mocking::MockBlock<Test>;
 
 parameter_types! {
-    pub const RandomnessSeed: u64 = 42;
     pub const ExistentialDeposit: u128 = 0; // keep accounts alive at 0 for tests
     pub const MintFeeConst: u128 = 100;     // 100 whole tokens in tests
     pub FaucetAccountParam: u64 = ALICE;    // faucet is Alice for tests
@@ -82,7 +81,6 @@ impl pallet_balances::Config for Test {
 
 impl pallet_eterra_simple_tcg::Config for Test {
     type RuntimeEvent = RuntimeEvent;
-    type RandomnessSeed = RandomnessSeed;
 
     // Currency integration for mint fee & marketplace
     type Currency = Balances;

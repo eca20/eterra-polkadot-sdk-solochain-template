@@ -22,8 +22,8 @@ use frame_support::pallet_prelude::ConstU32;
 use frame_support::traits::Get;
 use frame_support::BoundedVec;
 use frame_system::pallet_prelude::BlockNumberFor;
-use parity_scale_codec::Encode;
-use sp_runtime::{traits::Hash, Saturating};
+use parity_scale_codec::{Decode, Encode};
+use sp_runtime::{traits::{Hash, Zero}, Saturating};
 pub use types::board::Board;
 pub use types::card::Card;
 pub use types::card::Possession as Player; // PlayerOne / PlayerTwo
@@ -32,10 +32,32 @@ pub use types::game::*;
 use eterra_card_ai_adapter::eterra_adapter as ai;
 use pallet_eterra_monte_carlo_ai as mc_ai; // reserved for future use
 
+/// Simple deterministic pseudo-RNG built from repeated `blake2_256` hashing.
+///
+/// This is used to expand a single on-chain randomness seed into a stream of values.
+struct Blake2Rng<Hash> {
+    seed: Hash,
+    counter: u32,
+}
+
+impl<Hash: Encode + Clone> Blake2Rng<Hash> {
+    fn new(seed: Hash) -> Self {
+        Self { seed, counter: 0 }
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        let bytes = sp_io::hashing::blake2_256(&(self.seed.clone(), self.counter).encode());
+        self.counter = self.counter.wrapping_add(1);
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+    }
+}
+
 #[frame_support::pallet]
 pub mod pallet {
     use crate::weights::WeightInfo;
+    use core::marker::PhantomData;
     use frame_support::pallet_prelude::ConstU32;
+    use frame_support::traits::BuildGenesisConfig;
     use frame_support::traits::StorageVersion;
     use frame_support::traits::{Currency, fungibles};
     use frame_support::BoundedVec;
@@ -62,7 +84,7 @@ pub mod pallet {
     use pallet_eterra_monte_carlo_ai as mc_ai;
     use pallet_eterra_simple_tcg as cards; // reserved for future use
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -71,8 +93,15 @@ pub mod pallet {
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
         fn on_runtime_upgrade() -> Weight {
+            let current = StorageVersion::get::<Pallet<T>>();
             let mut weight = T::DbWeight::get().reads(1);
-            if StorageVersion::get::<Pallet<T>>() < STORAGE_VERSION {
+
+            // v3 adds `locked_mask` to the `Game` struct stored in `GameStorage`.
+            if current < StorageVersion::new(3) {
+                weight = weight.saturating_add(Self::migrate_game_storage_add_locked_mask());
+            }
+
+            if current < STORAGE_VERSION {
                 STORAGE_VERSION.put::<Pallet<T>>();
                 weight = weight.saturating_add(T::DbWeight::get().writes(1));
             }
@@ -80,6 +109,10 @@ pub mod pallet {
         }
 
         fn on_initialize(n: BlockNumberFor<T>) -> Weight {
+            // Make sure the AI-related keys exist so RPC clients can query them immediately,
+            // even if the chain state was created before these storages existed.
+            Self::ensure_ai_storage_initialized(n);
+
             // If enabled, adjust AI difficulty based on PvE payouts in the configured window.
             Self::maybe_adjust_ai_difficulty(n);
             <T as Config>::WeightInfo::on_initialize()
@@ -116,6 +149,14 @@ pub mod pallet {
         type BlocksPerWeek: Get<BlockNumberFor<Self>>;
         #[pallet::constant]
         type BlocksPerMonth: Get<BlockNumberFor<Self>>;
+
+        /// Minimum number of locked cells at game start (Gridlock).
+        #[pallet::constant]
+        type GridlockMinLocks: Get<u8>;
+
+        /// Maximum number of locked cells at game start (Gridlock).
+        #[pallet::constant]
+        type GridlockMaxLocks: Get<u8>;
 
         /// Multi-currency assets interface used to reward devCOIN/betaCOIN.
         type Assets: fungibles::Mutate<Self::AccountId, AssetId = u32, Balance = BalanceOf<Self>>;
@@ -196,6 +237,46 @@ pub mod pallet {
         pub paid_beta_coin: Balance,
     }
 
+    /// Summary of the AI difficulty controller state intended for front-end display.
+    ///
+    /// This is a convenience view computed and persisted by the pallet to keep UI logic simple.
+    #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+    pub struct AiDifficultyUiStatus<BlockNumber, Balance> {
+        pub current_difficulty: u8,
+        pub controller_enabled: bool,
+
+        pub tracked_currency: TrackedPayoutCurrency,
+        pub window: PayoutWindow,
+        pub window_start: BlockNumber,
+        pub window_len: BlockNumber,
+        pub window_end: BlockNumber,
+
+        pub target_per_window: Balance,
+        pub deadband: Balance,
+        pub step: u8,
+        pub min_difficulty: u8,
+        pub max_difficulty: u8,
+
+        pub paid_coin: Balance,
+        pub paid_dev_coin: Balance,
+        pub paid_beta_coin: Balance,
+        /// The paid amount for `tracked_currency`.
+        pub paid_tracked: Balance,
+
+        /// End-of-window thresholds (based on `target_per_window`, not the intra-window expected curve).
+        pub end_increase_threshold: Balance,
+        pub end_decrease_threshold: Balance,
+        /// How much more of `paid_tracked` is needed to *guarantee* an increase if the window ended now.
+        pub remaining_to_increase: Balance,
+        /// How much more of `paid_tracked` is needed to avoid a decrease if the window ended now.
+        pub shortfall_to_avoid_decrease: Balance,
+
+        /// If the window ended now, would difficulty go up, down, or stay the same?
+        pub would_end_now_increase: bool,
+        pub would_end_now_decrease: bool,
+        pub projected_next_difficulty_if_end_now: u8,
+    }
+
     #[pallet::type_value]
     pub fn DefaultAiDifficulty<T: Config>() -> u8 {
         T::AiDifficulty::get()
@@ -237,6 +318,48 @@ pub mod pallet {
         DefaultPayoutWindowState<T>,
     >;
 
+    #[pallet::type_value]
+    pub fn DefaultAiDifficultyUiStatus<T: Config>() -> AiDifficultyUiStatus<BlockNumberFor<T>, BalanceOf<T>> {
+        AiDifficultyUiStatus {
+            current_difficulty: T::AiDifficulty::get(),
+            controller_enabled: false,
+            tracked_currency: TrackedPayoutCurrency::Coin,
+            window: PayoutWindow::Day,
+            window_start: Zero::zero(),
+            window_len: Zero::zero(),
+            window_end: Zero::zero(),
+            target_per_window: Zero::zero(),
+            deadband: Zero::zero(),
+            step: 0,
+            min_difficulty: 0,
+            max_difficulty: 100,
+            paid_coin: Zero::zero(),
+            paid_dev_coin: Zero::zero(),
+            paid_beta_coin: Zero::zero(),
+            paid_tracked: Zero::zero(),
+            end_increase_threshold: Zero::zero(),
+            end_decrease_threshold: Zero::zero(),
+            remaining_to_increase: Zero::zero(),
+            shortfall_to_avoid_decrease: Zero::zero(),
+            would_end_now_increase: false,
+            would_end_now_decrease: false,
+            projected_next_difficulty_if_end_now: T::AiDifficulty::get(),
+        }
+    }
+
+    /// UI-friendly summary of the current AI controller state.
+    ///
+    /// This value is maintained by the pallet and is safe to query from a frontend without needing
+    /// to re-implement controller logic client-side.
+    #[pallet::storage]
+    #[pallet::getter(fn ai_difficulty_ui_status)]
+    pub type AiDifficultyUi<T: Config> = StorageValue<
+        _,
+        AiDifficultyUiStatus<BlockNumberFor<T>, BalanceOf<T>>,
+        ValueQuery,
+        DefaultAiDifficultyUiStatus<T>,
+    >;
+
     #[pallet::storage]
     #[pallet::getter(fn game_board)]
     pub type GameStorage<T: Config> = StorageMap<
@@ -274,11 +397,46 @@ pub mod pallet {
         ValueQuery,
     >;
 
+    #[pallet::genesis_config]
+    pub struct GenesisConfig<T: Config> {
+        /// Initial AI difficulty stored in `CurrentAiDifficulty`.
+        pub initial_ai_difficulty: u8,
+        pub _phantom: PhantomData<T>,
+    }
+
+    impl<T: Config> Default for GenesisConfig<T> {
+        fn default() -> Self {
+            Self {
+                initial_ai_difficulty: T::AiDifficulty::get(),
+                _phantom: Default::default(),
+            }
+        }
+    }
+
+    #[pallet::genesis_build]
+    impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
+        fn build(&self) {
+            // Ensure the storage key exists at genesis so RPC clients don't see `None`.
+            CurrentAiDifficulty::<T>::put(self.initial_ai_difficulty);
+
+            // Also materialize the window state + UI summary for frontends.
+            AiPayoutWindowState::<T>::put(DefaultPayoutWindowState::<T>::get());
+            let now = <frame_system::Pallet<T>>::block_number();
+            AiDifficultyUi::<T>::put(Pallet::<T>::compute_ai_difficulty_ui_status(now));
+        }
+    }
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
         GameCreated {
             game_id: GameId<T>,
+        },
+        /// One or more cells were locked at game start (Gridlock).
+        GridLocked {
+            game_id: GameId<T>,
+            locked_mask: u16,
+            locked_count: u8,
         },
         MovePlayed {
             game_id: GameId<T>,
@@ -346,6 +504,7 @@ pub mod pallet {
         InvalidMove,
         NotYourTurn,
         CellOccupied,
+        CellLocked,
         InvalidNumberOfPlayers,
         InternalError,
         BlocksToPlayLimitNotPassed,
@@ -522,6 +681,7 @@ pub mod pallet {
 
             let initial_board: Board = Default::default();
             let initial_scores = (5, 5);
+            let locked_mask = Self::generate_gridlock_mask(&game_id);
 
             let mut game: Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> = Game {
                 state: GameState::Playing,
@@ -531,6 +691,7 @@ pub mod pallet {
                 round: 0,
                 max_rounds: T::MaxRounds::get(),
                 board: initial_board.clone(),
+                locked_mask,
                 scores: initial_scores,
             };
 
@@ -581,17 +742,19 @@ pub mod pallet {
                 // players[0] is guaranteed to be the creator after normalization above
                 game.set_player_turn(0);
             } else {
-                // PvP: randomize starting player based on creator hash
-                game.set_player_turn(
-                    if sp_io::hashing::blake2_128(&creator.encode())[0] % 2 == 0 {
-                        0
-                    } else {
-                        1
-                    },
-                );
+                // PvP: randomize starting player based on on-chain entropy (consensus-safe).
+                game.set_player_turn(Self::choose_starting_player(&game_id));
             }
 
             GameStorage::<T>::insert(&game_id, game.clone());
+            let locked_count: u8 = game.locked_mask.count_ones() as u8;
+            if locked_count > 0 {
+                Self::deposit_event(Event::GridLocked {
+                    game_id,
+                    locked_mask: game.locked_mask,
+                    locked_count,
+                });
+            }
             Self::deposit_event(Event::GameCreated { game_id });
             Ok(())
         }
@@ -791,6 +954,10 @@ pub mod pallet {
             Self::validate_player_turn(&game, &who)?;
             ensure!(x < 4 && y < 4, Error::<T>::InvalidMove);
             ensure!(
+                !Self::is_cell_locked_mask(game.locked_mask, x, y),
+                Error::<T>::CellLocked
+            );
+            ensure!(
                 game.board[x as usize][y as usize].is_none(),
                 Error::<T>::CellOccupied
             );
@@ -982,6 +1149,7 @@ pub mod pallet {
             let old = CurrentAiDifficulty::<T>::get();
             CurrentAiDifficulty::<T>::put(new);
             Self::deposit_event(Event::AiDifficultySet { old, new });
+            Self::refresh_ai_difficulty_ui_status_now();
             Ok(())
         }
 
@@ -1045,6 +1213,7 @@ pub mod pallet {
                 deadband,
             });
 
+            Self::refresh_ai_difficulty_ui_status(now);
             Ok(())
         }
 
@@ -1062,6 +1231,7 @@ pub mod pallet {
                 paid_beta_coin: Zero::zero(),
             });
             Self::deposit_event(Event::AiDifficultyControllerDisabled);
+            Self::refresh_ai_difficulty_ui_status_now();
             Ok(())
         }
     }
@@ -1116,6 +1286,7 @@ impl<T: Config> Pallet<T> {
         let initial_board: Board = Default::default();
         let initial_scores = (5, 5);
         let players_vec = sp_std::vec![a.clone(), b.clone()];
+        let locked_mask = Self::generate_gridlock_mask(&game_id);
 
         let mut game: Game<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> = Game {
             state: GameState::Playing,
@@ -1128,6 +1299,7 @@ impl<T: Config> Pallet<T> {
             round: 0,
             max_rounds: T::MaxRounds::get(),
             board: initial_board.clone(),
+            locked_mask,
             scores: initial_scores,
         };
 
@@ -1153,14 +1325,18 @@ impl<T: Config> Pallet<T> {
         push_recent(a);
         push_recent(b);
 
-        // Randomize starting player using `a` as seed (keep behavior similar to create_game PvP)
-        game.set_player_turn(if sp_io::hashing::blake2_128(&a.encode())[0] % 2 == 0 {
-            0
-        } else {
-            1
-        });
+        // Randomize starting player based on on-chain entropy (consensus-safe).
+        game.set_player_turn(Self::choose_starting_player(&game_id));
 
         GameStorage::<T>::insert(&game_id, game.clone());
+        let locked_count: u8 = game.locked_mask.count_ones() as u8;
+        if locked_count > 0 {
+            Self::deposit_event(Event::GridLocked {
+                game_id,
+                locked_mask: game.locked_mask,
+                locked_count,
+            });
+        }
         Self::deposit_event(Event::GameCreated { game_id });
 
         Ok(game_id)
@@ -1175,6 +1351,258 @@ impl<T: Config> Pallet<T> {
                 Player::PlayerOne => ai::Possession::PlayerOne,
                 Player::PlayerTwo => ai::Possession::PlayerTwo,
             }),
+        }
+    }
+
+    fn is_cell_locked_mask(mask: u16, x: u8, y: u8) -> bool {
+        if x >= 4 || y >= 4 {
+            return false;
+        }
+        let bit: u16 = 1u16 << ((x as u16) * 4u16 + (y as u16));
+        (mask & bit) != 0
+    }
+
+    /// Choose which player should go first in a PvP game.
+    ///
+    /// This uses on-chain entropy (block context) so that non-authors cannot predictably force
+    /// themselves to start.
+    fn choose_starting_player(game_id: &GameId<T>) -> u8 {
+        let parent_hash = <frame_system::Pallet<T>>::parent_hash();
+        let ext_index = <frame_system::Pallet<T>>::extrinsic_index().unwrap_or(0);
+        let now = <frame_system::Pallet<T>>::block_number();
+        let subject = (b"eterra-start-player", game_id, parent_hash, ext_index, now).encode();
+        let seed = T::Hashing::hash(&subject);
+        (seed.as_ref().first().copied().unwrap_or(0) % 2) as u8
+    }
+
+    /// Generate the per-game Gridlock bitmask.
+    ///
+    /// Uses on-chain entropy to choose `GridlockMinLocks..=GridlockMaxLocks` distinct cells
+    /// on the 4x4 board to mark as locked.
+    fn generate_gridlock_mask(game_id: &GameId<T>) -> u16 {
+        let min = T::GridlockMinLocks::get().min(16);
+        let max = T::GridlockMaxLocks::get().min(16);
+        if max == 0 {
+            return 0;
+        }
+        let min = min.min(max);
+
+        // Derive a deterministic seed from current block context + game id.
+        //
+        // NOTE: This is not a cryptographic RNG, but it is good enough to avoid predictable
+        // patterns for a dev/testnet chain and does not require extra runtime pallets.
+        let parent_hash = <frame_system::Pallet<T>>::parent_hash();
+        let ext_index = <frame_system::Pallet<T>>::extrinsic_index().unwrap_or(0);
+        let now = <frame_system::Pallet<T>>::block_number();
+        let subject = (b"eterra-gridlock", game_id, parent_hash, ext_index, now).encode();
+        let seed = T::Hashing::hash(&subject);
+        let mut rng = crate::Blake2Rng::new(seed);
+
+        let span: u32 = (max - min).saturating_add(1) as u32;
+        let count: u8 = if span == 0 {
+            min
+        } else {
+            min.saturating_add((rng.next_u32() % span) as u8)
+        };
+        if count == 0 {
+            return 0;
+        }
+
+        // Fisher-Yates shuffle over 16 cells (0..15), then take first `count`.
+        let mut cells: [u8; 16] = core::array::from_fn(|i| i as u8);
+        for i in (1..16).rev() {
+            let j = (rng.next_u32() % ((i + 1) as u32)) as usize;
+            cells.swap(i, j);
+        }
+
+        let mut mask: u16 = 0;
+        for k in 0..(count as usize).min(16) {
+            mask |= 1u16 << (cells[k] as u16);
+        }
+        mask
+    }
+
+    fn migrate_game_storage_add_locked_mask() -> frame_support::weights::Weight {
+        #[derive(Decode)]
+        struct GameV2<Account, BlockNumber, NumPlayers>
+        where
+            NumPlayers: Clone,
+        {
+            pub state: GameState,
+            pub last_played_block: BlockNumber,
+            pub players: Players<Account, NumPlayers>,
+            pub player_turn: u8,
+            pub round: u8,
+            pub max_rounds: u8,
+            pub board: Board,
+            pub scores: (u8, u8),
+        }
+
+        // Count keys once for rough weight accounting.
+        let n: u64 = GameStorage::<T>::iter_keys().count() as u64;
+
+        GameStorage::<T>::translate_values::<GameV2<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>, _>(
+            |old| {
+                Some(Game::<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> {
+                    state: old.state,
+                    last_played_block: old.last_played_block,
+                    players: old.players,
+                    player_turn: old.player_turn,
+                    round: old.round,
+                    max_rounds: old.max_rounds,
+                    board: old.board,
+                    locked_mask: 0,
+                    scores: old.scores,
+                })
+            },
+        );
+
+        // We iterated keys once and translated (read+write) each value.
+        T::DbWeight::get()
+            .reads(n.saturating_mul(2))
+            .saturating_add(T::DbWeight::get().writes(n))
+    }
+
+    /// Ensure AI-related storages exist so RPC clients can query them without seeing `None`.
+    ///
+    /// This is defensive: genesis build initializes these keys, but upgraded chains (or unit tests)
+    /// may start without the keys written.
+    fn ensure_ai_storage_initialized(now: BlockNumberFor<T>) {
+        let mut dirty = false;
+
+        if !CurrentAiDifficulty::<T>::exists() {
+            CurrentAiDifficulty::<T>::put(T::AiDifficulty::get());
+            dirty = true;
+        }
+
+        if !AiPayoutWindowState::<T>::exists() {
+            AiPayoutWindowState::<T>::put(DefaultPayoutWindowState::<T>::get());
+            dirty = true;
+        }
+
+        if !AiDifficultyUi::<T>::exists() {
+            dirty = true;
+        }
+
+        if dirty {
+            AiDifficultyUi::<T>::put(Self::compute_ai_difficulty_ui_status(now));
+        }
+    }
+
+    fn refresh_ai_difficulty_ui_status(now: BlockNumberFor<T>) {
+        AiDifficultyUi::<T>::put(Self::compute_ai_difficulty_ui_status(now));
+    }
+
+    fn refresh_ai_difficulty_ui_status_now() {
+        let now = <frame_system::Pallet<T>>::block_number();
+        Self::refresh_ai_difficulty_ui_status(now);
+    }
+
+    /// Compute a UI-friendly summary for the current controller state.
+    ///
+    /// This intentionally models the "end-of-window" decision (vs the intra-window expected curve)
+    /// so the UI can show "remaining until increase" and "what would happen if the window ended now".
+    fn compute_ai_difficulty_ui_status(
+        now: BlockNumberFor<T>,
+    ) -> AiDifficultyUiStatus<BlockNumberFor<T>, BalanceOf<T>> {
+        let current_difficulty_raw = CurrentAiDifficulty::<T>::get();
+        let window_state = AiPayoutWindowState::<T>::get();
+
+        let paid_coin = window_state.paid_coin;
+        let paid_dev_coin = window_state.paid_dev_coin;
+        let paid_beta_coin = window_state.paid_beta_coin;
+
+        let cfg = match AiDifficultyController::<T>::get() {
+            Some(c) => c,
+            None => {
+                return AiDifficultyUiStatus {
+                    current_difficulty: current_difficulty_raw,
+                    controller_enabled: false,
+                    tracked_currency: TrackedPayoutCurrency::Coin,
+                    window: PayoutWindow::Day,
+                    window_start: window_state.window_start,
+                    window_len: Zero::zero(),
+                    window_end: window_state.window_start,
+                    target_per_window: Zero::zero(),
+                    deadband: Zero::zero(),
+                    step: 0,
+                    min_difficulty: 0,
+                    max_difficulty: 100,
+                    paid_coin,
+                    paid_dev_coin,
+                    paid_beta_coin,
+                    paid_tracked: Zero::zero(),
+                    end_increase_threshold: Zero::zero(),
+                    end_decrease_threshold: Zero::zero(),
+                    remaining_to_increase: Zero::zero(),
+                    shortfall_to_avoid_decrease: Zero::zero(),
+                    would_end_now_increase: false,
+                    would_end_now_decrease: false,
+                    projected_next_difficulty_if_end_now: current_difficulty_raw,
+                };
+            }
+        };
+
+        let window_len = Self::window_len_blocks(cfg.window);
+        let window_start = if window_state.window_start.is_zero() {
+            // If the controller is enabled but the window hasn't been initialized yet, treat
+            // the current block as the window start for display purposes.
+            now
+        } else {
+            window_state.window_start
+        };
+        let window_end = window_start.saturating_add(window_len);
+
+        let paid_tracked = Self::paid_for_currency(&window_state, cfg.tracked_currency);
+
+        let end_increase_threshold = cfg.target_per_window.saturating_add(cfg.deadband);
+        let end_decrease_threshold = cfg.target_per_window.saturating_sub(cfg.deadband);
+
+        let remaining_to_increase = end_increase_threshold.saturating_sub(paid_tracked);
+        let shortfall_to_avoid_decrease = end_decrease_threshold.saturating_sub(paid_tracked);
+
+        // Use the clamped difficulty as the base for the projection (matches controller behavior).
+        let current_difficulty = current_difficulty_raw.clamp(cfg.min_difficulty, cfg.max_difficulty);
+
+        let would_end_now_increase = cfg.step != 0 && paid_tracked > end_increase_threshold;
+        let would_end_now_decrease = cfg.step != 0 && paid_tracked < end_decrease_threshold;
+
+        let projected_next_difficulty_if_end_now = if would_end_now_increase {
+            current_difficulty
+                .saturating_add(cfg.step)
+                .min(cfg.max_difficulty)
+        } else if would_end_now_decrease {
+            current_difficulty
+                .saturating_sub(cfg.step)
+                .max(cfg.min_difficulty)
+        } else {
+            current_difficulty
+        };
+
+        AiDifficultyUiStatus {
+            current_difficulty,
+            controller_enabled: true,
+            tracked_currency: cfg.tracked_currency,
+            window: cfg.window,
+            window_start,
+            window_len,
+            window_end,
+            target_per_window: cfg.target_per_window,
+            deadband: cfg.deadband,
+            step: cfg.step,
+            min_difficulty: cfg.min_difficulty,
+            max_difficulty: cfg.max_difficulty,
+            paid_coin,
+            paid_dev_coin,
+            paid_beta_coin,
+            paid_tracked,
+            end_increase_threshold,
+            end_decrease_threshold,
+            remaining_to_increase,
+            shortfall_to_avoid_decrease,
+            would_end_now_increase,
+            would_end_now_decrease,
+            projected_next_difficulty_if_end_now,
         }
     }
 
@@ -1220,6 +1648,8 @@ impl<T: Config> Pallet<T> {
             s.paid_dev_coin = s.paid_dev_coin.saturating_add(paid_dev);
             s.paid_beta_coin = s.paid_beta_coin.saturating_add(paid_beta);
         });
+
+        Self::refresh_ai_difficulty_ui_status_now();
     }
 
     /// Adjust the AI difficulty (if controller is configured) to target payouts in the current window.
@@ -1237,11 +1667,13 @@ impl<T: Config> Pallet<T> {
             return;
         }
 
+        let mut dirty = false;
         AiPayoutWindowState::<T>::mutate(|s| {
             // Initialize window on first use.
             if sp_runtime::traits::Zero::is_zero(&s.window_start) {
                 s.window_start = now;
                 s.last_adjust = now;
+                dirty = true;
                 return;
             }
 
@@ -1250,7 +1682,7 @@ impl<T: Config> Pallet<T> {
             if elapsed >= window_len {
                 let paid = Self::paid_for_currency(s, cfg.tracked_currency);
                 let expected = cfg.target_per_window;
-                Self::adjust_difficulty(&cfg, paid, expected);
+                let _ = Self::adjust_difficulty(&cfg, paid, expected);
 
                 // Start a fresh window.
                 s.window_start = now;
@@ -1258,6 +1690,7 @@ impl<T: Config> Pallet<T> {
                 s.paid_coin = sp_runtime::traits::Zero::zero();
                 s.paid_dev_coin = sp_runtime::traits::Zero::zero();
                 s.paid_beta_coin = sp_runtime::traits::Zero::zero();
+                dirty = true;
                 return;
             }
 
@@ -1285,21 +1718,30 @@ impl<T: Config> Pallet<T> {
             let expected: BalanceOf<T> =
                 sp_runtime::traits::SaturatedConversion::saturated_into(expected_u128);
 
-            Self::adjust_difficulty(&cfg, paid, expected);
+            if Self::adjust_difficulty(&cfg, paid, expected) {
+                dirty = true;
+            }
             s.last_adjust = now;
         });
+
+        if dirty {
+            Self::refresh_ai_difficulty_ui_status(now);
+        }
     }
 
     fn adjust_difficulty(
         cfg: &AiDifficultyControllerConfig<BlockNumberFor<T>, BalanceOf<T>>,
         paid: BalanceOf<T>,
         expected: BalanceOf<T>,
-    ) {
+    ) -> bool {
+        let mut changed = false;
+
         // Clamp the current setting into the configured range first.
         let old_raw = CurrentAiDifficulty::<T>::get();
         let old = old_raw.clamp(cfg.min_difficulty, cfg.max_difficulty);
         if old != old_raw {
             CurrentAiDifficulty::<T>::put(old);
+            changed = true;
         }
 
         let up_threshold = expected.saturating_add(cfg.deadband);
@@ -1321,7 +1763,10 @@ impl<T: Config> Pallet<T> {
                 paid,
                 expected,
             });
+            changed = true;
         }
+
+        changed
     }
     /// If the next player is the AI in a PvE game, let the AI take its move immediately.
     fn maybe_ai_take_turn(
@@ -1349,6 +1794,11 @@ impl<T: Config> Pallet<T> {
             let x = action.x;
             let y = action.y;
             let idx = action.hand_index as usize;
+
+            // Defensive: the AI adapter should not suggest locked cells, but if it does, abort.
+            if Self::is_cell_locked_mask(game.locked_mask, x, y) {
+                return;
+            }
 
             // Play as AI (mirror play_from_hand)
             if let Some(mut ai_hand) = HandsOfGame::<T>::get(game_id, &ai_acc) {
@@ -1457,6 +1907,7 @@ impl<T: Config> Pallet<T> {
 
         Some(ai::State {
             board: board_ai,
+            locked_mask: game.locked_mask,
             scores: game.scores,
             player_turn: game.player_turn,
             round: game.round,
@@ -1586,6 +2037,14 @@ impl<T: Config> Pallet<T> {
         ensure!(
             player_move.place_index_x < 4 && player_move.place_index_y < 4,
             Error::<T>::InvalidMove
+        );
+        ensure!(
+            !Self::is_cell_locked_mask(
+                game.locked_mask,
+                player_move.place_index_x,
+                player_move.place_index_y
+            ),
+            Error::<T>::CellLocked
         );
         ensure!(
             game.board[player_move.place_index_x as usize][player_move.place_index_y as usize]

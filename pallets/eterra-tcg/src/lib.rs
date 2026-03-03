@@ -15,7 +15,11 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
-use frame_support::{pallet_prelude::*, traits::Get, BoundedVec};
+use frame_support::{
+    pallet_prelude::*,
+    traits::{Currency, ExistenceRequirement, Get},
+    BoundedVec,
+};
 use frame_system::{ensure_signed, pallet_prelude::OriginFor};
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
@@ -31,6 +35,10 @@ pub mod pallet {
     use frame_system::pallet_prelude::BlockNumberFor;
 
     const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+
+    /// Balance type bound to the runtime currency.
+    pub type BalanceOf<T> =
+        <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -57,9 +65,16 @@ pub mod pallet {
         /// The overarching event type.
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
-        /// A numeric seed for our randomness.
+        /// Currency used to charge for minting packs.
+        type Currency: Currency<Self::AccountId>;
+
+        /// Fixed pack mint price (in native `COIN` base units).
         #[pallet::constant]
-        type RandomnessSeed: Get<u64>;
+        type PackPrice: Get<BalanceOf<Self>>;
+
+        /// Account that receives pack mint payments.
+        #[pallet::constant]
+        type PackPriceReceiver: Get<Self::AccountId>;
 
         /// The maximum times a card can generate slots before it is forced to finalize.
         #[pallet::constant]
@@ -218,6 +233,8 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         /// Mint a new pack of cards for the caller, up to `MaxPacks`.
+        ///
+        /// Charges `PackPrice` (in native `COIN`) and mints `CardsPerPack` unique card IDs.
         /// Each card is stored globally in `Cards<T>`.
         #[pallet::call_index(0)]
         #[pallet::weight(T::WeightInfo::mint_pack())]
@@ -230,6 +247,11 @@ pub mod pallet {
                 packs.len() < T::MaxPacks::get() as usize,
                 Error::<T>::MaxPacksReached
             );
+
+            // Charge the pack price up-front.
+            let price = T::PackPrice::get();
+            let receiver = T::PackPriceReceiver::get();
+            T::Currency::transfer(&player, &receiver, price, ExistenceRequirement::KeepAlive)?;
 
             let pack_id = <frame_system::Pallet<T>>::block_number().saturated_into::<u32>();
 
@@ -295,9 +317,24 @@ pub mod pallet {
                 );
 
                 // 5) Generate slot values
-                let current_block = <frame_system::Pallet<T>>::block_number();
-                let seed = T::RandomnessSeed::get();
-                let hash = T::Hashing::hash_of(&(current_block, &player, seed));
+                let parent_hash = <frame_system::Pallet<T>>::parent_hash();
+                let ext_index = <frame_system::Pallet<T>>::extrinsic_index().unwrap_or(0);
+                let now = <frame_system::Pallet<T>>::block_number();
+
+                // Derive pseudo-random bytes from on-chain entropy + (player, card_id, attempts).
+                //
+                // Deterministic + consensus-safe, but not cryptographically secure.
+                let subject = (
+                    b"eterra-tcg/slot",
+                    now,
+                    parent_hash,
+                    ext_index,
+                    &player,
+                    card_id,
+                    attempts,
+                )
+                    .encode();
+                let hash = T::Hashing::hash(&subject);
                 let values = hash.as_ref()[..4].try_into().unwrap_or([0u8; 4]);
 
                 // 6) Update card’s slot values

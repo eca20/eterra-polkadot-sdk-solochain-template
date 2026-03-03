@@ -47,7 +47,6 @@ A compact card ownership + marketplace pallet.
 ```rust
 impl pallet_eterra_simple_tcg::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    type RandomnessSeed = ConstU64<12345>;
     type Currency = Balances;
     type MintFee = ConstU128<{ 100 * UNIT }>;
     type FaucetAccount = TreasuryAccount;

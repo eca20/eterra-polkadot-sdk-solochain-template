@@ -167,6 +167,11 @@ fn test_mint_pack_storage_and_events() {
 fn mint_pack_rolls_back_when_card_ids_exhausted() {
     new_test_ext().execute_with(|| {
         let player = 1u64;
+        let receiver = <Test as EterraSlotsConfig>::PackPriceReceiver::get();
+        let price: u128 = <Test as EterraSlotsConfig>::PackPrice::get();
+        let player_before = Balances::free_balance(player);
+        let receiver_before = Balances::free_balance(receiver);
+
         NextCardId::<Test>::put(u32::MAX - 1);
 
         assert_noop!(
@@ -180,6 +185,42 @@ fn mint_pack_rolls_back_when_card_ids_exhausted() {
         assert!(Cards::<Test>::get(u32::MAX).is_none());
         assert!(PlayerPacks::<Test>::get(player).is_empty());
         assert_eq!(ActiveCard::<Test>::get(player), None);
+
+        // Fee transfer must also be rolled back.
+        assert_eq!(Balances::free_balance(player), player_before);
+        assert_eq!(Balances::free_balance(receiver), receiver_before);
+        // Sanity check: price is non-zero in this mock.
+        assert!(price > 0);
+    });
+}
+
+#[test]
+fn mint_pack_charges_price_and_mints_expected_card_count() {
+    new_test_ext().execute_with(|| {
+        let player = 1u64;
+        let receiver = <Test as EterraSlotsConfig>::PackPriceReceiver::get();
+        let price: u128 = <Test as EterraSlotsConfig>::PackPrice::get();
+        let cards_per_pack: u8 = <Test as EterraSlotsConfig>::CardsPerPack::get();
+
+        let player_before = Balances::free_balance(player);
+        let receiver_before = Balances::free_balance(receiver);
+
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
+
+        // Price charged to player and sent to receiver.
+        assert_eq!(Balances::free_balance(player), player_before - price);
+        assert_eq!(Balances::free_balance(receiver), receiver_before + price);
+
+        // Pack contains the expected number of unique cards (unique IDs).
+        let packs = EterraSlots::player_packs(player);
+        let pack = packs.last().expect("pack exists");
+        assert_eq!(pack.get_card_ids().len(), cards_per_pack as usize);
+
+        // Ensure the card IDs within the pack are unique.
+        let mut ids: sp_std::vec::Vec<u32> = pack.get_card_ids().iter().copied().collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), cards_per_pack as usize);
     });
 }
 

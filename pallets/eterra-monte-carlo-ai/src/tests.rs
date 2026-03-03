@@ -150,6 +150,7 @@ fn eterra_adapter_ai_returns_legal_move_and_applies() {
 
         let s0 = State {
             board,
+            locked_mask: 0,
             scores: (5, 5),
             player_turn: 0,
             round: 0,
@@ -203,6 +204,7 @@ fn adapter_list_actions_respects_max_bound() {
         };
         let s = State {
             board,
+            locked_mask: 0,
             scores: (5, 5),
             player_turn: 0,
             round: 0,
@@ -278,6 +280,7 @@ fn ai_prefers_capture_when_available_high_difficulty() {
 
         let s0 = State {
             board,
+            locked_mask: 0,
             scores: (5, 5),
             player_turn: 0,
             round: 0,

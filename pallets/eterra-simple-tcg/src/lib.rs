@@ -102,10 +102,6 @@ pub mod pallet {
         /// The overarching event type.
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
-        /// A numeric seed for our randomness.
-        #[pallet::constant]
-        type RandomnessSeed: Get<u64>;
-
         /// Currency used to charge the mint fee.
         type Currency: Currency<Self::AccountId>;
 
@@ -413,10 +409,15 @@ pub mod pallet {
                 ExistenceRequirement::KeepAlive,
             )?;
 
-            // Derive pseudo-random bytes from block, owner, seed, and card_id
-            let current_block = <frame_system::Pallet<T>>::block_number();
-            let seed = T::RandomnessSeed::get();
-            let hash = T::Hashing::hash_of(&(current_block, owner, seed, card_id));
+            // Derive pseudo-random bytes from on-chain entropy + (owner, card_id).
+            //
+            // This is deterministic and consensus-safe, but not cryptographically secure.
+            let parent_hash = <frame_system::Pallet<T>>::parent_hash();
+            let ext_index = <frame_system::Pallet<T>>::extrinsic_index().unwrap_or(0);
+            let now = <frame_system::Pallet<T>>::block_number();
+            let subject =
+                (b"eterra-simple-tcg/mint", now, parent_hash, ext_index, owner, card_id).encode();
+            let hash = T::Hashing::hash(&subject);
 
             // Use the first 4 bytes for the four directions (1..=9)
             let bytes = hash.as_ref();

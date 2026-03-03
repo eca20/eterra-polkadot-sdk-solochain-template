@@ -78,6 +78,7 @@ fn seed_game<T: Config>(
         round: 0,
         max_rounds: T::MaxRounds::get(),
         board: Default::default(),
+        locked_mask: 0,
         scores: (5, 5),
     };
     GameStorage::<T>::insert(&game_id, game);

@@ -207,6 +207,9 @@ impl pallet_assets::Config for Runtime {
     type CallbackHandle = ();
     type WeightInfo = pallet_assets::weights::SubstrateWeight<Runtime>;
     type RemoveItemsLimit = ConstU32<1_000>;
+
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHelper = ();
 }
 
 parameter_types! {
@@ -448,6 +451,9 @@ parameter_types! {
     pub const EterraBlocksPerDay: BlockNumber = DAYS;
     pub const EterraBlocksPerWeek: BlockNumber = DAYS.saturating_mul(7);
     pub const EterraBlocksPerMonth: BlockNumber = DAYS.saturating_mul(30);
+    // Gridlock: lock 1..=5 random cells at game start.
+    pub const EterraGridlockMinLocks: u8 = 1;
+    pub const EterraGridlockMaxLocks: u8 = 5;
     pub const MaxSlotLength: u32 = 3;
     pub const MaxOptionsPerSlot: u32 = 10;
     pub const MaxRollsPerRound: u32 = 3;
@@ -552,7 +558,6 @@ impl pallet_eterra_monte_carlo_ai::pallet::Config for Runtime {
     type MaxActions = ConstU32<64>;        // max legal moves enumerated
     type BaseIterations = ConstU32<200>;   // baseline simulations per suggest() call
     type MaxPlayoutDepth = ConstU16<16>;   // cut off long playouts
-    type RandomnessSeed = ConstU64<12345>; // deterministic-ish seed for hashing/entropy
     type WeightInfo = pallet_eterra_monte_carlo_ai::weights::SubstrateWeight<Runtime>;
 
     #[cfg(feature = "runtime-benchmarks")]
@@ -590,9 +595,6 @@ impl pallet_eterra_daily_slots::Config for Runtime {
 
 impl pallet_eterra_simple_tcg::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-
-    // You already had this:
-    type RandomnessSeed = ConstU64<12345>;
 
     // NEW: hook up balances as the currency
     type Currency = Balances;
@@ -643,10 +645,12 @@ type MatchmakerHandProvider = HandProviderAdapter;
 
 impl pallet_eterra_tcg::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    type RandomnessSeed = ConstU64<42>;
 
+    type Currency = Balances;
+    type PackPrice = ConstU128<{ 500 * UNIT }>;
+    type PackPriceReceiver = TreasuryAccount;
     type MaxAttempts = ConstU8<3>; // Set maximum attempts per card to 3
-    type CardsPerPack = ConstU8<5>; // Set number of cards per pack to 5
+    type CardsPerPack = ConstU8<6>; // Set number of cards per pack to 6
     type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
     type WeightInfo = pallet_eterra_tcg::weights::SubstrateWeight<Runtime>;
 }
@@ -658,12 +662,15 @@ impl pallet_eterra::Config for Runtime {
     type BlocksToPlayLimit = EterraBlocksToPlayLimit;
     type HandSize = ConstU32<5>; // <<—— added
     type AiAccount = AiBotAccountParam;
-    type AiDifficulty = ConstU8<60>;
+    // Start low by default; the on-chain controller can raise/lower this over time.
+    type AiDifficulty = ConstU8<20>;
     type AdminOrigin = PrivilegedControlOrigin;
     type BlocksPerHour = EterraBlocksPerHour;
     type BlocksPerDay = EterraBlocksPerDay;
     type BlocksPerWeek = EterraBlocksPerWeek;
     type BlocksPerMonth = EterraBlocksPerMonth;
+    type GridlockMinLocks = EterraGridlockMinLocks;
+    type GridlockMaxLocks = EterraGridlockMaxLocks;
     type Assets = Assets;
     type ExperienceManager = EterraGamer;
     type DevCoinAssetId = DevCoinAssetId;

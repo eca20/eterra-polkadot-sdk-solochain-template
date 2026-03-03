@@ -41,6 +41,9 @@ where
     pub round: u8,                             // Current round number
     pub max_rounds: u8,                        // Maximum number of rounds
     pub board: Board,
+    /// Bitmask of locked cells on the 4x4 board (Gridlock feature).
+    /// Bit i (0..15) corresponds to cell (x=i/4, y=i%4) when indexing board as [x][y].
+    pub locked_mask: u16,
     pub scores: (u8, u8), // Scores for each player
 }
 

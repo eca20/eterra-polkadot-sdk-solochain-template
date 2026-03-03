@@ -21,7 +21,6 @@ parameter_types! {
     pub const MaxActionsConst: u32 = 8;
     pub const BaseIterationsConst: u32 = 200; // base rollouts
     pub const MaxPlayoutDepthConst: u16 = 32;
-    pub const RandomnessSeedConst: u64 = 0xDEAD_BEEF_CAFE_BABE;
 }
 
 impl system::Config for Test {
@@ -148,7 +147,6 @@ impl pallet_eterra_monte_carlo_ai::Config for Test {
     type MaxActions = MaxActionsConst;
     type BaseIterations = BaseIterationsConst;
     type MaxPlayoutDepth = MaxPlayoutDepthConst;
-    type RandomnessSeed = RandomnessSeedConst;
 
     type WeightInfo = ();
 }

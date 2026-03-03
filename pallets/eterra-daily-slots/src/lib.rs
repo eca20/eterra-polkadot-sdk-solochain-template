@@ -373,8 +373,27 @@ pub mod pallet {
                 return Err(Error::<T>::NoTicketsAvailable);
             }
             let now = T::TimeProvider::now().as_secs();
-            let seed = T::Hashing::hash_of(&(now, frame_system::Pallet::<T>::block_number()));
-            let pick = (seed.as_ref()[0] as u32) % total;
+            let parent_hash = frame_system::Pallet::<T>::parent_hash();
+            let ext_index = frame_system::Pallet::<T>::extrinsic_index().unwrap_or(0);
+            let block = frame_system::Pallet::<T>::block_number();
+
+            // Derive a pseudo-random pick from on-chain entropy + drawing context.
+            //
+            // Deterministic + consensus-safe, but not cryptographically secure.
+            let seed = T::Hashing::hash_of(&(
+                b"eterra-daily-slots/weekly-drawing",
+                now,
+                parent_hash,
+                ext_index,
+                block,
+                total,
+            ));
+            let bytes = seed.as_ref();
+            let mut b = [0u8; 4];
+            for (i, bi) in b.iter_mut().enumerate() {
+                *bi = bytes.get(i).copied().unwrap_or(0);
+            }
+            let pick = u32::from_le_bytes(b) % total;
 
             let mut cum = 0;
             let mut seen: u32 = 0;

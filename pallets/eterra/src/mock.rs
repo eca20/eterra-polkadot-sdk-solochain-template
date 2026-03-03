@@ -1,7 +1,7 @@
 use crate as pallet_eterra;
 use frame_support::{
     parameter_types,
-    traits::{ConstU16, ConstU32, ConstU64, ConstU8, Currency, Get},
+    traits::{ConstU16, ConstU32, Currency, Get},
 };
 use frame_system as system;
 use pallet_assets;
@@ -43,7 +43,6 @@ const UNIT: u128 = 1_000_000_000_000;
 
 parameter_types! {
     pub const FaucetAccountId: u64 = 999; // arbitrary faucet for tests
-    pub const RandomnessSeedConst: u64 = 42;
     pub const MintFeeConst: u128 = 0; // zero-fee minting in tests to avoid funding hassle
 }
 
@@ -159,7 +158,6 @@ impl pallet_eterra_gamer::Config for Test {
 
 impl pallet_eterra_simple_tcg::Config for Test {
     type RuntimeEvent = RuntimeEvent;
-    type RandomnessSeed = RandomnessSeedConst;
     type Currency = Balances;
     type MintFee = MintFeeConst;
     type FaucetAccount = FaucetAccountId;
@@ -206,8 +204,13 @@ parameter_types! {
 }
 
 parameter_types! {
-    pub const AiDifficultyConst: u8 = 60;
-    pub const AiRandomnessSeedConst: u64 = 12345;
+    pub const AiDifficultyConst: u8 = 20;
+}
+
+parameter_types! {
+    // Disable Gridlock by default in the shared test runtime so existing game tests remain stable.
+    pub const GridlockMinLocksConst: u8 = 0;
+    pub const GridlockMaxLocksConst: u8 = 0;
 }
 
 impl pallet_eterra::Config for Test {
@@ -217,12 +220,14 @@ impl pallet_eterra::Config for Test {
     type BlocksToPlayLimit = MockBlocksToPlayLimit;
     type HandSize = HandSizeConst;
     type AiAccount = FaucetAccountId;
-    type AiDifficulty = ConstU8<60>;
+    type AiDifficulty = AiDifficultyConst;
     type AdminOrigin = frame_system::EnsureRoot<u64>;
     type BlocksPerHour = BlocksPerHourConst;
     type BlocksPerDay = BlocksPerDayConst;
     type BlocksPerWeek = BlocksPerWeekConst;
     type BlocksPerMonth = BlocksPerMonthConst;
+    type GridlockMinLocks = GridlockMinLocksConst;
+    type GridlockMaxLocks = GridlockMaxLocksConst;
     type Assets = Assets;
     type ExperienceManager = Gamer;
     type DevCoinAssetId = DevCoinAssetIdConst;
@@ -240,7 +245,6 @@ impl mc_ai::pallet::Config for Test {
     type MaxActions = ConstU32<64>;
     type BaseIterations = ConstU32<100>;
     type MaxPlayoutDepth = ConstU16<16>;
-    type RandomnessSeed = ConstU64<12345>;
     type WeightInfo = ();
 }
 

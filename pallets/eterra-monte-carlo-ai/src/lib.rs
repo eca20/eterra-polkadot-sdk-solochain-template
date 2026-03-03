@@ -117,10 +117,6 @@ pub mod pallet {
         #[pallet::constant]
         type MaxPlayoutDepth: Get<u16>;
 
-        /// Seed used for deterministic PRNG inside the pallet.
-        #[pallet::constant]
-        type RandomnessSeed: Get<u64>;
-
         /// Weight information for the extrinsics of this pallet.
         type WeightInfo: WeightInfo;
 
@@ -198,8 +194,27 @@ pub mod pallet {
         pub fn prng_u64<C: Config>(salt: u64) -> u64 {
             // Deterministic, cheap PRNG for no_std.
             let n = Nonce::<C>::get();
-            let seed = C::RandomnessSeed::get();
-            let mix = seed ^ n ^ salt;
+            let parent_hash = <frame_system::Pallet<C>>::parent_hash();
+            let ext_index = <frame_system::Pallet<C>>::extrinsic_index().unwrap_or(0);
+            let now = <frame_system::Pallet<C>>::block_number();
+
+            // Fold block context + nonce + salt into a single u64.
+            //
+            // Deterministic + consensus-safe, but not cryptographically secure.
+            let h = <C as frame_system::Config>::Hashing::hash_of(&(
+                b"eterra-monte-carlo-ai/prng",
+                parent_hash,
+                ext_index,
+                now,
+                n,
+                salt,
+            ));
+            let bytes = h.as_ref();
+            let mut b = [0u8; 8];
+            for (i, bi) in b.iter_mut().enumerate() {
+                *bi = bytes.get(i).copied().unwrap_or(0);
+            }
+            let mix = u64::from_le_bytes(b);
 
             // SplitMix64-ish
             let mut z = mix.wrapping_add(0x9E3779B97F4A7C15);

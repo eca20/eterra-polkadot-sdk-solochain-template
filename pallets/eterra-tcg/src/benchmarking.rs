@@ -3,6 +3,14 @@
 use super::*;
 use frame_benchmarking::{account, benchmarks, whitelisted_caller};
 use frame_system::RawOrigin;
+use sp_runtime::traits::Saturating;
+
+fn fund<T: Config>(who: &T::AccountId) {
+    // Ensure the caller can pay the pack price and still satisfy `KeepAlive`.
+    let price = T::PackPrice::get();
+    let amount = price.saturating_add(price);
+    let _ = T::Currency::deposit_creating(who, amount);
+}
 
 fn active_card_id<T: Config>(player: &T::AccountId) -> u32 {
     let packs = PlayerPacks::<T>::get(player);
@@ -15,6 +23,7 @@ fn active_card_id<T: Config>(player: &T::AccountId) -> u32 {
 }
 
 fn setup_pack<T: Config>(player: &T::AccountId) -> u32 {
+    fund::<T>(player);
     Pallet::<T>::mint_pack(RawOrigin::Signed(player.clone()).into())
         .expect("mint pack succeeds");
     active_card_id::<T>(player)
@@ -30,6 +39,7 @@ fn setup_generated_slot<T: Config>(player: &T::AccountId) -> u32 {
 benchmarks! {
     mint_pack {
         let caller: T::AccountId = whitelisted_caller();
+        fund::<T>(&caller);
     }: _(RawOrigin::Signed(caller.clone()))
     verify {
         let packs = PlayerPacks::<T>::get(&caller);

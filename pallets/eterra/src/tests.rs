@@ -1972,6 +1972,37 @@ fn play_from_hand_cell_occupied_and_bounds_checked() {
 }
 
 #[test]
+fn play_from_hand_rejects_locked_cells() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+        let ids = mint_cards_for(creator, 5);
+        assert_ok!(Eterra::submit_hand(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            bounded_hand_ids(ids)
+        ));
+
+        // Ensure it's creator's turn.
+        ensure_my_turn(game_id, creator, opponent);
+
+        // Manually lock cell (0,0) for this test runtime (Gridlock is disabled by default).
+        let mut game = GameStorage::<Test>::get(&game_id).unwrap();
+        game.locked_mask |= 1u16 << 0;
+        GameStorage::<Test>::insert(&game_id, game);
+
+        let res = Eterra::play_from_hand(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            0,
+            0,
+            0,
+        );
+        assert_noop!(res, crate::Error::<Test>::CellLocked);
+    });
+}
+
+#[test]
 fn transfer_after_submit_does_not_block_play() {
     init_logger();
     new_test_ext().execute_with(|| {
@@ -2168,6 +2199,7 @@ mod ai_integration_tests {
 
             let state = ai::State {
                 board,
+                locked_mask: game.locked_mask,
                 scores: game.scores,
                 player_turn: game.player_turn,
                 round: game.round,

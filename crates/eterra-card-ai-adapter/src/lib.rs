@@ -40,6 +40,9 @@ pub mod eterra_adapter {
     #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug)]
     pub struct State {
         pub board: Board,   // 4x4 Option<Card>
+        /// Bitmask of locked cells on the 4x4 board (Gridlock feature).
+        /// Bit i (0..15) corresponds to cell (x=i/4, y=i%4) when indexing board as [x][y].
+        pub locked_mask: u16,
         pub scores: (u8, u8),     // (p0, p1)
         pub player_turn: u8,      // 0 or 1
         pub round: u8,
@@ -51,6 +54,7 @@ pub mod eterra_adapter {
         fn default() -> Self {
             Self {
                 board: Default::default(),
+                locked_mask: 0,
                 scores: (0, 0),
                 player_turn: 0,
                 round: 0,
@@ -87,6 +91,11 @@ pub mod eterra_adapter {
             let mut k = 0;
             for x in 0..4u8 {
                 for y in 0..4u8 {
+                    // Skip locked cells.
+                    let bit: u16 = 1u16 << ((x as u16) * 4u16 + (y as u16));
+                    if (s.locked_mask & bit) != 0 {
+                        continue;
+                    }
                     if s.board[x as usize][y as usize].is_some() {
                         continue;
                     }
@@ -110,6 +119,12 @@ pub mod eterra_adapter {
         /// Pure helper: apply action without relying on trait resolution.
         pub fn apply_pure(s: &State, a: &Action) -> State {
             let mut g = s.clone();
+
+            // Do nothing if the target cell is locked.
+            let bit: u16 = 1u16 << ((a.x as u16) * 4u16 + (a.y as u16));
+            if (g.locked_mask & bit) != 0 {
+                return g;
+            }
 
             // Build a placed card from hand entry
             let he = g.hands[g.player_turn as usize].entries[a.hand_index as usize].clone();
