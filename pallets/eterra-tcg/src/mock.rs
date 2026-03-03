@@ -28,6 +28,9 @@ parameter_types! {
     pub const MaxPacks: u32 = 10;
     pub const PackPrice: u128 = 500;
     pub const PackPriceReceiver: u64 = 999;
+    pub const ProPrice: u128 = 200;
+    pub const ProPriceReceiver: u64 = 999;
+    pub const MaxProSpins: u8 = 5;
 }
 
 impl system::Config for Test {
@@ -84,6 +87,9 @@ impl pallet_eterra_slots::Config for Test {
     type Currency = Balances;
     type PackPrice = PackPrice;
     type PackPriceReceiver = PackPriceReceiver;
+    type ProPrice = ProPrice;
+    type ProPriceReceiver = ProPriceReceiver;
+    type MaxProSpins = MaxProSpins;
     type MaxAttempts = ConstU8<3>;
     type CardsPerPack = ConstU8<6>;
     type MaxPacks = ConstU32<10>;
@@ -98,11 +104,7 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
 
     // Fund common test accounts so they can mint packs (and pay transaction fees if enabled).
     pallet_balances::GenesisConfig::<Test> {
-        balances: vec![
-            (1, 1_000_000),
-            (2, 1_000_000),
-            (3, 1_000_000),
-        ],
+        balances: vec![(1, 1_000_000), (2, 1_000_000), (3, 1_000_000)],
     }
     .assimilate_storage(&mut storage)
     .expect("balances genesis assimilates");

@@ -6,9 +6,13 @@ use frame_system::RawOrigin;
 use sp_runtime::traits::Saturating;
 
 fn fund<T: Config>(who: &T::AccountId) {
-    // Ensure the caller can pay the pack price and still satisfy `KeepAlive`.
-    let price = T::PackPrice::get();
-    let amount = price.saturating_add(price);
+    // Ensure the caller can pay either price and still satisfy `KeepAlive`.
+    let pack_price = T::PackPrice::get();
+    let pro_price = T::ProPrice::get();
+    let amount = pack_price
+        .saturating_add(pack_price)
+        .saturating_add(pro_price)
+        .saturating_add(pro_price);
     let _ = T::Currency::deposit_creating(who, amount);
 }
 
@@ -24,8 +28,7 @@ fn active_card_id<T: Config>(player: &T::AccountId) -> u32 {
 
 fn setup_pack<T: Config>(player: &T::AccountId) -> u32 {
     fund::<T>(player);
-    Pallet::<T>::mint_pack(RawOrigin::Signed(player.clone()).into())
-        .expect("mint pack succeeds");
+    Pallet::<T>::mint_pack(RawOrigin::Signed(player.clone()).into()).expect("mint pack succeeds");
     active_card_id::<T>(player)
 }
 
@@ -34,6 +37,12 @@ fn setup_generated_slot<T: Config>(player: &T::AccountId) -> u32 {
     Pallet::<T>::generate_slot(RawOrigin::Signed(player.clone()).into())
         .expect("generate slot succeeds");
     card_id
+}
+
+fn setup_pro<T: Config>(player: &T::AccountId) -> u32 {
+    fund::<T>(player);
+    Pallet::<T>::mint_pro(RawOrigin::Signed(player.clone()).into()).expect("mint pro succeeds");
+    ProInProgress::<T>::get(player).expect("pro in progress")
 }
 
 benchmarks! {
@@ -46,12 +55,41 @@ benchmarks! {
         assert!(!packs.is_empty());
     }
 
+    mint_pro {
+        let caller: T::AccountId = whitelisted_caller();
+        fund::<T>(&caller);
+    }: _(RawOrigin::Signed(caller.clone()))
+    verify {
+        let card_id = ProInProgress::<T>::get(&caller).expect("pro in progress");
+        let card = Cards::<T>::get(card_id).expect("card exists");
+        assert!(card.get_slot_values().is_some());
+        assert!(CardAttempts::<T>::get(card_id) > 0);
+    }
+
     generate_slot {
         let caller: T::AccountId = whitelisted_caller();
         let card_id = setup_pack::<T>(&caller);
     }: _(RawOrigin::Signed(caller.clone()))
     verify {
         assert!(CardAttempts::<T>::get(card_id) > 0);
+    }
+
+    spin_pro {
+        let caller: T::AccountId = whitelisted_caller();
+        let card_id = setup_pro::<T>(&caller);
+
+        // Pre-spin up to just before the last allowed spin so the benchmarked
+        // call exercises the "forced finalize" path (worst case).
+        let max = T::MaxProSpins::get();
+        assert!(max > 1);
+        for _ in 0..(max - 2) {
+            Pallet::<T>::spin_pro(RawOrigin::Signed(caller.clone()).into()).expect("pre spin succeeds");
+        }
+    }: _(RawOrigin::Signed(caller.clone()))
+    verify {
+        let card = Cards::<T>::get(card_id).expect("card exists");
+        assert!(card.is_finalized());
+        assert!(ProInProgress::<T>::get(&caller).is_none());
     }
 
     accept_slot {
@@ -61,6 +99,16 @@ benchmarks! {
     verify {
         let card = Cards::<T>::get(card_id).expect("card exists");
         assert!(card.is_finalized());
+    }
+
+    accept_pro {
+        let caller: T::AccountId = whitelisted_caller();
+        let card_id = setup_pro::<T>(&caller);
+    }: _(RawOrigin::Signed(caller.clone()))
+    verify {
+        let card = Cards::<T>::get(card_id).expect("card exists");
+        assert!(card.is_finalized());
+        assert!(ProInProgress::<T>::get(&caller).is_none());
     }
 
     transfer_card {
@@ -81,9 +129,5 @@ mod tests {
     use super::*;
     use frame_benchmarking::impl_benchmark_test_suite;
 
-    impl_benchmark_test_suite!(
-        Pallet,
-        crate::mock::new_test_ext(),
-        crate::mock::Test
-    );
+    impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);
 }

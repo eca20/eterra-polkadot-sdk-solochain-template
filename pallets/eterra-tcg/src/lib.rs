@@ -76,6 +76,18 @@ pub mod pallet {
         #[pallet::constant]
         type PackPriceReceiver: Get<Self::AccountId>;
 
+        /// Fixed "pro" mint price (in native `COIN` base units).
+        #[pallet::constant]
+        type ProPrice: Get<BalanceOf<Self>>;
+
+        /// Account that receives "pro" mint payments.
+        #[pallet::constant]
+        type ProPriceReceiver: Get<Self::AccountId>;
+
+        /// Maximum number of spins allowed for a "pro" card mint.
+        #[pallet::constant]
+        type MaxProSpins: Get<u8>;
+
         /// The maximum times a card can generate slots before it is forced to finalize.
         #[pallet::constant]
         type MaxAttempts: Get<u8>;
@@ -101,6 +113,7 @@ pub mod pallet {
     pub struct CardInfo<AccountId> {
         owner: AccountId,
         finalized: bool,
+        /// Directional ranks in `[north, east, south, west]` order.
         slot_values: Option<[u8; 4]>,
     }
 
@@ -111,6 +124,10 @@ pub mod pallet {
 
         pub fn is_finalized(&self) -> bool {
             self.finalized
+        }
+
+        pub fn get_slot_values(&self) -> Option<[u8; 4]> {
+            self.slot_values
         }
     }
 
@@ -175,6 +192,12 @@ pub mod pallet {
     #[pallet::getter(fn card_attempts)]
     pub type CardAttempts<T: Config> = StorageMap<_, Blake2_128Concat, u32, u8, ValueQuery>;
 
+    /// Tracks the caller's currently in-progress "pro mint" card ID, if any.
+    #[pallet::storage]
+    #[pallet::getter(fn pro_in_progress)]
+    pub type ProInProgress<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, u32, OptionQuery>;
+
     // ------------------
     // Events
     // ------------------
@@ -197,6 +220,27 @@ pub mod pallet {
             from: T::AccountId,
             to: T::AccountId,
             card_id: u32,
+        },
+
+        /// A new "pro" card was started for `player` with global `card_id`.
+        ProMintStarted { player: T::AccountId, card_id: u32 },
+        /// A "pro" card spin generated new directional ranks.
+        ProSpin {
+            card_id: u32,
+            values: [u8; 4],
+            spin: u8,
+        },
+        /// A "pro" card was accepted (finalized) with its current ranks.
+        ProMintAccepted {
+            player: T::AccountId,
+            card_id: u32,
+            values: [u8; 4],
+        },
+        /// A "pro" card hit the max spins and was finalized automatically.
+        ProMintForcedFinalized {
+            player: T::AccountId,
+            card_id: u32,
+            values: [u8; 4],
         },
     }
 
@@ -224,6 +268,15 @@ pub mod pallet {
         CardAlreadyFinalized,
         /// No more card IDs are available.
         CardIdExhausted,
+
+        /// A "pro" mint is already in progress for this account.
+        ProMintAlreadyInProgress,
+        /// No "pro" mint is currently in progress for this account.
+        NoProMintInProgress,
+        /// Pro spins exceeded `MaxProSpins`.
+        MaxProSpinsExceeded,
+        /// Pro card has no spin values to accept yet.
+        ProCardNotSpun,
     }
 
     // ------------------
@@ -316,26 +369,8 @@ pub mod pallet {
                     Error::<T>::MaxAttemptsExceeded
                 );
 
-                // 5) Generate slot values
-                let parent_hash = <frame_system::Pallet<T>>::parent_hash();
-                let ext_index = <frame_system::Pallet<T>>::extrinsic_index().unwrap_or(0);
-                let now = <frame_system::Pallet<T>>::block_number();
-
-                // Derive pseudo-random bytes from on-chain entropy + (player, card_id, attempts).
-                //
-                // Deterministic + consensus-safe, but not cryptographically secure.
-                let subject = (
-                    b"eterra-tcg/slot",
-                    now,
-                    parent_hash,
-                    ext_index,
-                    &player,
-                    card_id,
-                    attempts,
-                )
-                    .encode();
-                let hash = T::Hashing::hash(&subject);
-                let values = hash.as_ref()[..4].try_into().unwrap_or([0u8; 4]);
+                // Derive deterministic ranks from on-chain entropy + (player, card_id, attempts).
+                let values = Self::spin_values(&player, card_id, attempts, b"eterra-tcg/slot");
 
                 // 6) Update card’s slot values
                 card_info.slot_values = Some(values);
@@ -423,6 +458,105 @@ pub mod pallet {
             Self::deposit_event(Event::CardTransferred { from, to, card_id });
             Ok(())
         }
+
+        /// Start a new "pro" mint: pay `ProPrice`, mint a single in-progress card,
+        /// and generate an initial spin (counts as spin 1 of `MaxProSpins`).
+        #[pallet::call_index(4)]
+        #[pallet::weight(T::WeightInfo::mint_pro())]
+        #[transactional]
+        pub fn mint_pro(origin: OriginFor<T>) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            ensure!(
+                !ProInProgress::<T>::contains_key(&player),
+                Error::<T>::ProMintAlreadyInProgress
+            );
+
+            // Charge the pro price up-front.
+            let price = T::ProPrice::get();
+            let receiver = T::ProPriceReceiver::get();
+            T::Currency::transfer(&player, &receiver, price, ExistenceRequirement::KeepAlive)?;
+
+            // Create the in-progress card.
+            let card_id = Self::create_new_card(&player)?;
+            ProInProgress::<T>::insert(&player, card_id);
+            Self::deposit_event(Event::ProMintStarted {
+                player: player.clone(),
+                card_id,
+            });
+
+            // Auto-spin once so the caller is "presented" with a card-in-progress immediately.
+            let (values, spins_used, forced_finalized) = Self::do_pro_spin(&player, card_id)?;
+
+            if forced_finalized {
+                Self::deposit_event(Event::ProMintForcedFinalized {
+                    player,
+                    card_id,
+                    values,
+                });
+            } else {
+                Self::deposit_event(Event::ProSpin {
+                    card_id,
+                    values,
+                    spin: spins_used,
+                });
+            }
+
+            Ok(())
+        }
+
+        /// Spin the "pro" card in progress, up to `MaxProSpins`.
+        /// Updates the in-progress card's directional ranks.
+        #[pallet::call_index(5)]
+        #[pallet::weight(T::WeightInfo::spin_pro())]
+        #[transactional]
+        pub fn spin_pro(origin: OriginFor<T>) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            let card_id =
+                ProInProgress::<T>::get(&player).ok_or(Error::<T>::NoProMintInProgress)?;
+
+            let (values, spins_used, forced_finalized) = Self::do_pro_spin(&player, card_id)?;
+
+            if forced_finalized {
+                Self::deposit_event(Event::ProMintForcedFinalized {
+                    player,
+                    card_id,
+                    values,
+                });
+            } else {
+                Self::deposit_event(Event::ProSpin {
+                    card_id,
+                    values,
+                    spin: spins_used,
+                });
+            }
+
+            Ok(())
+        }
+
+        /// Accept (finalize) the current "pro" card with whatever values are currently set.
+        #[pallet::call_index(6)]
+        #[pallet::weight(T::WeightInfo::accept_pro())]
+        #[transactional]
+        pub fn accept_pro(origin: OriginFor<T>) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            let card_id =
+                ProInProgress::<T>::get(&player).ok_or(Error::<T>::NoProMintInProgress)?;
+
+            let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
+            ensure!(card_info.owner == player, Error::<T>::NotCardOwner);
+            ensure!(!card_info.finalized, Error::<T>::CardAlreadyFinalized);
+            let values = card_info.slot_values.ok_or(Error::<T>::ProCardNotSpun)?;
+
+            // Finalize the card and clear pro state.
+            Self::finalize_pro_card(&player, card_id)?;
+
+            Self::deposit_event(Event::ProMintAccepted {
+                player,
+                card_id,
+                values,
+            });
+            Ok(())
+        }
     }
 
     // ------------------
@@ -444,6 +578,89 @@ pub mod pallet {
             NextCardId::<T>::put(next_card_id);
 
             Ok(card_id)
+        }
+
+        /// Generate new ranks for a card based on on-chain entropy + (player, card_id, attempts).
+        fn spin_values(
+            player: &T::AccountId,
+            card_id: u32,
+            attempts: u8,
+            domain: &'static [u8],
+        ) -> [u8; 4] {
+            let parent_hash = <frame_system::Pallet<T>>::parent_hash();
+            let ext_index = <frame_system::Pallet<T>>::extrinsic_index().unwrap_or(0);
+            let now = <frame_system::Pallet<T>>::block_number();
+
+            let subject = (
+                domain,
+                now,
+                parent_hash,
+                ext_index,
+                player,
+                card_id,
+                attempts,
+            )
+                .encode();
+            let hash = T::Hashing::hash(&subject);
+            let bytes = hash.as_ref();
+
+            // Map bytes into a small "rank" range (1..=9) for game-friendly stats.
+            let to_rank = |b: u8| -> u8 { (b % 9).saturating_add(1) };
+            [
+                to_rank(bytes.get(0).copied().unwrap_or(0)),
+                to_rank(bytes.get(1).copied().unwrap_or(0)),
+                to_rank(bytes.get(2).copied().unwrap_or(0)),
+                to_rank(bytes.get(3).copied().unwrap_or(0)),
+            ]
+        }
+
+        /// Execute a single pro spin, updating storage. Returns:
+        /// - values (new ranks)
+        /// - spins_used (after increment)
+        /// - forced_finalized (true if this spin hit max and finalized)
+        fn do_pro_spin(
+            player: &T::AccountId,
+            card_id: u32,
+        ) -> Result<([u8; 4], u8, bool), DispatchError> {
+            // Validate card ownership and in-progress state.
+            let mut card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
+            ensure!(card_info.owner == *player, Error::<T>::NotCardOwner);
+            ensure!(!card_info.finalized, Error::<T>::CardAlreadyFinalized);
+
+            let mut spins_used = CardAttempts::<T>::get(card_id);
+            ensure!(
+                spins_used < T::MaxProSpins::get(),
+                Error::<T>::MaxProSpinsExceeded
+            );
+
+            let values = Self::spin_values(player, card_id, spins_used, b"eterra-tcg/pro-spin");
+            card_info.slot_values = Some(values);
+            Cards::<T>::insert(card_id, card_info);
+
+            spins_used = spins_used.saturating_add(1);
+            CardAttempts::<T>::insert(card_id, spins_used);
+
+            if spins_used == T::MaxProSpins::get() {
+                // Auto-finalize on the last allowed spin.
+                Self::finalize_pro_card(player, card_id)?;
+                return Ok((values, spins_used, true));
+            }
+
+            Ok((values, spins_used, false))
+        }
+
+        fn finalize_pro_card(player: &T::AccountId, card_id: u32) -> DispatchResult {
+            Cards::<T>::mutate(card_id, |maybe_card| -> DispatchResult {
+                let card_info = maybe_card.as_mut().ok_or(Error::<T>::NoSuchCard)?;
+                ensure!(card_info.owner == *player, Error::<T>::NotCardOwner);
+                ensure!(!card_info.finalized, Error::<T>::CardAlreadyFinalized);
+                card_info.finalized = true;
+                Ok(())
+            })?;
+
+            CardAttempts::<T>::remove(card_id);
+            ProInProgress::<T>::remove(player);
+            Ok(())
         }
 
         /// Finalize a card, remove attempts, possibly mark the pack completed, etc.

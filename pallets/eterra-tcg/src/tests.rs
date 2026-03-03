@@ -32,7 +32,9 @@ static LOGGER: SimpleLogger = SimpleLogger;
 
 pub fn init_logger() {
     INIT.call_once(|| {
-        log::set_logger(&LOGGER).unwrap();
+        // Tests can run in parallel across crates; if another test has already
+        // installed a logger, don't fail.
+        let _ = log::set_logger(&LOGGER);
         log::set_max_level(log::LevelFilter::Debug);
     });
 }
@@ -221,6 +223,110 @@ fn mint_pack_charges_price_and_mints_expected_card_count() {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), cards_per_pack as usize);
+    });
+}
+
+#[test]
+fn mint_pro_charges_price_and_starts_in_progress() {
+    new_test_ext().execute_with(|| {
+        let player = 1u64;
+        let receiver = <Test as EterraSlotsConfig>::ProPriceReceiver::get();
+        let price: u128 = <Test as EterraSlotsConfig>::ProPrice::get();
+
+        let player_before = Balances::free_balance(player);
+        let receiver_before = Balances::free_balance(receiver);
+
+        System::reset_events();
+        assert_ok!(EterraSlots::mint_pro(RuntimeOrigin::signed(player)));
+
+        // Price charged to player and sent to receiver.
+        assert_eq!(Balances::free_balance(player), player_before - price);
+        assert_eq!(Balances::free_balance(receiver), receiver_before + price);
+
+        // Pro mint should create an in-progress card with an initial spin.
+        let card_id = EterraSlots::pro_in_progress(player).expect("pro in progress");
+        let card = EterraSlots::cards(card_id).expect("card exists");
+        assert!(!card.is_finalized());
+        assert!(card.get_slot_values().is_some());
+        assert_eq!(EterraSlots::card_attempts(card_id), 1);
+
+        // Events: should include ProMintStarted and an initial ProSpin.
+        assert_event_found(
+            |e| matches!(e, RuntimeEvent::EterraSlots(Event::ProMintStarted { player: who, card_id: id }) if *who == player && *id == card_id),
+            "ProMintStarted",
+        );
+        assert_event_found(
+            |e| matches!(e, RuntimeEvent::EterraSlots(Event::ProSpin { card_id: id, .. }) if *id == card_id),
+            "ProSpin",
+        );
+    });
+}
+
+#[test]
+fn mint_pro_fails_when_already_in_progress() {
+    new_test_ext().execute_with(|| {
+        let player = 1u64;
+        assert_ok!(EterraSlots::mint_pro(RuntimeOrigin::signed(player)));
+        assert_noop!(
+            EterraSlots::mint_pro(RuntimeOrigin::signed(player)),
+            Error::<Test>::ProMintAlreadyInProgress
+        );
+    });
+}
+
+#[test]
+fn spin_pro_increments_spins() {
+    new_test_ext().execute_with(|| {
+        let player = 1u64;
+        assert_ok!(EterraSlots::mint_pro(RuntimeOrigin::signed(player)));
+        let card_id = EterraSlots::pro_in_progress(player).expect("pro in progress");
+
+        assert_eq!(EterraSlots::card_attempts(card_id), 1);
+        assert_ok!(EterraSlots::spin_pro(RuntimeOrigin::signed(player)));
+        assert_eq!(EterraSlots::card_attempts(card_id), 2);
+    });
+}
+
+#[test]
+fn accept_pro_finalizes_and_clears_progress() {
+    new_test_ext().execute_with(|| {
+        let player = 1u64;
+        assert_ok!(EterraSlots::mint_pro(RuntimeOrigin::signed(player)));
+        let card_id = EterraSlots::pro_in_progress(player).expect("pro in progress");
+
+        assert_ok!(EterraSlots::accept_pro(RuntimeOrigin::signed(player)));
+
+        let card = EterraSlots::cards(card_id).expect("card exists");
+        assert!(card.is_finalized());
+        assert_eq!(EterraSlots::card_attempts(card_id), 0);
+        assert!(EterraSlots::pro_in_progress(player).is_none());
+    });
+}
+
+#[test]
+fn spin_pro_forces_finalize_on_last_spin() {
+    new_test_ext().execute_with(|| {
+        let player = 1u64;
+        let max_spins: u8 = <Test as EterraSlotsConfig>::MaxProSpins::get();
+        assert!(max_spins > 1);
+
+        assert_ok!(EterraSlots::mint_pro(RuntimeOrigin::signed(player)));
+        let card_id = EterraSlots::pro_in_progress(player).expect("pro in progress");
+
+        // `mint_pro` already consumes 1 spin; do the remaining spins.
+        for _ in 0..(max_spins - 1) {
+            let _ = EterraSlots::spin_pro(RuntimeOrigin::signed(player));
+        }
+
+        let card = EterraSlots::cards(card_id).expect("card exists");
+        assert!(card.is_finalized());
+        assert!(EterraSlots::pro_in_progress(player).is_none());
+
+        // Further spins should fail since the pro mint has been finalized/cleared.
+        assert_noop!(
+            EterraSlots::spin_pro(RuntimeOrigin::signed(player)),
+            Error::<Test>::NoProMintInProgress
+        );
     });
 }
 

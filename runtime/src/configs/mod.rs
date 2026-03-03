@@ -24,6 +24,7 @@
 // For more information, please refer to <http://unlicense.org>
 
 // Substrate and Polkadot dependencies
+use frame_support::PalletId;
 use frame_support::{
     derive_impl, parameter_types,
     traits::{ConstBool, ConstU128, ConstU16, ConstU32, ConstU64, ConstU8, VariantCountOf},
@@ -34,38 +35,30 @@ use frame_support::{
 };
 use frame_system::limits::{BlockLength, BlockWeights};
 use pallet_transaction_payment::{ConstFeeMultiplier, Multiplier};
+use scale_info::TypeInfo;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_runtime::{
     traits::{AccountIdConversion, Morph, One},
-    Perbill,
-    Permill,
+    Perbill, Permill,
 };
-use scale_info::TypeInfo;
 use sp_version::RuntimeVersion;
-use frame_support::PalletId;
 
 // Bring in UNIT and HandProviderAdapter from the parent module (lib.rs)
-use super::{UNIT, HandProviderAdapter};
+use super::{HandProviderAdapter, UNIT};
 
 // Bring in the pallets re-exported in lib.rs
 use super::{
-    pallet_eterra,
-    pallet_eterra_daily_slots,
-    pallet_eterra_faucet,
-    pallet_eterra_simple_tcg,
-    pallet_eterra_tcg,
-    pallet_eterra_simple_matchmaker,
-    pallet_eterra_gamer,
-    pallet_eterra_game_authority,
-    pallet_eterra_media,
+    pallet_eterra, pallet_eterra_daily_slots, pallet_eterra_faucet, pallet_eterra_game_authority,
+    pallet_eterra_gamer, pallet_eterra_media, pallet_eterra_simple_matchmaker,
+    pallet_eterra_simple_tcg, pallet_eterra_tcg,
 };
 // Monte Carlo AI pallet lives at the crate root; bring it in explicitly.
 
 // Local module imports
 use super::{
-    AccountId, Aura, Assets, Balance, Balances, Block, BlockNumber, Council, EterraGamer, Hash, Nonce, PalletInfo, Runtime,
-    RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason, RuntimeOrigin, RuntimeTask,
-    System, DAYS, HOURS, EXISTENTIAL_DEPOSIT, SLOT_DURATION, VERSION,
+    AccountId, Assets, Aura, Balance, Balances, Block, BlockNumber, Council, EterraGamer, Hash,
+    Nonce, PalletInfo, Runtime, RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason,
+    RuntimeOrigin, RuntimeTask, System, DAYS, EXISTENTIAL_DEPOSIT, HOURS, SLOT_DURATION, VERSION,
 };
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
@@ -185,7 +178,8 @@ impl Morph<()> for RootToAssetOwner {
     }
 }
 
-type RootAsAssetOwner = frame_support::traits::MapSuccess<PrivilegedControlOrigin, RootToAssetOwner>;
+type RootAsAssetOwner =
+    frame_support::traits::MapSuccess<PrivilegedControlOrigin, RootToAssetOwner>;
 type AssetsCreateOrigin = frame_support::traits::AsEnsureOriginWithArg<RootAsAssetOwner>;
 
 impl pallet_assets::Config for Runtime {
@@ -218,10 +212,10 @@ parameter_types! {
 
 // --- Make faucet.claim feeless by customizing OnChargeTransaction ---
 use pallet_transaction_payment::OnChargeTransaction;
-use sp_runtime::traits::{DispatchInfoOf, PostDispatchInfoOf};
-use sp_runtime::transaction_validity::TransactionValidityError;
 #[cfg(feature = "runtime-production")]
 use sp_runtime::traits::Zero;
+use sp_runtime::traits::{DispatchInfoOf, PostDispatchInfoOf};
+use sp_runtime::transaction_validity::TransactionValidityError;
 
 pub struct FreeFaucetOrCurrencyAdapter;
 
@@ -425,9 +419,9 @@ impl pallet_node_authorization::Config for Runtime {
     type MaxWellKnownNodes = MaxWellKnownNodes;
     type MaxPeerIdLength = MaxPeerIdLength;
 
-    type AddOrigin   = PrivilegedControlOrigin;
-    type RemoveOrigin= PrivilegedControlOrigin;
-    type SwapOrigin  = PrivilegedControlOrigin;
+    type AddOrigin = PrivilegedControlOrigin;
+    type RemoveOrigin = PrivilegedControlOrigin;
+    type SwapOrigin = PrivilegedControlOrigin;
     type ResetOrigin = PrivilegedControlOrigin;
 
     type WeightInfo = ();
@@ -440,7 +434,6 @@ impl frame_support::traits::Get<u32> for EterraNumPlayers {
         2
     }
 }
-
 
 parameter_types! {
     pub const EterraMaxRounds: u8 = 5;
@@ -517,8 +510,6 @@ impl pallet_eterra_faucet::Config for Runtime {
     type WeightInfo = pallet_eterra_faucet::weights::SubstrateWeight<Runtime>;
 }
 
-
-
 parameter_types! {
     pub const GamerTagMaxLen: u32 = 32;
     pub const AvatarCidMaxLen: u32 = 96; // or 128
@@ -539,9 +530,9 @@ impl pallet_eterra_gamer::Config for Runtime {
 pub struct MonteCarloBenchHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
-impl pallet_eterra_monte_carlo_ai::BenchmarkHelper<
-    eterra_card_ai_adapter::eterra_adapter::Adapter,
-> for MonteCarloBenchHelper {
+impl pallet_eterra_monte_carlo_ai::BenchmarkHelper<eterra_card_ai_adapter::eterra_adapter::Adapter>
+    for MonteCarloBenchHelper
+{
     fn bench_state() -> eterra_card_ai_adapter::eterra_adapter::State {
         let mut s = eterra_card_ai_adapter::eterra_adapter::State::default();
         s.max_rounds = 1;
@@ -555,9 +546,9 @@ impl pallet_eterra_monte_carlo_ai::pallet::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Adapter = eterra_card_ai_adapter::eterra_adapter::Adapter;
     // Limits & tuning params for Monte Carlo search
-    type MaxActions = ConstU32<64>;        // max legal moves enumerated
-    type BaseIterations = ConstU32<200>;   // baseline simulations per suggest() call
-    type MaxPlayoutDepth = ConstU16<16>;   // cut off long playouts
+    type MaxActions = ConstU32<64>; // max legal moves enumerated
+    type BaseIterations = ConstU32<200>; // baseline simulations per suggest() call
+    type MaxPlayoutDepth = ConstU16<16>; // cut off long playouts
     type WeightInfo = pallet_eterra_monte_carlo_ai::weights::SubstrateWeight<Runtime>;
 
     #[cfg(feature = "runtime-benchmarks")]
@@ -606,7 +597,6 @@ impl pallet_eterra_simple_tcg::Config for Runtime {
     type FaucetAccount = TreasuryAccount;
 
     type WeightInfo = pallet_eterra_simple_tcg::weights::SubstrateWeight<Runtime>;
-
 }
 
 impl pallet_eterra_simple_matchmaker::Config for Runtime {
@@ -614,7 +604,7 @@ impl pallet_eterra_simple_matchmaker::Config for Runtime {
     type PlayersPerMatch = PlayersPerMatchConst;
     type QueueCapacity = QueueCapacityConst;
     type HandProvider = MatchmakerHandProvider;
-    type GameCreator  = pallet_eterra::Pallet<Runtime>;
+    type GameCreator = pallet_eterra::Pallet<Runtime>;
     type WeightInfo = pallet_eterra_simple_matchmaker::weights::SubstrateWeight<Runtime>;
 }
 
@@ -642,13 +632,15 @@ type MatchmakerHandProvider = BenchmarkHandProvider;
 #[cfg(not(feature = "runtime-benchmarks"))]
 type MatchmakerHandProvider = HandProviderAdapter;
 
-
 impl pallet_eterra_tcg::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
 
     type Currency = Balances;
     type PackPrice = ConstU128<{ 500 * UNIT }>;
     type PackPriceReceiver = TreasuryAccount;
+    type ProPrice = ConstU128<{ 200 * UNIT }>;
+    type ProPriceReceiver = TreasuryAccount;
+    type MaxProSpins = ConstU8<5>;
     type MaxAttempts = ConstU8<3>; // Set maximum attempts per card to 3
     type CardsPerPack = ConstU8<6>; // Set number of cards per pack to 6
     type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
@@ -728,5 +720,4 @@ impl pallet_eterra_media::Config for Runtime {
     type DefaultCollectionId = DefaultMediaCollectionId;
     type DefaultCollectionOwner = TreasuryAccount;
     type WeightInfo = pallet_eterra_media::weights::SubstrateWeight<Runtime>;
-
 }
