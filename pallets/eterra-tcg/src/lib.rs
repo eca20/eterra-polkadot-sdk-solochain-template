@@ -460,7 +460,7 @@ pub mod pallet {
         }
 
         /// Start a new "pro" mint: pay `ProPrice`, mint a single in-progress card,
-        /// and generate an initial spin (counts as spin 1 of `MaxProSpins`).
+        /// then use `spin_pro` (up to `MaxProSpins`) to generate ranks and `accept_pro` to finalize.
         #[pallet::call_index(4)]
         #[pallet::weight(T::WeightInfo::mint_pro())]
         #[transactional]
@@ -483,23 +483,6 @@ pub mod pallet {
                 player: player.clone(),
                 card_id,
             });
-
-            // Auto-spin once so the caller is "presented" with a card-in-progress immediately.
-            let (values, spins_used, forced_finalized) = Self::do_pro_spin(&player, card_id)?;
-
-            if forced_finalized {
-                Self::deposit_event(Event::ProMintForcedFinalized {
-                    player,
-                    card_id,
-                    values,
-                });
-            } else {
-                Self::deposit_event(Event::ProSpin {
-                    card_id,
-                    values,
-                    spin: spins_used,
-                });
-            }
 
             Ok(())
         }

@@ -62,8 +62,8 @@ benchmarks! {
     verify {
         let card_id = ProInProgress::<T>::get(&caller).expect("pro in progress");
         let card = Cards::<T>::get(card_id).expect("card exists");
-        assert!(card.get_slot_values().is_some());
-        assert!(CardAttempts::<T>::get(card_id) > 0);
+        assert!(card.get_slot_values().is_none());
+        assert_eq!(CardAttempts::<T>::get(card_id), 0);
     }
 
     generate_slot {
@@ -81,8 +81,8 @@ benchmarks! {
         // Pre-spin up to just before the last allowed spin so the benchmarked
         // call exercises the "forced finalize" path (worst case).
         let max = T::MaxProSpins::get();
-        assert!(max > 1);
-        for _ in 0..(max - 2) {
+        let pre_spins = max.saturating_sub(1);
+        for _ in 0..pre_spins {
             Pallet::<T>::spin_pro(RawOrigin::Signed(caller.clone()).into()).expect("pre spin succeeds");
         }
     }: _(RawOrigin::Signed(caller.clone()))
@@ -104,6 +104,7 @@ benchmarks! {
     accept_pro {
         let caller: T::AccountId = whitelisted_caller();
         let card_id = setup_pro::<T>(&caller);
+        Pallet::<T>::spin_pro(RawOrigin::Signed(caller.clone()).into()).expect("spin pro succeeds");
     }: _(RawOrigin::Signed(caller.clone()))
     verify {
         let card = Cards::<T>::get(card_id).expect("card exists");

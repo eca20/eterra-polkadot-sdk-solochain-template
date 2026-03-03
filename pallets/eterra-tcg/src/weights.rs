@@ -85,8 +85,8 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `107`
 		//  Estimated: `4224`
-		// Minimum execution time: 61_000_000 picoseconds.
-		Weight::from_parts(65_000_000, 0)
+		// Minimum execution time: 73_000_000 picoseconds.
+		Weight::from_parts(75_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 4224))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(10))
@@ -97,21 +97,17 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::NextCardId` (r:1 w:1)
 	/// Proof: `EterraTCG::NextCardId` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
-	/// Storage: `EterraTCG::CardAttempts` (r:1 w:1)
-	/// Proof: `EterraTCG::CardAttempts` (`max_values`: None, `max_size`: Some(21), added: 2496, mode: `MaxEncodedLen`)
-	/// Storage: `System::ParentHash` (r:1 w:0)
-	/// Proof: `System::ParentHash` (`max_values`: Some(1), `max_size`: Some(32), added: 527, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::Cards` (r:0 w:1)
 	/// Proof: `EterraTCG::Cards` (`max_values`: None, `max_size`: Some(58), added: 2533, mode: `MaxEncodedLen`)
 	fn mint_pro() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `107`
 		//  Estimated: `3593`
-		// Minimum execution time: 58_000_000 picoseconds.
-		Weight::from_parts(59_000_000, 0)
+		// Minimum execution time: 57_000_000 picoseconds.
+		Weight::from_parts(57_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 3593))
-			.saturating_add(T::DbWeight::get().reads(5))
-			.saturating_add(T::DbWeight::get().writes(5))
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(4))
 	}
 	/// Storage: `EterraTCG::PlayerPacks` (r:1 w:1)
 	/// Proof: `EterraTCG::PlayerPacks` (`max_values`: None, `max_size`: Some(759), added: 3234, mode: `MaxEncodedLen`)
@@ -127,8 +123,8 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `425`
 		//  Estimated: `4224`
-		// Minimum execution time: 30_000_000 picoseconds.
-		Weight::from_parts(31_000_000, 0)
+		// Minimum execution time: 31_000_000 picoseconds.
+		Weight::from_parts(35_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 4224))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(3))
@@ -145,8 +141,8 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `231`
 		//  Estimated: `3523`
-		// Minimum execution time: 29_000_000 picoseconds.
-		Weight::from_parts(34_000_000, 0)
+		// Minimum execution time: 33_000_000 picoseconds.
+		Weight::from_parts(35_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 3523))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(3))
@@ -163,8 +159,8 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `527`
 		//  Estimated: `6056`
-		// Minimum execution time: 38_000_000 picoseconds.
-		Weight::from_parts(40_000_000, 0)
+		// Minimum execution time: 42_000_000 picoseconds.
+		Weight::from_parts(44_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 6056))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(4))
@@ -179,7 +175,7 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		// Proof Size summary in bytes:
 		//  Measured:  `223`
 		//  Estimated: `3523`
-		// Minimum execution time: 22_000_000 picoseconds.
+		// Minimum execution time: 21_000_000 picoseconds.
 		Weight::from_parts(23_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 3523))
 			.saturating_add(T::DbWeight::get().reads(2))
@@ -192,7 +188,7 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		//  Measured:  `323`
 		//  Estimated: `3523`
 		// Minimum execution time: 15_000_000 picoseconds.
-		Weight::from_parts(17_000_000, 0)
+		Weight::from_parts(16_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 3523))
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
