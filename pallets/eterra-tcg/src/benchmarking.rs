@@ -53,6 +53,9 @@ benchmarks! {
     verify {
         let packs = PlayerPacks::<T>::get(&caller);
         assert!(!packs.is_empty());
+        assert!(PackInProgress::<T>::get(&caller).is_some());
+        assert!(PackCardInProgress::<T>::get(&caller).is_some());
+        assert!(CardsByOwner::<T>::get(&caller).len() > 0);
     }
 
     mint_pro {
@@ -64,6 +67,7 @@ benchmarks! {
         let card = Cards::<T>::get(card_id).expect("card exists");
         assert!(card.get_slot_values().is_none());
         assert_eq!(CardAttempts::<T>::get(card_id), 0);
+        assert!(CardsByOwner::<T>::get(&caller).contains(&card_id));
     }
 
     generate_slot {
@@ -122,6 +126,7 @@ benchmarks! {
     verify {
         let card = Cards::<T>::get(card_id).expect("card exists");
         assert_eq!(card.get_owner(), &to);
+        assert!(CardsByOwner::<T>::get(&to).contains(&card_id));
     }
 }
 

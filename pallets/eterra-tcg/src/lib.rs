@@ -18,6 +18,7 @@ mod tests;
 use frame_support::{
     pallet_prelude::*,
     traits::{Currency, ExistenceRequirement, Get},
+    BoundedBTreeSet,
     BoundedVec,
 };
 use frame_system::{ensure_signed, pallet_prelude::OriginFor};
@@ -100,6 +101,12 @@ pub mod pallet {
         #[pallet::constant]
         type MaxPacks: Get<u32>;
 
+        /// The maximum number of cards a single account can own.
+        ///
+        /// This bounds storage reads for dashboards that list cards by owner.
+        #[pallet::constant]
+        type MaxOwnedCards: Get<u32>;
+
         /// Weight information for this pallet's extrinsics.
         type WeightInfo: WeightInfo;
     }
@@ -180,11 +187,39 @@ pub mod pallet {
     pub type PlayerPacks<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<Pack, T::MaxPacks>, ValueQuery>;
 
+    /// A map from account => set of owned card IDs.
+    ///
+    /// This is a secondary index to support efficient front-end queries like
+    /// "show me all cards owned by this account", including cards minted via pro minting.
+    #[pallet::storage]
+    #[pallet::getter(fn cards_by_owner)]
+    pub type CardsByOwner<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedBTreeSet<u32, T::MaxOwnedCards>,
+        ValueQuery,
+    >;
+
     /// Tracks the currently “active” card index (within a pack) for each account
     #[pallet::storage]
     #[pallet::getter(fn active_card)]
     pub type ActiveCard<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, Option<u8>, ValueQuery>;
+
+    /// Tracks the caller's currently in-progress pack mint, if any.
+    ///
+    /// This makes it easy for the front end to resume a minting flow after refresh.
+    #[pallet::storage]
+    #[pallet::getter(fn pack_in_progress)]
+    pub type PackInProgress<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, u32, OptionQuery>;
+
+    /// Tracks the caller's currently active card ID within the pack mint in progress, if any.
+    #[pallet::storage]
+    #[pallet::getter(fn pack_card_in_progress)]
+    pub type PackCardInProgress<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, u32, OptionQuery>;
 
     /// Stores the attempt count for each card: `card_id => current attempts`.
     /// We omit the account ID here because the card can be traded to another owner.
@@ -268,6 +303,8 @@ pub mod pallet {
         CardAlreadyFinalized,
         /// No more card IDs are available.
         CardIdExhausted,
+        /// The caller's owned-card limit is reached.
+        MaxOwnedCardsReached,
 
         /// A "pro" mint is already in progress for this account.
         ProMintAlreadyInProgress,
@@ -319,6 +356,8 @@ pub mod pallet {
                     .map_err(|_| Error::<T>::MaxPacksReached)?;
             }
 
+            let first_card_id = card_ids.get(0).copied();
+
             let new_pack = Pack {
                 id: pack_id,
                 card_ids,
@@ -332,6 +371,11 @@ pub mod pallet {
 
             PlayerPacks::<T>::insert(&player, packs);
             ActiveCard::<T>::insert(&player, Some(0));
+            PackInProgress::<T>::insert(&player, pack_id);
+            // We just minted the pack, so index 0 must exist if `CardsPerPack > 0`.
+            if let Some(first) = first_card_id {
+                PackCardInProgress::<T>::insert(&player, first);
+            }
 
             Self::deposit_event(Event::PackMinted { player, pack_id });
             Ok(())
@@ -449,6 +493,17 @@ pub mod pallet {
                 // ✅ Ensure the card is finalized before allowing transfer
                 ensure!(card_info.finalized, Error::<T>::NoActiveCard); // Consider a better error name
 
+                // Update owner index. Since this extrinsic is transactional, any failure
+                // will roll back both the index and the card owner update.
+                CardsByOwner::<T>::mutate(&from, |set| {
+                    set.remove(&card_id);
+                });
+                CardsByOwner::<T>::try_mutate(&to, |set| -> DispatchResult {
+                    set.try_insert(card_id)
+                        .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
+                    Ok(())
+                })?;
+
                 // Transfer ownership
                 card_info.owner = to.clone();
 
@@ -558,6 +613,11 @@ pub mod pallet {
             };
 
             Cards::<T>::insert(card_id, new_card_info);
+            CardsByOwner::<T>::try_mutate(owner, |set| -> Result<(), DispatchError> {
+                set.try_insert(card_id)
+                    .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
+                Ok(())
+            })?;
             NextCardId::<T>::put(next_card_id);
 
             Ok(card_id)
@@ -721,9 +781,14 @@ pub mod pallet {
             if let Some(idx) = next_idx {
                 pack.active_card_index = idx;
                 ActiveCard::<T>::insert(player, Some(idx));
+                if let Some(cid) = pack.card_ids.get(idx as usize) {
+                    PackCardInProgress::<T>::insert(player, *cid);
+                }
             } else {
                 pack.completed = true;
                 ActiveCard::<T>::insert(player, Option::<u8>::None);
+                PackInProgress::<T>::remove(player);
+                PackCardInProgress::<T>::remove(player);
                 Self::deposit_event(Event::PackCompleted {
                     player: player.clone(),
                     pack_id: pack.id,

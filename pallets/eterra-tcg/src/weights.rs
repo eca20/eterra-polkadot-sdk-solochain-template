@@ -5,25 +5,13 @@
 //! WORST CASE MAP SIZE: `1000000`
 //! HOSTNAME: `MacBookAir`, CPU: `<UNKNOWN>`
 //! WASM-EXECUTION: `Compiled`, CHAIN: `None`, DB CACHE: 1024
-
-// Executed Command:
-// target/release/solochain-eterra-node
-// benchmark
-// pallet
-// --runtime
-// target/release/wbuild/solochain-eterra-runtime/solochain_eterra_runtime.compact.compressed.wasm
-// --genesis-builder=runtime
-// --genesis-builder-preset=development
-// --pallet
-// pallet_eterra_tcg
-// --extrinsic
-// *
-// --steps
-// 50
-// --repeat
-// 20
-// --output
-// pallets/eterra-tcg/src/weights.rs
+//!
+//! Executed Command:
+//! ./target/release/solochain-eterra-node benchmark pallet
+//! --runtime ./target/release/wbuild/solochain-eterra-runtime/solochain_eterra_runtime.compact.compressed.wasm
+//! --genesis-builder=runtime --genesis-builder-preset=development
+//! --pallet pallet_eterra_tcg --extrinsic * --steps 50 --repeat 20
+//! --output pallets/eterra-tcg/src/weights.rs
 
 #![cfg_attr(rustfmt, rustfmt_skip)]
 #![allow(unused_parens)]
@@ -77,38 +65,48 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::NextCardId` (r:1 w:1)
 	/// Proof: `EterraTCG::NextCardId` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
+	/// Storage: `EterraTCG::CardsByOwner` (r:1 w:1)
+	/// Proof: `EterraTCG::CardsByOwner` (`max_values`: None, `max_size`: Some(4146), added: 6621, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::Cards` (r:0 w:6)
 	/// Proof: `EterraTCG::Cards` (`max_values`: None, `max_size`: Some(58), added: 2533, mode: `MaxEncodedLen`)
+	/// Storage: `EterraTCG::PackInProgress` (r:0 w:1)
+	/// Proof: `EterraTCG::PackInProgress` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
+	/// Storage: `EterraTCG::PackCardInProgress` (r:0 w:1)
+	/// Proof: `EterraTCG::PackCardInProgress` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::ActiveCard` (r:0 w:1)
 	/// Proof: `EterraTCG::ActiveCard` (`max_values`: None, `max_size`: Some(50), added: 2525, mode: `MaxEncodedLen`)
 	fn mint_pack() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `107`
-		//  Estimated: `4224`
-		// Minimum execution time: 73_000_000 picoseconds.
-		Weight::from_parts(75_000_000, 0)
-			.saturating_add(Weight::from_parts(0, 4224))
-			.saturating_add(T::DbWeight::get().reads(3))
-			.saturating_add(T::DbWeight::get().writes(10))
+		//  Estimated: `7611`
+		// Minimum execution time: 88_000_000 picoseconds.
+		Weight::from_parts(95_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 7611))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(13))
 	}
+
 	/// Storage: `EterraTCG::ProInProgress` (r:1 w:1)
 	/// Proof: `EterraTCG::ProInProgress` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::NextCardId` (r:1 w:1)
 	/// Proof: `EterraTCG::NextCardId` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
+	/// Storage: `EterraTCG::CardsByOwner` (r:1 w:1)
+	/// Proof: `EterraTCG::CardsByOwner` (`max_values`: None, `max_size`: Some(4146), added: 6621, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::Cards` (r:0 w:1)
 	/// Proof: `EterraTCG::Cards` (`max_values`: None, `max_size`: Some(58), added: 2533, mode: `MaxEncodedLen`)
 	fn mint_pro() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `107`
-		//  Estimated: `3593`
-		// Minimum execution time: 57_000_000 picoseconds.
-		Weight::from_parts(57_000_000, 0)
-			.saturating_add(Weight::from_parts(0, 3593))
-			.saturating_add(T::DbWeight::get().reads(3))
-			.saturating_add(T::DbWeight::get().writes(4))
+		//  Estimated: `7611`
+		// Minimum execution time: 51_000_000 picoseconds.
+		Weight::from_parts(52_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 7611))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(5))
 	}
+
 	/// Storage: `EterraTCG::PlayerPacks` (r:1 w:1)
 	/// Proof: `EterraTCG::PlayerPacks` (`max_values`: None, `max_size`: Some(759), added: 3234, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::ActiveCard` (r:1 w:0)
@@ -121,14 +119,15 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 	/// Proof: `System::ParentHash` (`max_values`: Some(1), `max_size`: Some(32), added: 527, mode: `MaxEncodedLen`)
 	fn generate_slot() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `425`
+		//  Measured:  `525`
 		//  Estimated: `4224`
-		// Minimum execution time: 31_000_000 picoseconds.
-		Weight::from_parts(35_000_000, 0)
+		// Minimum execution time: 29_000_000 picoseconds.
+		Weight::from_parts(33_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 4224))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
+
 	/// Storage: `EterraTCG::ProInProgress` (r:1 w:1)
 	/// Proof: `EterraTCG::ProInProgress` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::Cards` (r:1 w:1)
@@ -139,32 +138,36 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 	/// Proof: `System::ParentHash` (`max_values`: Some(1), `max_size`: Some(32), added: 527, mode: `MaxEncodedLen`)
 	fn spin_pro() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `231`
+		//  Measured:  `265`
 		//  Estimated: `3523`
-		// Minimum execution time: 33_000_000 picoseconds.
-		Weight::from_parts(35_000_000, 0)
+		// Minimum execution time: 28_000_000 picoseconds.
+		Weight::from_parts(29_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 3523))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
+
 	/// Storage: `EterraTCG::PlayerPacks` (r:1 w:1)
 	/// Proof: `EterraTCG::PlayerPacks` (`max_values`: None, `max_size`: Some(759), added: 3234, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::ActiveCard` (r:1 w:1)
 	/// Proof: `EterraTCG::ActiveCard` (`max_values`: None, `max_size`: Some(50), added: 2525, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::Cards` (r:2 w:1)
 	/// Proof: `EterraTCG::Cards` (`max_values`: None, `max_size`: Some(58), added: 2533, mode: `MaxEncodedLen`)
+	/// Storage: `EterraTCG::PackCardInProgress` (r:0 w:1)
+	/// Proof: `EterraTCG::PackCardInProgress` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::CardAttempts` (r:0 w:1)
 	/// Proof: `EterraTCG::CardAttempts` (`max_values`: None, `max_size`: Some(21), added: 2496, mode: `MaxEncodedLen`)
 	fn accept_slot() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `527`
+		//  Measured:  `626`
 		//  Estimated: `6056`
-		// Minimum execution time: 42_000_000 picoseconds.
-		Weight::from_parts(44_000_000, 0)
+		// Minimum execution time: 38_000_000 picoseconds.
+		Weight::from_parts(39_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 6056))
 			.saturating_add(T::DbWeight::get().reads(4))
-			.saturating_add(T::DbWeight::get().writes(4))
+			.saturating_add(T::DbWeight::get().writes(5))
 	}
+
 	/// Storage: `EterraTCG::ProInProgress` (r:1 w:1)
 	/// Proof: `EterraTCG::ProInProgress` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::Cards` (r:1 w:1)
@@ -173,24 +176,28 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 	/// Proof: `EterraTCG::CardAttempts` (`max_values`: None, `max_size`: Some(21), added: 2496, mode: `MaxEncodedLen`)
 	fn accept_pro() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `223`
+		//  Measured:  `256`
 		//  Estimated: `3523`
-		// Minimum execution time: 21_000_000 picoseconds.
-		Weight::from_parts(23_000_000, 0)
+		// Minimum execution time: 20_000_000 picoseconds.
+		Weight::from_parts(20_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 3523))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
+
 	/// Storage: `EterraTCG::Cards` (r:1 w:1)
 	/// Proof: `EterraTCG::Cards` (`max_values`: None, `max_size`: Some(58), added: 2533, mode: `MaxEncodedLen`)
+	/// Storage: `EterraTCG::CardsByOwner` (r:2 w:2)
+	/// Proof: `EterraTCG::CardsByOwner` (`max_values`: None, `max_size`: Some(4146), added: 6621, mode: `MaxEncodedLen`)
 	fn transfer_card() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `323`
-		//  Estimated: `3523`
-		// Minimum execution time: 15_000_000 picoseconds.
-		Weight::from_parts(16_000_000, 0)
-			.saturating_add(Weight::from_parts(0, 3523))
-			.saturating_add(T::DbWeight::get().reads(1))
-			.saturating_add(T::DbWeight::get().writes(1))
+		//  Measured:  `485`
+		//  Estimated: `14232`
+		// Minimum execution time: 22_000_000 picoseconds.
+		Weight::from_parts(23_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 14232))
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(3))
 	}
 }
+

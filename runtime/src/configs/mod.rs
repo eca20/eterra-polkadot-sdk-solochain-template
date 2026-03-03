@@ -644,6 +644,7 @@ impl pallet_eterra_tcg::Config for Runtime {
     type MaxAttempts = ConstU8<3>; // Set maximum attempts per card to 3
     type CardsPerPack = ConstU8<6>; // Set number of cards per pack to 6
     type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
+    type MaxOwnedCards = ConstU32<1024>;
     type WeightInfo = pallet_eterra_tcg::weights::SubstrateWeight<Runtime>;
 }
 

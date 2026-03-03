@@ -1,5 +1,8 @@
 use crate::pallet::Config as EterraSlotsConfig;
-use crate::{mock::*, ActiveCard, Cards, Error, Event, NextCardId, PlayerPacks};
+use crate::{
+    mock::*, ActiveCard, Cards, CardsByOwner, Error, Event, NextCardId, PackCardInProgress,
+    PackInProgress, PlayerPacks,
+};
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok};
 use log::{debug, Level, Metadata, Record};
@@ -249,12 +252,28 @@ fn mint_pro_charges_price_and_starts_in_progress() {
         assert!(!card.is_finalized());
         assert!(card.get_slot_values().is_none());
         assert_eq!(EterraSlots::card_attempts(card_id), 0);
+        assert!(EterraSlots::cards_by_owner(player).contains(&card_id));
 
         // Events: should include ProMintStarted.
         assert_event_found(
             |e| matches!(e, RuntimeEvent::EterraSlots(Event::ProMintStarted { player: who, card_id: id }) if *who == player && *id == card_id),
             "ProMintStarted",
         );
+    });
+}
+
+#[test]
+fn pro_card_stays_visible_in_owner_index_after_finalize() {
+    new_test_ext().execute_with(|| {
+        let player = 1u64;
+        assert_ok!(EterraSlots::mint_pro(RuntimeOrigin::signed(player)));
+        let card_id = EterraSlots::pro_in_progress(player).expect("pro in progress");
+        assert!(EterraSlots::cards_by_owner(player).contains(&card_id));
+
+        assert_ok!(EterraSlots::spin_pro(RuntimeOrigin::signed(player)));
+        assert_ok!(EterraSlots::accept_pro(RuntimeOrigin::signed(player)));
+
+        assert!(EterraSlots::cards_by_owner(player).contains(&card_id));
     });
 }
 
@@ -516,6 +535,8 @@ fn pack_completed_clears_active_card_and_emits_event() {
         }
 
         assert_eq!(ActiveCard::<Test>::get(player), None);
+        assert!(PackInProgress::<Test>::get(player).is_none());
+        assert!(PackCardInProgress::<Test>::get(player).is_none());
         let packs = EterraSlots::player_packs(player);
         let pack = packs.last().expect("pack exists");
         assert!(pack.get_completed());
@@ -685,6 +706,8 @@ fn test_transfer_card_success() {
             new_owner,
             "Storage shows the card owner didn't update!"
         );
+        assert!(!CardsByOwner::<Test>::get(original_owner).contains(&card_id));
+        assert!(CardsByOwner::<Test>::get(new_owner).contains(&card_id));
 
         // 6) Attempt to find a CardTransferred event.
         let events = System::events();

@@ -26,6 +26,7 @@ parameter_types! {
     pub const MaxAttempts: u8 = 3;
     pub const CardsPerPack: u8 = 6;
     pub const MaxPacks: u32 = 10;
+    pub const MaxOwnedCards: u32 = 1024;
     pub const PackPrice: u128 = 500;
     pub const PackPriceReceiver: u64 = 999;
     pub const ProPrice: u128 = 200;
@@ -93,6 +94,7 @@ impl pallet_eterra_slots::Config for Test {
     type MaxAttempts = ConstU8<3>;
     type CardsPerPack = ConstU8<6>;
     type MaxPacks = ConstU32<10>;
+    type MaxOwnedCards = MaxOwnedCards;
 
     type WeightInfo = ();
 }
