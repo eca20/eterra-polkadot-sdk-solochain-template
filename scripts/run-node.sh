@@ -38,10 +38,31 @@ BASE_PATH="${BASE_PATH:-${ROOT_DIR}/data/${MODE}-${CHAIN}-${ROLE}}"
 RPC_PORT="${RPC_PORT:-9944}"
 P2P_PORT="${P2P_PORT:-30333}"
 PUBLIC_ADDR="${PUBLIC_ADDR:-}"
-EXPOSE_RPC="${EXPOSE_RPC:-0}"                # 1 -> --rpc-external
+# 1 -> --rpc-external. For local dev/testnet it's convenient to expose RPC so dockerized
+# services (media service, indexers, etc.) can connect via host.docker.internal.
+EXPOSE_RPC="${EXPOSE_RPC:-}"
 UNSAFE_RPC="${UNSAFE_RPC:-0}"                # 1 -> --unsafe-rpc-external (blocked for prod unless override)
 ALLOW_UNSAFE_RPC_IN_PRODUCTION="${ALLOW_UNSAFE_RPC_IN_PRODUCTION:-0}"
 RPC_CORS="${RPC_CORS:-none}"
+
+# Default EXPOSE_RPC to 1 on non-production chains unless explicitly set.
+if [[ -z "${EXPOSE_RPC}" ]]; then
+  if [[ "$CHAIN" == "production" ]]; then
+    EXPOSE_RPC="0"
+  else
+    EXPOSE_RPC="1"
+    # When exposing RPC, default CORS to "all" so browser dev tools can connect too.
+    if [[ "${RPC_CORS}" == "none" ]]; then
+      RPC_CORS="all"
+    fi
+  fi
+fi
+
+# Substrate blocks `--rpc-external` on validator nodes. If we're exposing RPC while
+# running as a validator, we must use `--unsafe-rpc-external` instead.
+if [[ "$ROLE" == "validator" && "$EXPOSE_RPC" == "1" ]]; then
+  UNSAFE_RPC="1"
+fi
 
 if [[ "$EXPOSE_RPC" != "0" && "$EXPOSE_RPC" != "1" ]]; then
   echo "[run-node] EXPOSE_RPC must be 0 or 1" >&2
@@ -129,11 +150,12 @@ if [[ -n "$PUBLIC_ADDR" ]]; then
 fi
 
 if [[ "$EXPOSE_RPC" == "1" ]]; then
-  ARGS+=(--rpc-external --rpc-cors "$RPC_CORS")
-fi
-
-if [[ "$UNSAFE_RPC" == "1" ]]; then
-  ARGS+=(--unsafe-rpc-external)
+  if [[ "$UNSAFE_RPC" == "1" ]]; then
+    ARGS+=(--unsafe-rpc-external)
+  else
+    ARGS+=(--rpc-external)
+  fi
+  ARGS+=(--rpc-cors "$RPC_CORS")
 fi
 
 if [[ "$ROLE" == "validator" ]]; then

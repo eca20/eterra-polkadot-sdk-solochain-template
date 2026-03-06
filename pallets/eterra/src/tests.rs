@@ -18,8 +18,7 @@ use sp_runtime::traits::{BlakeTwo256, Hash};
 use sp_runtime::DispatchError;
 use std::sync::Once;
 
-use cards::pallet as card_pallet;
-use pallet_eterra_simple_tcg as cards;
+use pallet_eterra_tcg as cards;
 
 use crate::HandsOfGame;
 
@@ -207,16 +206,125 @@ fn run_to_block(n: u64) {
     }
 }
 
-/// Mint `n` cards for `owner` in the simple TCG pallet and return their IDs.
+/// Mint `n` finalized cards for `owner` in the TCG pallet and return their IDs.
 fn mint_cards_for(owner: u64, n: usize) -> Vec<u32> {
+    // Mint a pack (6 cards) and finalize the first `n` cards by generating + accepting once each.
+    assert_ok!(cards::Pallet::<Test>::mint_pack(
+        frame_system::RawOrigin::Signed(owner).into()
+    ));
+
+    // Grab the newly created card ids from the newest pack.
+    let packs = cards::PlayerPacks::<Test>::get(owner);
+    let pack = packs.last().expect("pack exists");
+    let ids: Vec<u32> = pack.get_card_ids().iter().copied().take(n).collect();
+
+    // Finalize `n` cards in order, advancing the active card each time.
     for _ in 0..n {
-        assert_ok!(cards::Pallet::<Test>::mint_card(
+        assert_ok!(cards::Pallet::<Test>::generate_slot(
+            frame_system::RawOrigin::Signed(owner).into()
+        ));
+        assert_ok!(cards::Pallet::<Test>::accept_slot(
             frame_system::RawOrigin::Signed(owner).into()
         ));
     }
-    // Read from OwnedCards index (bounded vec) and collect the most recent `n` ids
-    let owned = card_pallet::OwnedCards::<Test>::get(owner);
-    owned.into_iter().rev().take(n).rev().collect()
+
+    ids
+}
+
+#[test]
+fn tcg_set_price_fails_when_card_in_current_hand() {
+    new_test_ext().execute_with(|| {
+        let owner: u64 = 1;
+        let hand_ids = ensure_preset_hand(owner);
+        let in_hand = hand_ids[0];
+
+        assert_noop!(
+            cards::Pallet::<Test>::set_price(
+                frame_system::RawOrigin::Signed(owner).into(),
+                in_hand,
+                500
+            ),
+            cards::Error::<Test>::CardInCurrentHand
+        );
+    });
+}
+
+#[test]
+fn tcg_transfer_fails_when_card_in_current_hand() {
+    new_test_ext().execute_with(|| {
+        let owner: u64 = 1;
+        let to: u64 = 2;
+        let hand_ids = ensure_preset_hand(owner);
+        let in_hand = hand_ids[0];
+
+        assert_noop!(
+            cards::Pallet::<Test>::transfer_card(
+                frame_system::RawOrigin::Signed(owner).into(),
+                in_hand,
+                to
+            ),
+            cards::Error::<Test>::CardInCurrentHand
+        );
+    });
+}
+
+#[test]
+fn set_current_hand_rejects_listed_cards_and_buy_is_defensive() {
+    new_test_ext().execute_with(|| {
+        let seller: u64 = 1;
+        let buyer: u64 = 2;
+
+        // Seller's hand uses 5 cards from the pack; the 6th card is not in the hand.
+        let mut hand_ids = ensure_preset_hand(seller);
+
+        // Finalize the remaining (6th) card so it can be listed.
+        assert_ok!(cards::Pallet::<Test>::generate_slot(
+            frame_system::RawOrigin::Signed(seller).into()
+        ));
+        assert_ok!(cards::Pallet::<Test>::accept_slot(
+            frame_system::RawOrigin::Signed(seller).into()
+        ));
+
+        let packs = cards::PlayerPacks::<Test>::get(seller);
+        let pack = packs.last().expect("pack exists");
+        let for_sale = *pack
+            .get_card_ids()
+            .get(5)
+            .expect("pack has 6 cards");
+
+        // List the card while it is NOT in the current hand.
+        assert_ok!(cards::Pallet::<Test>::set_price(
+            frame_system::RawOrigin::Signed(seller).into(),
+            for_sale,
+            200
+        ));
+
+        // Seller attempts to update their current hand to include the listed card, replacing slot 0.
+        // This is forbidden to prevent "stuck listings" that become unbuyable.
+        hand_ids[0] = for_sale;
+        assert_noop!(
+            Eterra::set_current_hand(
+                frame_system::RawOrigin::Signed(seller).into(),
+                bounded_hand_ids(hand_ids.clone())
+            ),
+            Error::<Test>::CardListedForSale
+        );
+
+        // Defensive redundancy: if an invalid state exists (e.g. due to an old runtime),
+        // buying should still fail.
+        crate::CurrentHandOf::<Test>::insert(&seller, bounded_hand_ids(hand_ids));
+
+        assert_noop!(
+            cards::Pallet::<Test>::buy_card(
+                frame_system::RawOrigin::Signed(buyer).into(),
+                for_sale
+            ),
+            cards::Error::<Test>::CardInCurrentHand
+        );
+
+        // Listing should remain in place.
+        assert!(cards::CardPrices::<Test>::contains_key(for_sale));
+    });
 }
 
 /// Ensure it's `me`'s turn; if not, make a simple legal move for `other` to advance.

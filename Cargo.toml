@@ -12,12 +12,14 @@ members = [
     "pallets/eterra",
     "pallets/eterra-gamer",
     "pallets/eterra-tcg",
+    "pallets/eterra-seasons",
     "pallets/eterra-daily-slots",
     "pallets/eterra-simple-tcg",
     "pallets/eterra-simple-matchmaker",
     "pallets/eterra-monte-carlo-ai",
     "pallets/eterra-media",
     "pallets/eterra-game-authority",
+    "pallets/nfts",
     "crates/eterra-card-ai-adapter",   
     "runtime",
 ]
@@ -64,6 +66,7 @@ sp-core = { version = "34.0.0", default-features = false }
 sp-inherents = { version = "34.0.0", default-features = false }
 sp-io = { version = "38.0.0", default-features = false }
 sp-keyring = { version = "39.0.0", default-features = false }
+sp-keystore = { version = "0.40.0", default-features = false }
 sp-runtime = { version = "39.0.1", default-features = false }
 sp-timestamp = { version = "34.0.0", default-features = false }
 substrate-frame-rpc-system = { version = "39.0.0", default-features = false }
@@ -109,3 +112,5 @@ eterra-card-ai-adapter                  = { path = "crates/eterra-card-ai-adapte
 pallet-eterra-gamer                     = { path = "pallets/eterra-gamer", default-features = false }
 pallet-eterra-game-authority            = { path = "pallets/eterra-game-authority", default-features = false }
 pallet-eterra-media                     = { path = "pallets/eterra-media", default-features = false }
+pallet-eterra-seasons                   = { path = "pallets/eterra-seasons", default-features = false }
+pallet-nfts                             = { path = "pallets/nfts", default-features = false }

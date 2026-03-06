@@ -58,7 +58,7 @@ make run-production
 make help
 ```
 
-`scripts/run-node.sh` defaults to local-only RPC (`EXPOSE_RPC=0`) and blocks unsafe RPC on production unless explicitly overridden.
+`scripts/run-node.sh` defaults to exposed RPC on `dev`/`testnet` (so dockerized services can connect; validator uses `--unsafe-rpc-external` per Substrate CLI rules) and local-only RPC on `production` unless explicitly overridden.
 
 Faucet policy: faucet claim sponsorship is only for zero-balance accounts (`dest == signer`), capped per on-chain window; claims are also cooldown-limited on-chain.
 

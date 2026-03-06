@@ -25,11 +25,21 @@ use frame_support::{traits::Get, weights::Weight};
 pub trait WeightInfo {
 	fn mint_pack() -> Weight;
 	fn mint_pro() -> Weight;
+	fn mint_card() -> Weight;
 	fn generate_slot() -> Weight;
 	fn spin_pro() -> Weight;
 	fn accept_slot() -> Weight;
 	fn accept_pro() -> Weight;
 	fn transfer_card() -> Weight;
+	fn set_price() -> Weight;
+	fn remove_price() -> Weight;
+	fn buy_card() -> Weight;
+	fn add_season_asset() -> Weight;
+	fn remove_season_asset() -> Weight;
+	fn backfill_card_artwork() -> Weight;
+	fn init_card_nft_collection() -> Weight;
+	fn convert_to_nft() -> Weight;
+	fn unwrap_from_nft() -> Weight;
 }
 
 impl WeightInfo for () {
@@ -37,6 +47,9 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn mint_pro() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn mint_card() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 	fn generate_slot() -> Weight {
@@ -52,6 +65,33 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn transfer_card() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn set_price() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn remove_price() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn buy_card() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn add_season_asset() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn remove_season_asset() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn backfill_card_artwork() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn init_card_nft_collection() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn convert_to_nft() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn unwrap_from_nft() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 }
@@ -105,6 +145,16 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 			.saturating_add(Weight::from_parts(0, 7611))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(5))
+	}
+
+	/// Storage: `System::Account` (r:1 w:1)
+	/// Storage: `EterraTCG::NextCardId` (r:1 w:1)
+	/// Storage: `EterraTCG::CardsByOwner` (r:1 w:1)
+	/// Storage: `EterraTCG::Cards` (r:0 w:1)
+	fn mint_card() -> Weight {
+		Weight::from_parts(45_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(4))
 	}
 
 	/// Storage: `EterraTCG::PlayerPacks` (r:1 w:1)
@@ -199,5 +249,57 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
-}
 
+	/// Storage: `EterraTCG::Cards` (r:1 w:0)
+	/// Storage: `EterraTCG::CardPrices` (r:0 w:1)
+	/// Storage: `EterraTCG::ListedByOwner` (r:1 w:1)
+	fn set_price() -> Weight {
+		Weight::from_parts(18_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+
+	/// Storage: `EterraTCG::Cards` (r:1 w:0)
+	/// Storage: `EterraTCG::CardPrices` (r:1 w:1)
+	/// Storage: `EterraTCG::ListedByOwner` (r:1 w:1)
+	fn remove_price() -> Weight {
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+
+	/// Storage: `EterraTCG::CardPrices` (r:1 w:1)
+	/// Storage: `EterraTCG::Cards` (r:1 w:1)
+	/// Storage: `EterraTCG::ListedByOwner` (r:1 w:1)
+	/// Storage: `EterraTCG::CardsByOwner` (r:2 w:2)
+	/// Storage: `System::Account` (r:1 w:1)
+	fn buy_card() -> Weight {
+		Weight::from_parts(55_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(6))
+			.saturating_add(T::DbWeight::get().writes(6))
+	}
+
+	fn add_season_asset() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+
+	fn remove_season_asset() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+
+	fn backfill_card_artwork() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+
+	fn init_card_nft_collection() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+
+	fn convert_to_nft() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+
+	fn unwrap_from_nft() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+}

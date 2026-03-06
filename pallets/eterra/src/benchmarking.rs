@@ -8,34 +8,39 @@ use frame_system::RawOrigin;
 use sp_runtime::traits::Saturating;
 use sp_std::vec::Vec;
 
-use pallet_eterra_simple_tcg as cards;
+use pallet_eterra_tcg as cards;
 
-fn make_card_info<T: Config>(owner: &T::AccountId, card_id: u32) -> cards::pallet::CardInfo<T> {
-    cards::pallet::CardInfo::<T> {
-        owner: owner.clone(),
-        finalized: true,
-        slot_values: Some([1, 1, 1, 1]),
-        name: BoundedVec::default(),
-        north: 1,
-        east: 1,
-        south: 1,
-        west: 1,
-        card_id,
-        minted_at: frame_system::Pallet::<T>::block_number(),
-        price: 0u128,
-        edition: cards::pallet::CardEdition::default(),
-        rarity: cards::pallet::RarityType::default(),
-    }
+fn fund<T: Config>(who: &T::AccountId) {
+    let pack_price = <T as cards::pallet::Config>::PackPrice::get();
+    let pro_price = <T as cards::pallet::Config>::ProPrice::get();
+
+    // Ensure the caller can pay the mint fees and still satisfy `KeepAlive`.
+    let amount = pack_price
+        .saturating_add(pack_price)
+        .saturating_add(pro_price)
+        .saturating_add(pro_price);
+    let _ = <<T as cards::pallet::Config>::Currency as frame_support::traits::Currency<
+        T::AccountId,
+    >>::deposit_creating(who, amount);
 }
 
-fn seed_cards<T: Config>(owner: &T::AccountId, start_id: u32, count: u32) -> Vec<u32> {
-    let mut ids: Vec<u32> = Vec::new();
-    for i in 0..count {
-        let id = start_id.saturating_add(i);
-        let info = make_card_info::<T>(owner, id);
-        cards::pallet::Cards::<T>::insert(id, info);
-        ids.push(id);
+/// Mint a pack and finalize the first `count` cards, returning their IDs.
+fn seed_cards<T: Config>(owner: &T::AccountId, _start_id: u32, count: u32) -> Vec<u32> {
+    fund::<T>(owner);
+    cards::Pallet::<T>::mint_pack(RawOrigin::Signed(owner.clone()).into())
+        .expect("mint pack succeeds");
+
+    let packs = cards::PlayerPacks::<T>::get(owner);
+    let pack = packs.last().expect("pack exists");
+    let ids: Vec<u32> = pack.get_card_ids().iter().copied().take(count as usize).collect();
+
+    for _ in 0..count {
+        cards::Pallet::<T>::generate_slot(RawOrigin::Signed(owner.clone()).into())
+            .expect("generate slot succeeds");
+        cards::Pallet::<T>::accept_slot(RawOrigin::Signed(owner.clone()).into())
+            .expect("accept slot succeeds");
     }
+
     ids
 }
 

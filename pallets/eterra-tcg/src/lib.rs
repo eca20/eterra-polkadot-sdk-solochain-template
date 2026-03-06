@@ -20,12 +20,66 @@ use frame_support::{
     traits::{Currency, ExistenceRequirement, Get},
     BoundedBTreeSet,
     BoundedVec,
+    PalletId,
 };
 use frame_system::{ensure_signed, pallet_prelude::OriginFor};
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
-use sp_runtime::traits::{Hash, SaturatedConversion};
+use sp_runtime::traits::{AccountIdConversion, Hash, SaturatedConversion};
 use sp_std::prelude::*;
+
+pub type MediaId = pallet_eterra_media::MediaId;
+pub type SeasonId = pallet_eterra_seasons::SeasonId;
+
+/// Provides a runtime-defined view of whether a given `card_id` is currently included
+/// in `owner`'s configured "current hand".
+///
+/// This is used to prevent listing/selling/transferring a card that is actively in use
+/// by gameplay, avoiding dangling card IDs in the player's current hand.
+pub trait HandChecker<AccountId> {
+    /// Returns `true` if `card_id` is present in `owner`'s current hand.
+    fn is_card_in_current_hand(owner: &AccountId, card_id: u32) -> bool;
+}
+
+impl<AccountId> HandChecker<AccountId> for () {
+    fn is_card_in_current_hand(_owner: &AccountId, _card_id: u32) -> bool {
+        false
+    }
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum AssetKind {
+    Border,
+    Background,
+    Subject,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct SeasonAssetsInfo<BBorders, BBackgrounds, BSubjects> {
+    pub borders: BBorders,
+    pub backgrounds: BBackgrounds,
+    pub subjects: BSubjects,
+}
+
+impl<BBorders: Default, BBackgrounds: Default, BSubjects: Default> Default
+    for SeasonAssetsInfo<BBorders, BBackgrounds, BSubjects>
+{
+    fn default() -> Self {
+        Self {
+            borders: Default::default(),
+            backgrounds: Default::default(),
+            subjects: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct CardArtworkInfo {
+    pub season_id: SeasonId,
+    pub border_media_id: MediaId,
+    pub background_media_id: MediaId,
+    pub subject_media_id: MediaId,
+}
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -34,12 +88,20 @@ pub mod pallet {
     use frame_support::traits::ConstU32;
     use frame_support::transactional;
     use frame_system::pallet_prelude::BlockNumberFor;
+    use sp_runtime::traits::StaticLookup;
 
     const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+    const ESCROW_PALLET_ID: PalletId = PalletId(*b"et/tcgsc");
 
     /// Balance type bound to the runtime currency.
     pub type BalanceOf<T> =
-        <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+        <<T as Config>::PaymentCurrency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+
+    type BoundedBorders<T> = BoundedVec<MediaId, <T as Config>::MaxBorders>;
+    type BoundedBackgrounds<T> = BoundedVec<MediaId, <T as Config>::MaxBackgrounds>;
+    type BoundedSubjects<T> = BoundedVec<MediaId, <T as Config>::MaxSubjects>;
+    type SeasonAssetsInfoOf<T> =
+        SeasonAssetsInfo<BoundedBorders<T>, BoundedBackgrounds<T>, BoundedSubjects<T>>;
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -62,12 +124,21 @@ pub mod pallet {
     // ------------------
 
     #[pallet::config]
-    pub trait Config: frame_system::Config {
+    pub trait Config:
+        frame_system::Config
+        + pallet_eterra_seasons::Config
+        + pallet_eterra_media::Config
+        + pallet_nfts::Config<CollectionId = u32, ItemId = u32>
+    {
         /// The overarching event type.
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
         /// Currency used to charge for minting packs.
-        type Currency: Currency<Self::AccountId>;
+        type PaymentCurrency: Currency<Self::AccountId>;
+
+        /// A runtime-provided hook for checking whether a card is currently part of the owner's
+        /// gameplay "current hand".
+        type HandChecker: crate::HandChecker<Self::AccountId>;
 
         /// Fixed pack mint price (in native `COIN` base units).
         #[pallet::constant]
@@ -84,6 +155,14 @@ pub mod pallet {
         /// Account that receives "pro" mint payments.
         #[pallet::constant]
         type ProPriceReceiver: Get<Self::AccountId>;
+
+        /// Fixed single-card mint price (in native `COIN` base units).
+        #[pallet::constant]
+        type MintCardPrice: Get<BalanceOf<Self>>;
+
+        /// Account that receives single-card mint payments.
+        #[pallet::constant]
+        type MintCardPriceReceiver: Get<Self::AccountId>;
 
         /// Maximum number of spins allowed for a "pro" card mint.
         #[pallet::constant]
@@ -106,6 +185,18 @@ pub mod pallet {
         /// This bounds storage reads for dashboards that list cards by owner.
         #[pallet::constant]
         type MaxOwnedCards: Get<u32>;
+
+        /// Maximum number of border layers per season.
+        #[pallet::constant]
+        type MaxBorders: Get<u32>;
+
+        /// Maximum number of background layers per season.
+        #[pallet::constant]
+        type MaxBackgrounds: Get<u32>;
+
+        /// Maximum number of subject layers per season.
+        #[pallet::constant]
+        type MaxSubjects: Get<u32>;
 
         /// Weight information for this pallet's extrinsics.
         type WeightInfo: WeightInfo;
@@ -181,6 +272,28 @@ pub mod pallet {
     pub type Cards<T: Config> =
         StorageMap<_, Blake2_128Concat, u32, CardInfo<T::AccountId>, OptionQuery>;
 
+    /// Season-scoped lists of available artwork layer MediaIds.
+    #[pallet::storage]
+    #[pallet::getter(fn season_assets)]
+    pub type SeasonAssets<T: Config> =
+        StorageMap<_, Blake2_128Concat, SeasonId, SeasonAssetsInfoOf<T>, ValueQuery>;
+
+    /// Immutable assigned artwork for each card: `card_id => CardArtworkInfo`.
+    #[pallet::storage]
+    #[pallet::getter(fn card_artwork)]
+    pub type CardArtwork<T: Config> =
+        StorageMap<_, Blake2_128Concat, u32, CardArtworkInfo, OptionQuery>;
+
+    /// The NFT collection ID used for converted cards (single collection).
+    #[pallet::storage]
+    #[pallet::getter(fn card_nft_collection_id)]
+    pub type CardNftCollectionId<T: Config> = StorageValue<_, u32, OptionQuery>;
+
+    /// Tracks cards that have been converted to NFTs: `card_id => ()`.
+    #[pallet::storage]
+    #[pallet::getter(fn converted)]
+    pub type Converted<T: Config> = StorageMap<_, Blake2_128Concat, u32, (), OptionQuery>;
+
     /// A map from account => list of packs
     #[pallet::storage]
     #[pallet::getter(fn player_packs)]
@@ -194,6 +307,23 @@ pub mod pallet {
     #[pallet::storage]
     #[pallet::getter(fn cards_by_owner)]
     pub type CardsByOwner<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedBTreeSet<u32, T::MaxOwnedCards>,
+        ValueQuery,
+    >;
+
+    /// A map of cards that are up for sale: `card_id => price`.
+    #[pallet::storage]
+    #[pallet::getter(fn card_prices)]
+    pub type CardPrices<T: Config> =
+        StorageMap<_, Blake2_128Concat, u32, BalanceOf<T>, OptionQuery>;
+
+    /// Index of cards a given owner has listed for sale.
+    #[pallet::storage]
+    #[pallet::getter(fn listed_by_owner)]
+    pub type ListedByOwner<T: Config> = StorageMap<
         _,
         Blake2_128Concat,
         T::AccountId,
@@ -242,6 +372,8 @@ pub mod pallet {
     pub enum Event<T: Config> {
         /// A new pack was minted for `player` with ID `pack_id`, containing multiple new cards.
         PackMinted { player: T::AccountId, pack_id: u32 },
+        /// A single card was minted for `player` with ID `card_id`.
+        CardMinted { player: T::AccountId, card_id: u32 },
         /// A card’s slot was generated.
         SlotGenerated { card_id: u32, values: [u8; 4] },
         /// A card’s slot was accepted (finalized).
@@ -256,6 +388,46 @@ pub mod pallet {
             to: T::AccountId,
             card_id: u32,
         },
+        /// A card was listed for sale by `owner` at `price`.
+        CardListed {
+            owner: T::AccountId,
+            card_id: u32,
+            price: BalanceOf<T>,
+        },
+        /// A card was unlisted (by owner or due to transfer).
+        CardUnlisted { owner: T::AccountId, card_id: u32 },
+        /// A listed card was bought by `buyer` from `seller` for `price`.
+        CardBought {
+            buyer: T::AccountId,
+            seller: T::AccountId,
+            card_id: u32,
+            price: BalanceOf<T>,
+        },
+        /// A seasonal artwork layer was added.
+        SeasonAssetAdded {
+            season_id: SeasonId,
+            kind: AssetKind,
+            media_id: MediaId,
+        },
+        /// A seasonal artwork layer was removed.
+        SeasonAssetRemoved {
+            season_id: SeasonId,
+            kind: AssetKind,
+            media_id: MediaId,
+        },
+        /// The NFT collection used for converted cards was initialized.
+        CardNftCollectionInitialized {
+            collection_id: u32,
+            admin: T::AccountId,
+        },
+        /// A card was converted to an NFT (card is escrowed in TCG, NFT is owned by player).
+        CardConvertedToNft {
+            card_id: u32,
+            collection_id: u32,
+            item_id: u32,
+        },
+        /// A card NFT was burned and the card was returned from escrow to the NFT owner.
+        CardUnwrappedFromNft { card_id: u32 },
 
         /// A new "pro" card was started for `player` with global `card_id`.
         ProMintStarted { player: T::AccountId, card_id: u32 },
@@ -299,12 +471,56 @@ pub mod pallet {
         NoSuchCard,
         /// You do not own the card you’re trying to act upon.
         NotCardOwner,
+        /// Card must be finalized before it can be transferred or listed.
+        CardNotFinalized,
+        /// Card is currently part of the owner's configured "current hand" and cannot be listed,
+        /// sold, or transferred until removed from that hand.
+        CardInCurrentHand,
         /// The card was already finalized and cannot be mutated.
         CardAlreadyFinalized,
         /// No more card IDs are available.
         CardIdExhausted,
         /// The caller's owned-card limit is reached.
         MaxOwnedCardsReached,
+        /// The caller's listed-card limit is reached.
+        MaxListedCardsReached,
+        /// Card is not listed for sale.
+        NotForSale,
+        /// Buyer cannot buy their own card.
+        CannotBuyOwnCard,
+
+        /// Caller is not an allowlisted season admin.
+        NotSeasonAdmin,
+        /// Season does not exist in the seasons pallet.
+        UnknownSeason,
+        /// Season is not in Draft status.
+        SeasonNotDraft,
+        /// MediaId not found in the media registry.
+        UnknownMedia,
+        /// MediaId is deprecated and cannot be used.
+        MediaDeprecated,
+        /// The seasonal asset list is full for this kind.
+        AssetListFull,
+        /// The specified MediaId is not present in the seasonal asset list.
+        AssetNotFound,
+        /// No active season is currently set.
+        NoActiveSeason,
+        /// One or more seasonal asset lists are empty.
+        SeasonAssetsEmpty,
+        /// Card artwork has not been assigned for this card.
+        CardArtworkMissing,
+        /// The card NFT collection has already been initialized.
+        NftCollectionAlreadyInitialized,
+        /// The card NFT collection is not initialized.
+        NftCollectionNotInitialized,
+        /// Card is already converted to an NFT.
+        CardAlreadyConverted,
+        /// Card is not converted to an NFT.
+        CardNotConverted,
+        /// Card is not held by escrow (unexpected state).
+        CardNotEscrowed,
+        /// Caller does not own the NFT item.
+        NotNftOwner,
 
         /// A "pro" mint is already in progress for this account.
         ProMintAlreadyInProgress,
@@ -327,7 +543,7 @@ pub mod pallet {
         /// Charges `PackPrice` (in native `COIN`) and mints `CardsPerPack` unique card IDs.
         /// Each card is stored globally in `Cards<T>`.
         #[pallet::call_index(0)]
-        #[pallet::weight(T::WeightInfo::mint_pack())]
+        #[pallet::weight(<T as Config>::WeightInfo::mint_pack())]
         #[transactional]
         pub fn mint_pack(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
@@ -341,7 +557,12 @@ pub mod pallet {
             // Charge the pack price up-front.
             let price = T::PackPrice::get();
             let receiver = T::PackPriceReceiver::get();
-            T::Currency::transfer(&player, &receiver, price, ExistenceRequirement::KeepAlive)?;
+            T::PaymentCurrency::transfer(
+                &player,
+                &receiver,
+                price,
+                ExistenceRequirement::KeepAlive,
+            )?;
 
             let pack_id = <frame_system::Pallet<T>>::block_number().saturated_into::<u32>();
 
@@ -381,9 +602,34 @@ pub mod pallet {
             Ok(())
         }
 
+        /// Mint a single, immediately-finalized card for the caller.
+        ///
+        /// Charges `MintCardPrice` (in native `COIN`) and mints exactly one card ID with
+        /// deterministic ranks based on on-chain entropy (consensus-safe, not cryptographic RNG).
+        #[pallet::call_index(7)]
+        #[pallet::weight(<T as Config>::WeightInfo::mint_card())]
+        #[transactional]
+        pub fn mint_card(origin: OriginFor<T>) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+
+            // Charge the mint price up-front.
+            let price = T::MintCardPrice::get();
+            let receiver = T::MintCardPriceReceiver::get();
+            T::PaymentCurrency::transfer(
+                &player,
+                &receiver,
+                price,
+                ExistenceRequirement::KeepAlive,
+            )?;
+
+            let card_id = Self::create_new_finalized_card(&player)?;
+            Self::deposit_event(Event::CardMinted { player, card_id });
+            Ok(())
+        }
+
         /// Generate new slot values for the user’s current (active) card, up to `MaxAttempts`.
         #[pallet::call_index(1)]
-        #[pallet::weight(T::WeightInfo::generate_slot())]
+        #[pallet::weight(<T as Config>::WeightInfo::generate_slot())]
         #[transactional]
         pub fn generate_slot(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
@@ -440,7 +686,7 @@ pub mod pallet {
 
         /// Accept (finalize) the user’s current card’s slot values immediately.
         #[pallet::call_index(2)]
-        #[pallet::weight(T::WeightInfo::accept_slot())]
+        #[pallet::weight(<T as Config>::WeightInfo::accept_slot())]
         #[transactional]
         pub fn accept_slot(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
@@ -477,7 +723,7 @@ pub mod pallet {
         /// If that card is also part of a pack, it still references it, but ownership
         /// changes to `to`.
         #[pallet::call_index(3)]
-        #[pallet::weight(T::WeightInfo::transfer_card())]
+        #[pallet::weight(<T as Config>::WeightInfo::transfer_card())]
         #[transactional]
         pub fn transfer_card(
             origin: OriginFor<T>,
@@ -486,29 +732,21 @@ pub mod pallet {
         ) -> DispatchResult {
             let from = ensure_signed(origin)?;
 
-            Cards::<T>::mutate(card_id, |maybe_card| -> DispatchResult {
-                let card_info = maybe_card.as_mut().ok_or(Error::<T>::NoSuchCard)?;
-                ensure!(card_info.owner == from, Error::<T>::NotCardOwner);
+            // Ensure card exists, is owned, and is finalized before allowing transfer.
+            let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
+            ensure!(card_info.owner == from, Error::<T>::NotCardOwner);
+            ensure!(card_info.finalized, Error::<T>::CardNotFinalized);
+            ensure!(
+                !T::HandChecker::is_card_in_current_hand(&from, card_id),
+                Error::<T>::CardInCurrentHand
+            );
 
-                // ✅ Ensure the card is finalized before allowing transfer
-                ensure!(card_info.finalized, Error::<T>::NoActiveCard); // Consider a better error name
+            // If listed, unlist first so indices remain consistent.
+            if CardPrices::<T>::contains_key(card_id) {
+                Self::unlist(card_id, &from);
+            }
 
-                // Update owner index. Since this extrinsic is transactional, any failure
-                // will roll back both the index and the card owner update.
-                CardsByOwner::<T>::mutate(&from, |set| {
-                    set.remove(&card_id);
-                });
-                CardsByOwner::<T>::try_mutate(&to, |set| -> DispatchResult {
-                    set.try_insert(card_id)
-                        .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
-                    Ok(())
-                })?;
-
-                // Transfer ownership
-                card_info.owner = to.clone();
-
-                Ok(())
-            })?;
+            Self::do_transfer(&from, &to, card_id)?;
 
             Self::deposit_event(Event::CardTransferred { from, to, card_id });
             Ok(())
@@ -517,7 +755,7 @@ pub mod pallet {
         /// Start a new "pro" mint: pay `ProPrice`, mint a single in-progress card,
         /// then use `spin_pro` (up to `MaxProSpins`) to generate ranks and `accept_pro` to finalize.
         #[pallet::call_index(4)]
-        #[pallet::weight(T::WeightInfo::mint_pro())]
+        #[pallet::weight(<T as Config>::WeightInfo::mint_pro())]
         #[transactional]
         pub fn mint_pro(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
@@ -529,7 +767,12 @@ pub mod pallet {
             // Charge the pro price up-front.
             let price = T::ProPrice::get();
             let receiver = T::ProPriceReceiver::get();
-            T::Currency::transfer(&player, &receiver, price, ExistenceRequirement::KeepAlive)?;
+            T::PaymentCurrency::transfer(
+                &player,
+                &receiver,
+                price,
+                ExistenceRequirement::KeepAlive,
+            )?;
 
             // Create the in-progress card.
             let card_id = Self::create_new_card(&player)?;
@@ -545,7 +788,7 @@ pub mod pallet {
         /// Spin the "pro" card in progress, up to `MaxProSpins`.
         /// Updates the in-progress card's directional ranks.
         #[pallet::call_index(5)]
-        #[pallet::weight(T::WeightInfo::spin_pro())]
+        #[pallet::weight(<T as Config>::WeightInfo::spin_pro())]
         #[transactional]
         pub fn spin_pro(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
@@ -573,7 +816,7 @@ pub mod pallet {
 
         /// Accept (finalize) the current "pro" card with whatever values are currently set.
         #[pallet::call_index(6)]
-        #[pallet::weight(T::WeightInfo::accept_pro())]
+        #[pallet::weight(<T as Config>::WeightInfo::accept_pro())]
         #[transactional]
         pub fn accept_pro(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
@@ -595,6 +838,361 @@ pub mod pallet {
             });
             Ok(())
         }
+
+        /// List a finalized card for sale at a fixed `price` (in native balance units).
+        #[pallet::call_index(8)]
+        #[pallet::weight(<T as Config>::WeightInfo::set_price())]
+        #[transactional]
+        pub fn set_price(
+            origin: OriginFor<T>,
+            card_id: u32,
+            price: BalanceOf<T>,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
+            ensure!(card_info.owner == who, Error::<T>::NotCardOwner);
+            ensure!(card_info.finalized, Error::<T>::CardNotFinalized);
+            ensure!(
+                !T::HandChecker::is_card_in_current_hand(&who, card_id),
+                Error::<T>::CardInCurrentHand
+            );
+
+            CardPrices::<T>::insert(card_id, price);
+            ListedByOwner::<T>::try_mutate(&who, |set| -> DispatchResult {
+                set.try_insert(card_id)
+                    .map_err(|_| Error::<T>::MaxListedCardsReached)?;
+                Ok(())
+            })?;
+
+            Self::deposit_event(Event::CardListed {
+                owner: who,
+                card_id,
+                price,
+            });
+            Ok(())
+        }
+
+        /// Remove a card from sale.
+        #[pallet::call_index(9)]
+        #[pallet::weight(<T as Config>::WeightInfo::remove_price())]
+        #[transactional]
+        pub fn remove_price(origin: OriginFor<T>, card_id: u32) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
+            ensure!(card_info.owner == who, Error::<T>::NotCardOwner);
+
+            ensure!(CardPrices::<T>::contains_key(card_id), Error::<T>::NotForSale);
+            Self::unlist(card_id, &who);
+            Ok(())
+        }
+
+        /// Buy a listed card at the asking price.
+        #[pallet::call_index(10)]
+        #[pallet::weight(<T as Config>::WeightInfo::buy_card())]
+        #[transactional]
+        pub fn buy_card(origin: OriginFor<T>, card_id: u32) -> DispatchResult {
+            let buyer = ensure_signed(origin)?;
+
+            let price = CardPrices::<T>::get(card_id).ok_or(Error::<T>::NotForSale)?;
+            let seller = Cards::<T>::get(card_id)
+                .map(|c| c.owner)
+                .ok_or(Error::<T>::NoSuchCard)?;
+
+            ensure!(seller != buyer, Error::<T>::CannotBuyOwnCard);
+            ensure!(
+                !T::HandChecker::is_card_in_current_hand(&seller, card_id),
+                Error::<T>::CardInCurrentHand
+            );
+
+            // Transfer funds buyer -> seller.
+            T::PaymentCurrency::transfer(
+                &buyer,
+                &seller,
+                price,
+                ExistenceRequirement::AllowDeath,
+            )?;
+
+            // Unlist before transfer (so indices are consistent).
+            Self::unlist(card_id, &seller);
+
+            // Transfer ownership seller -> buyer.
+            Self::do_transfer(&seller, &buyer, card_id)?;
+
+            Self::deposit_event(Event::CardBought {
+                buyer,
+                seller,
+                card_id,
+                price,
+            });
+            Ok(())
+        }
+
+        /// Add a seasonal artwork layer (border/background/subject) by MediaId.
+        ///
+        /// The season must exist and be in `Draft` status.
+        #[pallet::call_index(11)]
+        #[pallet::weight(<T as Config>::WeightInfo::add_season_asset())]
+        #[transactional]
+        pub fn add_season_asset(
+            origin: OriginFor<T>,
+            season_id: SeasonId,
+            kind: AssetKind,
+            media_id: MediaId,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_season_admin(&who)?;
+            Self::ensure_season_draft(season_id)?;
+            Self::ensure_media_valid(media_id)?;
+
+            let inserted = SeasonAssets::<T>::try_mutate(
+                season_id,
+                |assets| -> Result<bool, DispatchError> {
+                    match kind {
+                        AssetKind::Border => {
+                            if assets.borders.contains(&media_id) {
+                                return Ok(false);
+                            }
+                            assets
+                                .borders
+                                .try_push(media_id)
+                                .map_err(|_| Error::<T>::AssetListFull)?;
+                        }
+                        AssetKind::Background => {
+                            if assets.backgrounds.contains(&media_id) {
+                                return Ok(false);
+                            }
+                            assets
+                                .backgrounds
+                                .try_push(media_id)
+                                .map_err(|_| Error::<T>::AssetListFull)?;
+                        }
+                        AssetKind::Subject => {
+                            if assets.subjects.contains(&media_id) {
+                                return Ok(false);
+                            }
+                            assets
+                                .subjects
+                                .try_push(media_id)
+                                .map_err(|_| Error::<T>::AssetListFull)?;
+                        }
+                    }
+                    Ok(true)
+                },
+            )?;
+
+            if inserted {
+                Self::deposit_event(Event::SeasonAssetAdded {
+                    season_id,
+                    kind,
+                    media_id,
+                });
+            }
+            Ok(())
+        }
+
+        /// Remove a seasonal artwork layer by MediaId.
+        ///
+        /// The season must exist and be in `Draft` status.
+        #[pallet::call_index(12)]
+        #[pallet::weight(<T as Config>::WeightInfo::remove_season_asset())]
+        #[transactional]
+        pub fn remove_season_asset(
+            origin: OriginFor<T>,
+            season_id: SeasonId,
+            kind: AssetKind,
+            media_id: MediaId,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_season_admin(&who)?;
+            Self::ensure_season_draft(season_id)?;
+
+            SeasonAssets::<T>::try_mutate(season_id, |assets| -> DispatchResult {
+                let removed = match kind {
+                    AssetKind::Border => Self::remove_asset_from_list(&mut assets.borders, media_id),
+                    AssetKind::Background => {
+                        Self::remove_asset_from_list(&mut assets.backgrounds, media_id)
+                    }
+                    AssetKind::Subject => {
+                        Self::remove_asset_from_list(&mut assets.subjects, media_id)
+                    }
+                };
+                ensure!(removed, Error::<T>::AssetNotFound);
+                Ok(())
+            })?;
+
+            Self::deposit_event(Event::SeasonAssetRemoved {
+                season_id,
+                kind,
+                media_id,
+            });
+            Ok(())
+        }
+
+        /// Assign seasonal artwork to previously-minted legacy cards that do not yet have
+        /// `CardArtwork` set.
+        ///
+        /// Uses a separate hash domain to avoid matching the mint-time assignment.
+        #[pallet::call_index(14)]
+        #[pallet::weight(<T as Config>::WeightInfo::backfill_card_artwork())]
+        #[transactional]
+        pub fn backfill_card_artwork(
+            origin: OriginFor<T>,
+            start_card_id: u32,
+            limit: u32,
+            season_id: SeasonId,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_season_admin(&who)?;
+            Self::ensure_season_exists(season_id)?;
+
+            // Ensure this season has renderable assets.
+            let assets = SeasonAssets::<T>::get(season_id);
+            Self::ensure_assets_non_empty(&assets)?;
+
+            let end = start_card_id.saturating_add(limit);
+            for card_id in start_card_id..end {
+                if Cards::<T>::contains_key(card_id) && !CardArtwork::<T>::contains_key(card_id) {
+                    Self::assign_artwork_for_card(
+                        card_id,
+                        season_id,
+                        b"eterra-tcg/art-backfill",
+                    )?;
+                }
+            }
+            Ok(())
+        }
+
+        /// Initialize the single NFT collection used for converted cards.
+        ///
+        /// The `nft_admin` account becomes the NFT collection admin (intended to be the media
+        /// service signer, so it can later call `nfts.set_metadata` on items).
+        #[pallet::call_index(15)]
+        #[pallet::weight(<T as Config>::WeightInfo::init_card_nft_collection())]
+        #[transactional]
+        pub fn init_card_nft_collection(
+            origin: OriginFor<T>,
+            nft_admin: T::AccountId,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_season_admin(&who)?;
+            ensure!(
+                CardNftCollectionId::<T>::get().is_none(),
+                Error::<T>::NftCollectionAlreadyInitialized
+            );
+
+            let collection_id = pallet_nfts::NextCollectionId::<T>::get().unwrap_or(0);
+            let admin = T::Lookup::unlookup(nft_admin.clone());
+
+            let config = pallet_nfts::CollectionConfig {
+                settings: pallet_nfts::CollectionSettings::all_enabled(),
+                max_supply: None,
+                mint_settings: pallet_nfts::MintSettings::default(),
+            };
+
+            pallet_nfts::Pallet::<T>::create(
+                frame_system::RawOrigin::Signed(who).into(),
+                admin,
+                config,
+            )?;
+
+            CardNftCollectionId::<T>::put(collection_id);
+            Self::deposit_event(Event::CardNftCollectionInitialized {
+                collection_id,
+                admin: nft_admin,
+            });
+            Ok(())
+        }
+
+        /// Convert a finalized card to an NFT (withdraw model).
+        ///
+        /// The card is transferred to an escrow account controlled by this pallet, and an NFT
+        /// item is minted with `item_id = card_id`.
+        #[pallet::call_index(16)]
+        #[pallet::weight(<T as Config>::WeightInfo::convert_to_nft())]
+        #[transactional]
+        pub fn convert_to_nft(origin: OriginFor<T>, card_id: u32) -> DispatchResult
+        {
+            let who = ensure_signed(origin)?;
+
+            let collection_id =
+                CardNftCollectionId::<T>::get().ok_or(Error::<T>::NftCollectionNotInitialized)?;
+            ensure!(
+                !Converted::<T>::contains_key(card_id),
+                Error::<T>::CardAlreadyConverted
+            );
+
+            let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
+            ensure!(card_info.owner == who, Error::<T>::NotCardOwner);
+            ensure!(card_info.finalized, Error::<T>::CardNotFinalized);
+            ensure!(
+                !T::HandChecker::is_card_in_current_hand(&who, card_id),
+                Error::<T>::CardInCurrentHand
+            );
+            ensure!(
+                CardArtwork::<T>::contains_key(card_id),
+                Error::<T>::CardArtworkMissing
+            );
+
+            // If listed, unlist first so indices remain consistent.
+            if CardPrices::<T>::contains_key(card_id) {
+                Self::unlist(card_id, &who);
+            }
+
+            let escrow = Self::escrow_account_id();
+            Self::do_transfer(&who, &escrow, card_id)?;
+
+            Converted::<T>::insert(card_id, ());
+
+            pallet_nfts::Pallet::<T>::do_mint(
+                collection_id,
+                card_id,
+                None,
+                who.clone(),
+                pallet_nfts::ItemConfig::default(),
+                |_, _| Ok(()),
+            )?;
+
+            Self::deposit_event(Event::CardConvertedToNft {
+                card_id,
+                collection_id,
+                item_id: card_id,
+            });
+            Ok(())
+        }
+
+        /// Unwrap a converted card NFT back into a playable TCG card.
+        ///
+        /// Burns the NFT item and transfers the card out of escrow to the NFT owner.
+        #[pallet::call_index(17)]
+        #[pallet::weight(<T as Config>::WeightInfo::unwrap_from_nft())]
+        #[transactional]
+        pub fn unwrap_from_nft(origin: OriginFor<T>, card_id: u32) -> DispatchResult
+        {
+            let who = ensure_signed(origin)?;
+
+            let collection_id =
+                CardNftCollectionId::<T>::get().ok_or(Error::<T>::NftCollectionNotInitialized)?;
+            ensure!(
+                Converted::<T>::contains_key(card_id),
+                Error::<T>::CardNotConverted
+            );
+
+            let escrow = Self::escrow_account_id();
+            let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
+            ensure!(card_info.owner == escrow, Error::<T>::CardNotEscrowed);
+
+            let nft_owner =
+                pallet_nfts::Pallet::<T>::owner(collection_id, card_id).ok_or(Error::<T>::NotNftOwner)?;
+            ensure!(nft_owner == who, Error::<T>::NotNftOwner);
+
+            pallet_nfts::Pallet::<T>::do_burn(collection_id, card_id, |_| Ok(()))?;
+            Converted::<T>::remove(card_id);
+
+            Self::do_transfer(&escrow, &who, card_id)?;
+
+            Self::deposit_event(Event::CardUnwrappedFromNft { card_id });
+            Ok(())
+        }
     }
 
     // ------------------
@@ -602,6 +1200,115 @@ pub mod pallet {
     // ------------------
 
     impl<T: Config> Pallet<T> {
+        fn escrow_account_id() -> T::AccountId {
+            ESCROW_PALLET_ID.into_account_truncating()
+        }
+
+        fn ensure_season_admin(who: &T::AccountId) -> DispatchResult {
+            ensure!(
+                pallet_eterra_seasons::Admins::<T>::contains_key(who),
+                Error::<T>::NotSeasonAdmin
+            );
+            Ok(())
+        }
+
+        fn ensure_season_exists(season_id: SeasonId) -> DispatchResult {
+            ensure!(
+                pallet_eterra_seasons::Seasons::<T>::contains_key(season_id),
+                Error::<T>::UnknownSeason
+            );
+            Ok(())
+        }
+
+        fn ensure_season_draft(season_id: SeasonId) -> DispatchResult {
+            let season =
+                pallet_eterra_seasons::Seasons::<T>::get(season_id).ok_or(Error::<T>::UnknownSeason)?;
+            ensure!(
+                season.status == pallet_eterra_seasons::SeasonStatus::Draft,
+                Error::<T>::SeasonNotDraft
+            );
+            Ok(())
+        }
+
+        fn ensure_media_valid(media_id: MediaId) -> DispatchResult {
+            let meta =
+                pallet_eterra_media::Media::<T>::get(media_id).ok_or(Error::<T>::UnknownMedia)?;
+            ensure!(!meta.is_deprecated, Error::<T>::MediaDeprecated);
+            Ok(())
+        }
+
+        fn ensure_assets_non_empty(assets: &SeasonAssetsInfoOf<T>) -> DispatchResult {
+            ensure!(
+                !assets.borders.is_empty()
+                    && !assets.backgrounds.is_empty()
+                    && !assets.subjects.is_empty(),
+                Error::<T>::SeasonAssetsEmpty
+            );
+            Ok(())
+        }
+
+        fn remove_asset_from_list<ListLen: Get<u32>>(
+            list: &mut BoundedVec<MediaId, ListLen>,
+            media_id: MediaId,
+        ) -> bool {
+            if let Some(pos) = list.iter().position(|&id| id == media_id) {
+                list.remove(pos);
+                return true;
+            }
+            false
+        }
+
+        fn assign_artwork_from_active_season(card_id: u32) -> DispatchResult {
+            let season_id = pallet_eterra_seasons::ActiveSeasonId::<T>::get()
+                .ok_or(Error::<T>::NoActiveSeason)?;
+            Self::assign_artwork_for_card(card_id, season_id, b"eterra-tcg/art")
+        }
+
+        fn assign_artwork_for_card(
+            card_id: u32,
+            season_id: SeasonId,
+            domain: &'static [u8],
+        ) -> DispatchResult {
+            let assets = SeasonAssets::<T>::get(season_id);
+            Self::ensure_assets_non_empty(&assets)?;
+
+            let parent_hash = <frame_system::Pallet<T>>::parent_hash();
+            let ext_index = <frame_system::Pallet<T>>::extrinsic_index().unwrap_or(0);
+            let now = <frame_system::Pallet<T>>::block_number();
+
+            let subject = (domain, season_id, card_id, now, parent_hash, ext_index).encode();
+            let hash = T::Hashing::hash(&subject);
+            let bytes = hash.as_ref();
+
+            let border_ix = (bytes.get(0).copied().unwrap_or(0) as usize) % assets.borders.len();
+            let bg_ix = (bytes.get(1).copied().unwrap_or(0) as usize) % assets.backgrounds.len();
+            let subject_ix = (bytes.get(2).copied().unwrap_or(0) as usize) % assets.subjects.len();
+
+            let border_media_id = *assets
+                .borders
+                .get(border_ix)
+                .expect("borders is non-empty; modulo keeps index in range; qed");
+            let background_media_id = *assets
+                .backgrounds
+                .get(bg_ix)
+                .expect("backgrounds is non-empty; modulo keeps index in range; qed");
+            let subject_media_id = *assets
+                .subjects
+                .get(subject_ix)
+                .expect("subjects is non-empty; modulo keeps index in range; qed");
+
+            CardArtwork::<T>::insert(
+                card_id,
+                CardArtworkInfo {
+                    season_id,
+                    border_media_id,
+                    background_media_id,
+                    subject_media_id,
+                },
+            );
+            Ok(())
+        }
+
         /// Create a brand-new card with `owner`.
         fn create_new_card(owner: &T::AccountId) -> Result<u32, DispatchError> {
             let card_id = NextCardId::<T>::get();
@@ -620,7 +1327,73 @@ pub mod pallet {
             })?;
             NextCardId::<T>::put(next_card_id);
 
+            Self::assign_artwork_from_active_season(card_id)?;
             Ok(card_id)
+        }
+
+        /// Create a brand-new, immediately-finalized card with `owner`.
+        fn create_new_finalized_card(owner: &T::AccountId) -> Result<u32, DispatchError> {
+            let card_id = NextCardId::<T>::get();
+            let next_card_id = card_id.checked_add(1).ok_or(Error::<T>::CardIdExhausted)?;
+
+            let values = Self::spin_values(owner, card_id, 0, b"eterra-tcg/mint-card");
+            let new_card_info = CardInfo {
+                owner: owner.clone(),
+                finalized: true,
+                slot_values: Some(values),
+            };
+
+            Cards::<T>::insert(card_id, new_card_info);
+            CardsByOwner::<T>::try_mutate(owner, |set| -> Result<(), DispatchError> {
+                set.try_insert(card_id)
+                    .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
+                Ok(())
+            })?;
+            NextCardId::<T>::put(next_card_id);
+
+            Self::assign_artwork_from_active_season(card_id)?;
+            Ok(card_id)
+        }
+
+        /// Internal: remove a card from marketplace listings, updating indices.
+        fn unlist(card_id: u32, owner: &T::AccountId) {
+            CardPrices::<T>::remove(card_id);
+            ListedByOwner::<T>::mutate(owner, |set| {
+                set.remove(&card_id);
+            });
+            Self::deposit_event(Event::CardUnlisted {
+                owner: owner.clone(),
+                card_id,
+            });
+        }
+
+        /// Internal: transfer ownership from `from` to `to` and ensure indices are updated.
+        fn do_transfer(from: &T::AccountId, to: &T::AccountId, card_id: u32) -> DispatchResult {
+            ensure!(
+                !T::HandChecker::is_card_in_current_hand(from, card_id),
+                Error::<T>::CardInCurrentHand
+            );
+
+            // Update the card owner in main storage (ensures existence and ownership)
+            Cards::<T>::try_mutate(card_id, |maybe_card| -> DispatchResult {
+                let card_info = maybe_card.as_mut().ok_or(Error::<T>::NoSuchCard)?;
+                ensure!(card_info.owner == *from, Error::<T>::NotCardOwner);
+                ensure!(card_info.finalized, Error::<T>::CardNotFinalized);
+                card_info.owner = to.clone();
+                Ok(())
+            })?;
+
+            // Remove card_id from `from`'s CardsByOwner set, then insert into `to`'s.
+            CardsByOwner::<T>::mutate(from, |set| {
+                set.remove(&card_id);
+            });
+            CardsByOwner::<T>::try_mutate(to, |set| -> DispatchResult {
+                set.try_insert(card_id)
+                    .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
+                Ok(())
+            })?;
+
+            Ok(())
         }
 
         /// Generate new ranks for a card based on on-chain entropy + (player, card_id, attempts).

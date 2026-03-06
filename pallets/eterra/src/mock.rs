@@ -8,7 +8,7 @@ use pallet_assets;
 use pallet_balances;
 use pallet_eterra_gamer;
 use pallet_eterra_monte_carlo_ai as mc_ai;
-use pallet_eterra_simple_tcg;
+use pallet_eterra_tcg;
 use parity_scale_codec::{Decode, Encode}; 
 use scale_info::TypeInfo;
 use sp_core::H256; 
@@ -25,7 +25,7 @@ frame_support::construct_runtime!(
         Balances: pallet_balances,
         Assets: pallet_assets,
         Gamer: pallet_eterra_gamer,
-        Cards: pallet_eterra_simple_tcg,
+        Cards: pallet_eterra_tcg,
         Eterra: pallet_eterra,
         EterraMonteCarloAi: pallet_eterra_monte_carlo_ai,
     }
@@ -43,7 +43,31 @@ const UNIT: u128 = 1_000_000_000_000;
 
 parameter_types! {
     pub const FaucetAccountId: u64 = 999; // arbitrary faucet for tests
-    pub const MintFeeConst: u128 = 0; // zero-fee minting in tests to avoid funding hassle
+}
+
+// --- TCG mint configuration (tests) ---
+parameter_types! {
+    pub const PackPriceConst: u128 = 0;
+    pub const ProPriceConst: u128 = 0;
+    pub const MintCardPriceConst: u128 = 0;
+    pub const PackPriceReceiverConst: u64 = 999;
+    pub const ProPriceReceiverConst: u64 = 999;
+    pub const MintCardPriceReceiverConst: u64 = 999;
+    pub const MaxProSpinsConst: u8 = 5;
+    pub const MaxAttemptsConst: u8 = 3;
+    pub const CardsPerPackConst: u8 = 6;
+    pub const MaxPacksConst: u32 = 10;
+    pub const MaxOwnedCardsConst: u32 = 1024;
+}
+
+pub struct MockHandChecker;
+
+impl pallet_eterra_tcg::HandChecker<u64> for MockHandChecker {
+    fn is_card_in_current_hand(owner: &u64, card_id: u32) -> bool {
+        pallet_eterra::CurrentHandOf::<Test>::get(owner)
+            .map(|hand| hand.iter().any(|&id| id == card_id))
+            .unwrap_or(false)
+    }
 }
 
 // --- Multi-currency + XP reward configuration (tests) ---
@@ -156,11 +180,21 @@ impl pallet_eterra_gamer::Config for Test {
     type WeightInfo = ();
 }
 
-impl pallet_eterra_simple_tcg::Config for Test {
+impl pallet_eterra_tcg::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type Currency = Balances;
-    type MintFee = MintFeeConst;
-    type FaucetAccount = FaucetAccountId;
+    type HandChecker = MockHandChecker;
+    type PackPrice = PackPriceConst;
+    type PackPriceReceiver = PackPriceReceiverConst;
+    type ProPrice = ProPriceConst;
+    type ProPriceReceiver = ProPriceReceiverConst;
+    type MintCardPrice = MintCardPriceConst;
+    type MintCardPriceReceiver = MintCardPriceReceiverConst;
+    type MaxProSpins = MaxProSpinsConst;
+    type MaxAttempts = MaxAttemptsConst;
+    type CardsPerPack = CardsPerPackConst;
+    type MaxPacks = MaxPacksConst;
+    type MaxOwnedCards = MaxOwnedCardsConst;
     type WeightInfo = ();
 }
 

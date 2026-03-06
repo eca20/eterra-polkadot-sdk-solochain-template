@@ -1,11 +1,13 @@
 use crate::pallet::Config as EterraSlotsConfig;
 use crate::{
-    mock::*, ActiveCard, Cards, CardsByOwner, Error, Event, NextCardId, PackCardInProgress,
-    PackInProgress, PlayerPacks,
+    mock::*, ActiveCard, CardArtwork, CardArtworkInfo, CardPrices, Cards, CardsByOwner, Error,
+    Event, ListedByOwner, NextCardId, PackCardInProgress, PackInProgress, PlayerPacks,
 };
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok};
+use frame_support::BoundedVec;
 use log::{debug, Level, Metadata, Record};
+use sp_runtime::traits::AccountIdConversion;
 use std::sync::Once;
 
 static INIT: Once = Once::new();
@@ -69,6 +71,242 @@ fn run_to_block(n: u64) {
             &Default::default(),
         );
     }
+}
+
+#[test]
+fn mint_fails_without_active_season() {
+    new_test_ext().execute_with(|| {
+        let player = 1u64;
+        let receiver = <Test as EterraSlotsConfig>::MintCardPriceReceiver::get();
+        let player_before = Balances::free_balance(player);
+        let receiver_before = Balances::free_balance(receiver);
+
+        // Close the active season (created by the mock genesis helper).
+        assert_ok!(EterraSeasons::close_season(RuntimeOrigin::signed(1), 1));
+
+        assert_noop!(
+            EterraSlots::mint_card(RuntimeOrigin::signed(player)),
+            Error::<Test>::NoActiveSeason
+        );
+
+        // Transactional rollback: fee transfer must not occur.
+        assert_eq!(Balances::free_balance(player), player_before);
+        assert_eq!(Balances::free_balance(receiver), receiver_before);
+    });
+}
+
+#[test]
+fn mint_fails_when_active_season_assets_empty() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+
+        // Create and activate a fresh season without adding any assets.
+        let name: BoundedVec<u8, MaxSeasonNameLen> = b"S2".to_vec().try_into().unwrap();
+        let desc: BoundedVec<u8, MaxSeasonDescLen> = b"D2".to_vec().try_into().unwrap();
+        assert_ok!(EterraSeasons::create_season(
+            RuntimeOrigin::signed(1),
+            name,
+            desc
+        ));
+        assert_ok!(EterraSeasons::activate_season(RuntimeOrigin::signed(1), 2));
+
+        assert_noop!(
+            EterraSlots::mint_card(RuntimeOrigin::signed(player)),
+            Error::<Test>::SeasonAssetsEmpty
+        );
+    });
+}
+
+#[test]
+fn mint_card_writes_card_artwork() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let next_before = NextCardId::<Test>::get();
+
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(player)));
+
+        let art = EterraSlots::card_artwork(next_before).expect("card artwork written");
+        assert_eq!(art.season_id, 1);
+        assert_eq!(art.border_media_id, 0);
+        assert_eq!(art.background_media_id, 1);
+        assert_eq!(art.subject_media_id, 2);
+    });
+}
+
+#[test]
+fn backfill_only_sets_missing_artwork() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(player))); // card 0
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(player))); // card 1
+
+        // Overwrite card 0 with a sentinel so we can detect unintended changes.
+        CardArtwork::<Test>::insert(
+            0,
+            CardArtworkInfo {
+                season_id: 99,
+                border_media_id: 777,
+                background_media_id: 778,
+                subject_media_id: 779,
+            },
+        );
+
+        // Simulate a legacy card missing artwork.
+        CardArtwork::<Test>::remove(1);
+
+        assert_ok!(EterraSlots::backfill_card_artwork(
+            RuntimeOrigin::signed(1),
+            0,
+            10,
+            1
+        ));
+
+        let art0 = EterraSlots::card_artwork(0).expect("artwork exists");
+        assert_eq!(art0.season_id, 99);
+
+        let art1 = EterraSlots::card_artwork(1).expect("artwork backfilled");
+        assert_eq!(art1.season_id, 1);
+        assert_eq!(art1.border_media_id, 0);
+        assert_eq!(art1.background_media_id, 1);
+        assert_eq!(art1.subject_media_id, 2);
+    });
+}
+
+#[test]
+fn season_assets_cannot_be_modified_once_active() {
+    new_test_ext().execute_with(|| {
+        // Create season 2 and activate it immediately.
+        let name: BoundedVec<u8, MaxSeasonNameLen> = b"S2".to_vec().try_into().unwrap();
+        let desc: BoundedVec<u8, MaxSeasonDescLen> = b"D2".to_vec().try_into().unwrap();
+        assert_ok!(EterraSeasons::create_season(
+            RuntimeOrigin::signed(1),
+            name,
+            desc
+        ));
+        assert_ok!(EterraSeasons::activate_season(RuntimeOrigin::signed(1), 2));
+
+        assert_noop!(
+            EterraSlots::add_season_asset(
+                RuntimeOrigin::signed(1),
+                2,
+                crate::AssetKind::Border,
+                0
+            ),
+            Error::<Test>::SeasonNotDraft
+        );
+    });
+}
+
+#[test]
+fn init_card_nft_collection_creates_collection_and_sets_storage() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraSlots::init_card_nft_collection(
+            RuntimeOrigin::signed(1),
+            1
+        ));
+
+        assert_eq!(EterraSlots::card_nft_collection_id(), Some(0));
+        assert!(pallet_nfts::Collection::<Test>::contains_key(0));
+    });
+}
+
+#[test]
+fn convert_to_nft_escrows_card_and_mints_item() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+
+        assert_ok!(EterraSlots::init_card_nft_collection(
+            RuntimeOrigin::signed(1),
+            1
+        ));
+        let collection_id = EterraSlots::card_nft_collection_id().expect("collection id set");
+
+        let card_id = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(player)));
+
+        assert_ok!(EterraSlots::convert_to_nft(
+            RuntimeOrigin::signed(player),
+            card_id
+        ));
+
+        let escrow: u64 = frame_support::PalletId(*b"et/tcgsc").into_account_truncating();
+        let card = EterraSlots::cards(card_id).expect("card exists");
+        assert_eq!(card.get_owner(), &escrow);
+        assert!(EterraSlots::converted(card_id).is_some());
+
+        assert_eq!(
+            pallet_nfts::Pallet::<Test>::owner(collection_id, card_id),
+            Some(player)
+        );
+    });
+}
+
+#[test]
+fn nft_transfer_allows_new_owner_to_unwrap() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let new_owner = 3u64;
+
+        assert_ok!(EterraSlots::init_card_nft_collection(
+            RuntimeOrigin::signed(1),
+            1
+        ));
+        let collection_id = EterraSlots::card_nft_collection_id().expect("collection id set");
+
+        let card_id = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(player)));
+        assert_ok!(EterraSlots::convert_to_nft(
+            RuntimeOrigin::signed(player),
+            card_id
+        ));
+
+        assert_ok!(Nfts::transfer(
+            RuntimeOrigin::signed(player),
+            collection_id,
+            card_id,
+            new_owner
+        ));
+
+        assert_eq!(
+            pallet_nfts::Pallet::<Test>::owner(collection_id, card_id),
+            Some(new_owner)
+        );
+
+        assert_ok!(EterraSlots::unwrap_from_nft(
+            RuntimeOrigin::signed(new_owner),
+            card_id
+        ));
+
+        let card = EterraSlots::cards(card_id).expect("card exists");
+        assert_eq!(card.get_owner(), &new_owner);
+        assert!(EterraSlots::converted(card_id).is_none());
+        assert_eq!(
+            pallet_nfts::Pallet::<Test>::owner(collection_id, card_id),
+            None
+        );
+    });
+}
+
+#[test]
+fn convert_to_nft_fails_when_card_not_finalized() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+
+        assert_ok!(EterraSlots::init_card_nft_collection(
+            RuntimeOrigin::signed(1),
+            1
+        ));
+
+        // Pro mint creates a non-finalized card until accepted.
+        assert_ok!(EterraSlots::mint_pro(RuntimeOrigin::signed(player)));
+        let card_id = EterraSlots::pro_in_progress(player).expect("pro in progress");
+
+        assert_noop!(
+            EterraSlots::convert_to_nft(RuntimeOrigin::signed(player), card_id),
+            Error::<Test>::CardNotFinalized
+        );
+    });
 }
 
 #[test]
@@ -731,5 +969,207 @@ fn test_transfer_card_success() {
         } else {
             println!("[TEST] Found the CardTransferred event as expected!");
         }
+    });
+}
+
+#[test]
+fn mint_card_charges_price_and_mints() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+
+        let player = 1u64;
+        let receiver = <Test as EterraSlotsConfig>::MintCardPriceReceiver::get();
+        let price: u128 = <Test as EterraSlotsConfig>::MintCardPrice::get();
+
+        let player_before = Balances::free_balance(player);
+        let receiver_before = Balances::free_balance(receiver);
+
+        System::reset_events();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(player)));
+
+        let card_id = NextCardId::<Test>::get().saturating_sub(1);
+        let card = EterraSlots::cards(card_id).expect("card exists");
+        assert_eq!(*card.get_owner(), player);
+        assert!(card.is_finalized());
+        assert!(card.get_slot_values().is_some());
+        assert!(EterraSlots::cards_by_owner(player).contains(&card_id));
+
+        assert_eq!(Balances::free_balance(player), player_before - price);
+        assert_eq!(Balances::free_balance(receiver), receiver_before + price);
+
+        System::assert_has_event(RuntimeEvent::EterraSlots(Event::CardMinted { player, card_id }));
+    });
+}
+
+#[test]
+fn set_and_remove_price_updates_storage_and_events() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let owner = 1u64;
+
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(owner)));
+        let card_id = NextCardId::<Test>::get().saturating_sub(1);
+
+        // List for sale
+        System::reset_events();
+        assert_ok!(EterraSlots::set_price(
+            RuntimeOrigin::signed(owner),
+            card_id,
+            500
+        ));
+        assert_eq!(CardPrices::<Test>::get(card_id), Some(500));
+        assert!(ListedByOwner::<Test>::get(&owner).contains(&card_id));
+        System::assert_has_event(RuntimeEvent::EterraSlots(Event::CardListed {
+            owner,
+            card_id,
+            price: 500,
+        }));
+
+        // Unlist
+        System::reset_events();
+        assert_ok!(EterraSlots::remove_price(RuntimeOrigin::signed(owner), card_id));
+        assert_eq!(CardPrices::<Test>::get(card_id), None);
+        assert!(!ListedByOwner::<Test>::get(&owner).contains(&card_id));
+        System::assert_has_event(RuntimeEvent::EterraSlots(Event::CardUnlisted { owner, card_id }));
+    });
+}
+
+#[test]
+fn transfer_card_auto_unlists() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let owner = 1u64;
+        let to = 2u64;
+
+        // Mint and list
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(owner)));
+        let card_id = NextCardId::<Test>::get().saturating_sub(1);
+        assert_ok!(EterraSlots::set_price(
+            RuntimeOrigin::signed(owner),
+            card_id,
+            777
+        ));
+        assert!(CardPrices::<Test>::get(card_id).is_some());
+
+        // Transfer to `to`; should unlist
+        assert_ok!(EterraSlots::transfer_card(
+            RuntimeOrigin::signed(owner),
+            card_id,
+            to
+        ));
+        let card = EterraSlots::cards(card_id).unwrap();
+        assert_eq!(*card.get_owner(), to);
+
+        // Listing removed
+        assert_eq!(CardPrices::<Test>::get(card_id), None);
+        assert!(!ListedByOwner::<Test>::get(&owner).contains(&card_id));
+    });
+}
+
+#[test]
+fn buy_card_transfers_funds_and_ownership_then_unlists() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let seller = 1u64;
+        let buyer = 2u64;
+
+        // Seller mints, lists at 200
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(seller)));
+        let card_id = NextCardId::<Test>::get().saturating_sub(1);
+        assert_ok!(EterraSlots::set_price(
+            RuntimeOrigin::signed(seller),
+            card_id,
+            200
+        ));
+
+        let seller_before = Balances::free_balance(seller);
+        let buyer_before = Balances::free_balance(buyer);
+
+        // Buyer buys
+        System::reset_events();
+        assert_ok!(EterraSlots::buy_card(RuntimeOrigin::signed(buyer), card_id));
+
+        // Ownership moved to buyer
+        let card = EterraSlots::cards(card_id).unwrap();
+        assert_eq!(*card.get_owner(), buyer);
+        assert!(CardsByOwner::<Test>::get(&buyer).contains(&card_id));
+        assert!(!CardsByOwner::<Test>::get(&seller).contains(&card_id));
+
+        // Listing removed
+        assert_eq!(CardPrices::<Test>::get(card_id), None);
+        assert!(!ListedByOwner::<Test>::get(&seller).contains(&card_id));
+
+        // Funds moved: buyer -200, seller +200
+        let seller_after = Balances::free_balance(seller);
+        let buyer_after = Balances::free_balance(buyer);
+        assert_eq!(seller_after, seller_before + 200);
+        assert_eq!(buyer_after, buyer_before - 200);
+
+        System::assert_has_event(RuntimeEvent::EterraSlots(Event::CardBought {
+            buyer,
+            seller,
+            card_id,
+            price: 200,
+        }));
+    });
+}
+
+#[test]
+fn buy_card_fails_if_not_listed() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let seller = 1u64;
+        let buyer = 2u64;
+
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(seller)));
+        let card_id = NextCardId::<Test>::get().saturating_sub(1);
+        assert_noop!(
+            EterraSlots::buy_card(RuntimeOrigin::signed(buyer), card_id),
+            Error::<Test>::NotForSale
+        );
+    });
+}
+
+#[test]
+fn mint_card_fails_when_card_ids_exhausted_without_charging_fee() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let player = 1u64;
+        let receiver = <Test as EterraSlotsConfig>::MintCardPriceReceiver::get();
+
+        NextCardId::<Test>::put(u32::MAX);
+
+        let receiver_before = Balances::free_balance(receiver);
+        let player_before = Balances::free_balance(player);
+
+        assert_noop!(
+            EterraSlots::mint_card(RuntimeOrigin::signed(player)),
+            Error::<Test>::CardIdExhausted
+        );
+
+        // Transactional rollback: no fee transfer should happen on ID exhaustion.
+        assert_eq!(Balances::free_balance(receiver), receiver_before);
+        assert_eq!(Balances::free_balance(player), player_before);
+    });
+}
+
+#[test]
+fn transfer_card_fails_when_not_finalized() {
+    new_test_ext().execute_with(|| {
+        let owner = 1u64;
+        let to = 2u64;
+
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(owner)));
+
+        let packs = EterraSlots::player_packs(owner);
+        let card_id = *packs[0]
+            .get_card_ids()
+            .first()
+            .expect("At least one card expected");
+
+        assert_noop!(
+            EterraSlots::transfer_card(RuntimeOrigin::signed(owner), card_id, to),
+            Error::<Test>::CardNotFinalized
+        );
     });
 }

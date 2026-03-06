@@ -3,6 +3,7 @@ use sc_service::{ChainType, Properties};
 use solochain_eterra_runtime::{AccountId, Signature, UNIT, WASM_BINARY};
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_consensus_grandpa::AuthorityId as GrandpaId;
+use sp_core::crypto::Ss58Codec;
 use sp_core::{sr25519, Pair, Public};
 use sp_runtime::traits::AccountIdConversion;
 use sp_runtime::traits::{IdentifyAccount, Verify};
@@ -51,6 +52,14 @@ fn chain_properties() -> Properties {
 
 pub fn development_config() -> Result<ChainSpec, String> {
     let treasury = treasury_account();
+    let extra_season_admin =
+        AccountId::from_ss58check("5CS7vvxam6GJrEWtQsYenccZVz7BDX2hqTcgJQEcBrDcF4hV")
+            .expect("hard-coded ss58 address is valid");
+    let council_members = vec![get_account_id_from_seed::<sr25519::Public>("Alice")];
+    let mut season_admins = council_members.clone();
+    season_admins.push(extra_season_admin.clone());
+    season_admins.sort();
+    season_admins.dedup();
 
     Ok(ChainSpec::builder(
         WASM_BINARY.ok_or_else(|| "Development wasm not available".to_string())?,
@@ -72,12 +81,14 @@ pub fn development_config() -> Result<ChainSpec, String> {
             get_account_id_from_seed::<sr25519::Public>("Alice//stash"),
             get_account_id_from_seed::<sr25519::Public>("Bob//stash"),
             treasury.clone(),
+            extra_season_admin,
         ],
         true,
         treasury,
         1_000_000_000_000_000u128,
         vec![get_account_id_from_seed::<sr25519::Public>("Alice")],
-        vec![get_account_id_from_seed::<sr25519::Public>("Alice")],
+        council_members,
+        season_admins,
     ))
     .build())
 }
@@ -90,6 +101,17 @@ pub fn development_config() -> Result<ChainSpec, String> {
 // explicitly provided in the human spec (or via CLI), which is what we want for Eterra.
 pub fn local_testnet_config() -> Result<ChainSpec, String> {
     let treasury = treasury_account();
+    let extra_season_admin =
+        AccountId::from_ss58check("5CS7vvxam6GJrEWtQsYenccZVz7BDX2hqTcgJQEcBrDcF4hV")
+            .expect("hard-coded ss58 address is valid");
+    let council_members = vec![
+        get_account_id_from_seed::<sr25519::Public>("Alice"),
+        get_account_id_from_seed::<sr25519::Public>("Bob"),
+    ];
+    let mut season_admins = council_members.clone();
+    season_admins.push(extra_season_admin.clone());
+    season_admins.sort();
+    season_admins.dedup();
 
     Ok(ChainSpec::builder(
         WASM_BINARY.ok_or_else(|| "Development wasm not available".to_string())?,
@@ -122,6 +144,7 @@ pub fn local_testnet_config() -> Result<ChainSpec, String> {
             get_account_id_from_seed::<sr25519::Public>("Eve//stash"),
             get_account_id_from_seed::<sr25519::Public>("Ferdie//stash"),
             treasury.clone(),
+            extra_season_admin,
         ],
         true,
         treasury,
@@ -130,16 +153,19 @@ pub fn local_testnet_config() -> Result<ChainSpec, String> {
             get_account_id_from_seed::<sr25519::Public>("Alice"),
             get_account_id_from_seed::<sr25519::Public>("Bob"),
         ],
-        vec![
-            get_account_id_from_seed::<sr25519::Public>("Alice"),
-            get_account_id_from_seed::<sr25519::Public>("Bob"),
-        ],
+        council_members,
+        season_admins,
     ))
     .build())
 }
 
 pub fn production_config() -> Result<ChainSpec, String> {
     let treasury = treasury_account();
+    let council_members = vec![
+        get_account_id_from_seed::<sr25519::Public>("Alice"),
+        get_account_id_from_seed::<sr25519::Public>("Bob"),
+    ];
+    let season_admins = council_members.clone();
 
     Ok(ChainSpec::builder(
         WASM_BINARY.ok_or_else(|| "Development wasm not available".to_string())?,
@@ -166,10 +192,8 @@ pub fn production_config() -> Result<ChainSpec, String> {
         treasury,
         1_000_000_000_000_000u128,
         vec![],
-        vec![
-            get_account_id_from_seed::<sr25519::Public>("Alice"),
-            get_account_id_from_seed::<sr25519::Public>("Bob"),
-        ],
+        council_members,
+        season_admins,
     ))
     .build())
 }
@@ -184,6 +208,7 @@ fn testnet_genesis(
     payout_amount: u128,
     initial_servers: Vec<AccountId>,
     council_members: Vec<AccountId>,
+    season_admins: Vec<AccountId>,
 ) -> serde_json::Value {
     // Initialize the Treasury account with 200 million COIN (12 decimals via UNIT = 1e12).
     let treasury_endowment: u128 = 200_000_000u128.saturating_mul(UNIT);
@@ -198,6 +223,16 @@ fn testnet_genesis(
     let initial_asset_supply: u128 = 1_000_000_000u128.saturating_mul(UNIT);
     // `pallet-assets` requires a non-zero minimum balance.
     let asset_min_balance: u128 = 1;
+
+    // Default owner of the genesis media collection. Prefer sudo if present (so the key exists),
+    // otherwise fall back to the first council member.
+    let default_media_owner: AccountId = sudo_key
+        .clone()
+        .or_else(|| council_members.first().cloned())
+        .unwrap_or_else(|| treasury_account.clone());
+
+    // Season-admin allowlist: include the media service signer (and any ops keys).
+    // In production, set this to your actual service key(s) in the finalized chain spec JSON.
 
     serde_json::json!({
         "balances": {
@@ -246,6 +281,19 @@ fn testnet_genesis(
         },
         "eterraGameAuthority": {
             "initialServers": initial_servers
+        },
+        "eterraMedia": {
+            // Ensure the runtime default collection exists so callers can omit a collection id
+            // when registering media (the pallet falls back to `DefaultCollectionId`).
+            "createDefaultCollection": true,
+            "defaultCollectionName": b"TCG Art".to_vec(),
+            "defaultCollectionDescription": b"Default media collection for seasonal card layers".to_vec(),
+            "defaultCollectionOwner": default_media_owner
+        },
+        "eterraSeasons": {
+            "admins": season_admins,
+            // Seed a draft season at genesis so admins can upload assets before activation.
+            "initialDraftSeason": [b"Season 1".to_vec(), b"Genesis Season 1".to_vec()]
         }
     })
 }

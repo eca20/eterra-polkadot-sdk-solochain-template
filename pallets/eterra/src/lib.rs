@@ -31,6 +31,7 @@ pub use types::game::*;
 
 use eterra_card_ai_adapter::eterra_adapter as ai;
 use pallet_eterra_monte_carlo_ai as mc_ai; // reserved for future use
+use pallet_eterra_tcg as cards;
 
 /// Simple deterministic pseudo-RNG built from repeated `blake2_256` hashing.
 ///
@@ -69,7 +70,7 @@ pub mod pallet {
 
     pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
     pub type BalanceOf<T> =
-        <<T as pallet_eterra_simple_tcg::pallet::Config>::Currency as Currency<
+        <<T as cards::pallet::Config>::PaymentCurrency as Currency<
             <T as frame_system::Config>::AccountId,
         >>::Balance;
 
@@ -82,7 +83,7 @@ pub mod pallet {
     // Alias the simple TCG pallet so we can read card ownership & stats
 
     use pallet_eterra_monte_carlo_ai as mc_ai;
-    use pallet_eterra_simple_tcg as cards; // reserved for future use
+    use pallet_eterra_tcg as cards;
 
     const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 
@@ -519,6 +520,8 @@ pub mod pallet {
         HandIndexOutOfRange,
         CardAlreadyUsed,
         CardDoesNotExist,
+        CardNotReady,
+        CardListedForSale,
         CardNotOwned,
         PlayerAlreadyInGame,
         PresetHandMissing,
@@ -895,13 +898,14 @@ pub mod pallet {
             for &card_id in current_ids.iter() {
                 let info =
                     cards::pallet::Cards::<T>::get(card_id).ok_or(Error::<T>::CardDoesNotExist)?;
-                ensure!(info.owner == who, Error::<T>::CardNotOwned);
+                ensure!(info.get_owner() == &who, Error::<T>::CardNotOwned);
+                let values = info.get_slot_values().ok_or(Error::<T>::CardNotReady)?;
                 let entry = HandEntry {
                     card_id,
-                    north: info.north,
-                    east: info.east,
-                    south: info.south,
-                    west: info.west,
+                    north: values[0],
+                    east: values[1],
+                    south: values[2],
+                    west: values[3],
                     used: false,
                 };
                 hand.try_push(entry)
@@ -1120,7 +1124,12 @@ pub mod pallet {
             for &card_id in &card_ids {
                 let info =
                     cards::pallet::Cards::<T>::get(card_id).ok_or(Error::<T>::CardDoesNotExist)?;
-                ensure!(info.owner == who, Error::<T>::CardNotOwned);
+                ensure!(info.get_owner() == &who, Error::<T>::CardNotOwned);
+                ensure!(info.get_slot_values().is_some(), Error::<T>::CardNotReady);
+                ensure!(
+                    !cards::pallet::CardPrices::<T>::contains_key(card_id),
+                    Error::<T>::CardListedForSale
+                );
             }
 
             // Persist as a bounded vec
@@ -1144,7 +1153,7 @@ pub mod pallet {
         #[pallet::call_index(7)]
         #[pallet::weight(<T as Config>::WeightInfo::set_ai_difficulty())]
         pub fn set_ai_difficulty(origin: OriginFor<T>, new: u8) -> DispatchResult {
-            T::AdminOrigin::ensure_origin(origin)?;
+            <T as Config>::AdminOrigin::ensure_origin(origin)?;
             ensure!(new <= 100, Error::<T>::InvalidAiDifficulty);
             let old = CurrentAiDifficulty::<T>::get();
             CurrentAiDifficulty::<T>::put(new);
@@ -1169,7 +1178,7 @@ pub mod pallet {
             step: u8,
             deadband: BalanceOf<T>,
         ) -> DispatchResult {
-            T::AdminOrigin::ensure_origin(origin)?;
+            <T as Config>::AdminOrigin::ensure_origin(origin)?;
 
             // Basic sanity checks.
             ensure!(!adjust_period.is_zero(), Error::<T>::InvalidControllerConfig);
@@ -1221,7 +1230,7 @@ pub mod pallet {
         #[pallet::call_index(9)]
         #[pallet::weight(<T as Config>::WeightInfo::disable_ai_difficulty_controller())]
         pub fn disable_ai_difficulty_controller(origin: OriginFor<T>) -> DispatchResult {
-            T::AdminOrigin::ensure_origin(origin)?;
+            <T as Config>::AdminOrigin::ensure_origin(origin)?;
             AiDifficultyController::<T>::kill();
             AiPayoutWindowState::<T>::put(PayoutWindowState {
                 window_start: Zero::zero(),
@@ -2229,7 +2238,7 @@ impl<T: Config> Pallet<T> {
                     let mut paid_beta: BalanceOf<T> = sp_runtime::traits::Zero::zero();
 
                     if !sp_runtime::traits::Zero::is_zero(&coin) {
-                        let _ = <<T as pallet_eterra_simple_tcg::pallet::Config>::Currency as frame_support::traits::Currency<AccountIdOf<T>>>::deposit_creating(winner_acc, coin);
+                        let _ = <<T as cards::pallet::Config>::PaymentCurrency as frame_support::traits::Currency<AccountIdOf<T>>>::deposit_creating(winner_acc, coin);
                         paid_coin = coin;
                     }
                     if !sp_runtime::traits::Zero::is_zero(&dev) {

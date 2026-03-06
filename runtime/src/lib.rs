@@ -28,12 +28,13 @@ use pallet_node_authorization;
 pub use pallet_eterra;
 pub use pallet_eterra_daily_slots;
 pub use pallet_eterra_faucet;
-pub use pallet_eterra_simple_tcg;
 pub use pallet_eterra_tcg;
 pub use pallet_eterra_simple_matchmaker;
 pub use pallet_eterra_gamer;
 pub use pallet_eterra_game_authority;
 pub use pallet_eterra_media;
+pub use pallet_eterra_seasons;
+pub use pallet_nfts;
 
 pub struct HandProviderAdapter;
 
@@ -252,9 +253,6 @@ mod runtime {
     #[runtime::pallet_index(10)]
     pub type EterraDailySlots = pallet_eterra_daily_slots;
 
-    #[runtime::pallet_index(11)]
-    pub type EterraSimpleTCG = pallet_eterra_simple_tcg;
-
     #[runtime::pallet_index(12)]
     pub type EterraFaucet = pallet_eterra_faucet;
 
@@ -284,6 +282,12 @@ mod runtime {
 
     #[runtime::pallet_index(21)]
     pub type Assets = pallet_assets;
+
+    #[runtime::pallet_index(22)]
+    pub type EterraSeasons = pallet_eterra_seasons;
+
+    #[runtime::pallet_index(23)]
+    pub type Nfts = pallet_nfts;
 }
 
 #[cfg(test)]

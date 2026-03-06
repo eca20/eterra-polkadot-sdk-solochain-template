@@ -79,7 +79,8 @@ The strict production validator additionally enforces non-placeholder authoritie
 ### Node Launch Safety Defaults
 
 1. `scripts/run-node.sh` now defaults to:
-   - local-only RPC (`EXPOSE_RPC=0`)
+   - exposed RPC on `dev`/`testnet` (`EXPOSE_RPC=1`) for local integrations (`validator` uses `--unsafe-rpc-external`)
+   - local-only RPC on `production` (`EXPOSE_RPC=0`)
    - safe RPC methods
    - `full` role when chain is `production` (to avoid accidental validator startup with dev keys)
 2. Production validator startup requires explicit key suris:

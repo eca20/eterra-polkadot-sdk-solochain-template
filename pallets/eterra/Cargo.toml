@@ -28,7 +28,7 @@ sp-runtime         = { workspace = true }
 pallet-balances = { workspace = true, default-features = false }
 
 # eterra
-pallet-eterra-simple-tcg = { workspace = true, default-features = false }
+pallet-eterra-tcg = { workspace = true, default-features = false }
 pallet-eterra-gamer = { workspace = true, default-features = false }
 eterra-card-ai-adapter = { path = "../../crates/eterra-card-ai-adapter", default-features = false }
 pallet-eterra-monte-carlo-ai = { path = "../eterra-monte-carlo-ai", default-features = false }
@@ -50,6 +50,7 @@ std = [
   "pallet-balances/std",
   "eterra-card-ai-adapter/std",
   "pallet-eterra-monte-carlo-ai/std",
+  "pallet-eterra-tcg/std",
   "pallet-eterra-gamer/std",
   "pallet-assets/std",
   "pallet-eterra-simple-matchmaker/std",

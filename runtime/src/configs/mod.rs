@@ -49,8 +49,8 @@ use super::{HandProviderAdapter, UNIT};
 // Bring in the pallets re-exported in lib.rs
 use super::{
     pallet_eterra, pallet_eterra_daily_slots, pallet_eterra_faucet, pallet_eterra_game_authority,
-    pallet_eterra_gamer, pallet_eterra_media, pallet_eterra_simple_matchmaker,
-    pallet_eterra_simple_tcg, pallet_eterra_tcg,
+    pallet_eterra_gamer, pallet_eterra_media, pallet_eterra_seasons, pallet_eterra_simple_matchmaker,
+    pallet_eterra_tcg, pallet_nfts,
 };
 // Monte Carlo AI pallet lives at the crate root; bring it in explicitly.
 
@@ -58,7 +58,8 @@ use super::{
 use super::{
     AccountId, Assets, Aura, Balance, Balances, Block, BlockNumber, Council, EterraGamer, Hash,
     Nonce, PalletInfo, Runtime, RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason,
-    RuntimeOrigin, RuntimeTask, System, DAYS, EXISTENTIAL_DEPOSIT, HOURS, SLOT_DURATION, VERSION,
+    RuntimeOrigin, RuntimeTask, Signature, System, DAYS, EXISTENTIAL_DEPOSIT, HOURS, SLOT_DURATION,
+    VERSION,
 };
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
@@ -67,6 +68,16 @@ const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 // centralized owner-control in both default and production modes.
 // This alias can be switched to governance origins when governance is introduced.
 type PrivilegedControlOrigin = frame_system::EnsureRoot<AccountId>;
+
+pub struct TcgHandChecker;
+
+impl pallet_eterra_tcg::HandChecker<AccountId> for TcgHandChecker {
+    fn is_card_in_current_hand(owner: &AccountId, card_id: u32) -> bool {
+        pallet_eterra::CurrentHandOf::<Runtime>::get(owner)
+            .map(|hand| hand.iter().any(|&id| id == card_id))
+            .unwrap_or(false)
+    }
+}
 
 parameter_types! {
     pub const BlockHashCount: BlockNumber = 2400;
@@ -584,21 +595,6 @@ impl pallet_eterra_daily_slots::Config for Runtime {
     type WeightInfo = pallet_eterra_daily_slots::weights::SubstrateWeight<Runtime>;
 }
 
-impl pallet_eterra_simple_tcg::Config for Runtime {
-    type RuntimeEvent = RuntimeEvent;
-
-    // NEW: hook up balances as the currency
-    type Currency = Balances;
-
-    // NEW: fixed mint fee of 100 whole tokens (uses your UNIT = base units)
-    type MintFee = ConstU128<{ 100 * UNIT }>;
-
-    // NEW: the faucet account that should receive the fee (Treasury via PalletId!)
-    type FaucetAccount = TreasuryAccount;
-
-    type WeightInfo = pallet_eterra_simple_tcg::weights::SubstrateWeight<Runtime>;
-}
-
 impl pallet_eterra_simple_matchmaker::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type PlayersPerMatch = PlayersPerMatchConst;
@@ -635,16 +631,22 @@ type MatchmakerHandProvider = HandProviderAdapter;
 impl pallet_eterra_tcg::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
 
-    type Currency = Balances;
+    type PaymentCurrency = Balances;
+    type HandChecker = TcgHandChecker;
     type PackPrice = ConstU128<{ 500 * UNIT }>;
     type PackPriceReceiver = TreasuryAccount;
     type ProPrice = ConstU128<{ 200 * UNIT }>;
     type ProPriceReceiver = TreasuryAccount;
+    type MintCardPrice = ConstU128<{ 100 * UNIT }>;
+    type MintCardPriceReceiver = TreasuryAccount;
     type MaxProSpins = ConstU8<5>;
     type MaxAttempts = ConstU8<3>; // Set maximum attempts per card to 3
     type CardsPerPack = ConstU8<6>; // Set number of cards per pack to 6
     type MaxPacks = ConstU32<10>; // Set maximum packs a player can have to 10
     type MaxOwnedCards = ConstU32<1024>;
+    type MaxBorders = ConstU32<32>;
+    type MaxBackgrounds = ConstU32<32>;
+    type MaxSubjects = ConstU32<128>;
     type WeightInfo = pallet_eterra_tcg::weights::SubstrateWeight<Runtime>;
 }
 
@@ -721,4 +723,59 @@ impl pallet_eterra_media::Config for Runtime {
     type DefaultCollectionId = DefaultMediaCollectionId;
     type DefaultCollectionOwner = TreasuryAccount;
     type WeightInfo = pallet_eterra_media::weights::SubstrateWeight<Runtime>;
+}
+
+parameter_types! {
+    pub const MaxSeasonNameLen: u32 = 64;
+    pub const MaxSeasonDescLen: u32 = 256;
+}
+
+impl pallet_eterra_seasons::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type AdminOrigin = PrivilegedControlOrigin;
+    type MaxSeasonNameLen = MaxSeasonNameLen;
+    type MaxSeasonDescLen = MaxSeasonDescLen;
+    type WeightInfo = pallet_eterra_seasons::weights::SubstrateWeight<Runtime>;
+}
+
+parameter_types! {
+    pub NftsFeatures: pallet_nfts::PalletFeatures = pallet_nfts::PalletFeatures::all_enabled();
+}
+
+impl pallet_nfts::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+
+    type CollectionId = u32;
+    type ItemId = u32;
+
+    type Currency = Balances;
+    type ForceOrigin = PrivilegedControlOrigin;
+    type CreateOrigin = frame_support::traits::AsEnsureOriginWithArg<frame_system::EnsureSigned<AccountId>>;
+    type Locker = ();
+
+    type CollectionDeposit = ConstU128<0>;
+    type ItemDeposit = ConstU128<0>;
+    type MetadataDepositBase = ConstU128<0>;
+    type AttributeDepositBase = ConstU128<0>;
+    type DepositPerByte = ConstU128<0>;
+
+    type StringLimit = ConstU32<256>;
+    type KeyLimit = ConstU32<64>;
+    type ValueLimit = ConstU32<256>;
+
+    type ApprovalsLimit = ConstU32<20>;
+    type ItemAttributesApprovalsLimit = ConstU32<20>;
+    type MaxTips = ConstU32<10>;
+    type MaxDeadlineDuration = ConstU32<100_000>;
+    type MaxAttributesPerCall = ConstU32<10>;
+
+    type Features = NftsFeatures;
+
+    type OffchainSignature = Signature;
+    type OffchainPublic = <Signature as sp_runtime::traits::Verify>::Signer;
+
+    #[cfg(feature = "runtime-benchmarks")]
+    type Helper = ();
+
+    type WeightInfo = pallet_nfts::weights::SubstrateWeight<Runtime>;
 }

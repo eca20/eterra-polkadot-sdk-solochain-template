@@ -1,7 +1,8 @@
 use crate as pallet_eterra_slots;
 use frame_support::{
     parameter_types,
-    traits::{ConstU32, ConstU64, ConstU8, Everything},
+    traits::{ConstU128, ConstU32, ConstU64, ConstU8, Everything},
+    BoundedVec,
 };
 use frame_system as system;
 use sp_core::H256;
@@ -16,6 +17,9 @@ frame_support::construct_runtime!(
     pub struct Test {
         System: frame_system,
         Balances: pallet_balances,
+        EterraMedia: pallet_eterra_media,
+        EterraSeasons: pallet_eterra_seasons,
+        Nfts: pallet_nfts,
         EterraSlots: pallet_eterra_slots,
     }
 );
@@ -31,7 +35,22 @@ parameter_types! {
     pub const PackPriceReceiver: u64 = 999;
     pub const ProPrice: u128 = 200;
     pub const ProPriceReceiver: u64 = 999;
+    pub const MintCardPrice: u128 = 100;
+    pub const MintCardPriceReceiver: u64 = 999;
     pub const MaxProSpins: u8 = 5;
+    pub const MaxBorders: u32 = 32;
+    pub const MaxBackgrounds: u32 = 32;
+    pub const MaxSubjects: u32 = 128;
+
+    pub const MaxMediaUriLen: u32 = 256;
+    pub const MaxMediaContentTypeLen: u32 = 64;
+    pub const MaxMediaNameLen: u32 = 64;
+    pub const MaxMediaDescriptionLen: u32 = 256;
+    pub const MaxMediaRolesPerAccount: u32 = 8;
+    pub const DefaultMediaCollectionId: u32 = 0;
+
+    pub const MaxSeasonNameLen: u32 = 64;
+    pub const MaxSeasonDescLen: u32 = 256;
 }
 
 impl system::Config for Test {
@@ -83,18 +102,87 @@ impl pallet_balances::Config for Test {
     type MaxFreezes = ConstU32<0>;
 }
 
+parameter_types! {
+    pub NftsFeatures: pallet_nfts::PalletFeatures = pallet_nfts::PalletFeatures::all_enabled();
+}
+
+impl pallet_nfts::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+
+    type CollectionId = u32;
+    type ItemId = u32;
+
+    type Currency = Balances;
+    type ForceOrigin = frame_system::EnsureRoot<u64>;
+    type CreateOrigin =
+        frame_support::traits::AsEnsureOriginWithArg<frame_system::EnsureSigned<u64>>;
+    type Locker = ();
+
+    type CollectionDeposit = ConstU128<0>;
+    type ItemDeposit = ConstU128<0>;
+    type MetadataDepositBase = ConstU128<0>;
+    type AttributeDepositBase = ConstU128<0>;
+    type DepositPerByte = ConstU128<0>;
+
+    type StringLimit = ConstU32<256>;
+    type KeyLimit = ConstU32<64>;
+    type ValueLimit = ConstU32<256>;
+
+    type ApprovalsLimit = ConstU32<20>;
+    type ItemAttributesApprovalsLimit = ConstU32<20>;
+    type MaxTips = ConstU32<10>;
+    type MaxDeadlineDuration = ConstU64<100_000>;
+    type MaxAttributesPerCall = ConstU32<10>;
+
+    type Features = NftsFeatures;
+
+    type OffchainSignature = sp_runtime::testing::TestSignature;
+    type OffchainPublic = sp_runtime::testing::UintAuthorityId;
+
+    #[cfg(feature = "runtime-benchmarks")]
+    type Helper = ();
+
+    type WeightInfo = ();
+}
+
+impl pallet_eterra_seasons::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type AdminOrigin = frame_system::EnsureRoot<u64>;
+    type MaxSeasonNameLen = MaxSeasonNameLen;
+    type MaxSeasonDescLen = MaxSeasonDescLen;
+    type WeightInfo = ();
+}
+
+impl pallet_eterra_media::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type MaxUriLen = MaxMediaUriLen;
+    type MaxContentTypeLen = MaxMediaContentTypeLen;
+    type MaxNameLen = MaxMediaNameLen;
+    type MaxDescriptionLen = MaxMediaDescriptionLen;
+    type MaxRolesPerAccount = MaxMediaRolesPerAccount;
+    type DefaultCollectionId = DefaultMediaCollectionId;
+    type DefaultCollectionOwner = MintCardPriceReceiver;
+    type WeightInfo = ();
+}
+
 impl pallet_eterra_slots::Config for Test {
     type RuntimeEvent = RuntimeEvent;
-    type Currency = Balances;
+    type PaymentCurrency = Balances;
+    type HandChecker = ();
     type PackPrice = PackPrice;
     type PackPriceReceiver = PackPriceReceiver;
     type ProPrice = ProPrice;
     type ProPriceReceiver = ProPriceReceiver;
+    type MintCardPrice = MintCardPrice;
+    type MintCardPriceReceiver = MintCardPriceReceiver;
     type MaxProSpins = MaxProSpins;
     type MaxAttempts = ConstU8<3>;
     type CardsPerPack = ConstU8<6>;
     type MaxPacks = ConstU32<10>;
     type MaxOwnedCards = MaxOwnedCards;
+    type MaxBorders = MaxBorders;
+    type MaxBackgrounds = MaxBackgrounds;
+    type MaxSubjects = MaxSubjects;
 
     type WeightInfo = ();
 }
@@ -111,9 +199,91 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
     .assimilate_storage(&mut storage)
     .expect("balances genesis assimilates");
 
+    pallet_eterra_seasons::GenesisConfig::<Test> {
+        admins: vec![1],
+        initial_draft_season: None,
+        initial_active_season: None,
+    }
+    .assimilate_storage(&mut storage)
+    .expect("seasons genesis assimilates");
+
+    pallet_eterra_media::GenesisConfig::<Test> {
+        create_default_collection: true,
+        default_collection_name: b"Default".to_vec(),
+        default_collection_description: b"Default".to_vec(),
+        default_collection_owner: Some(1),
+    }
+    .assimilate_storage(&mut storage)
+    .expect("media genesis assimilates");
+
     let mut ext = sp_io::TestExternalities::new(storage);
     ext.execute_with(|| {
         System::set_block_number(1);
+
+        let name: BoundedVec<u8, MaxSeasonNameLen> = b"S1".to_vec().try_into().unwrap();
+        let desc: BoundedVec<u8, MaxSeasonDescLen> = b"D1".to_vec().try_into().unwrap();
+        pallet_eterra_seasons::Pallet::<Test>::create_season(RuntimeOrigin::signed(1), name, desc)
+            .expect("create season");
+
+        let uri: BoundedVec<u8, MaxMediaUriLen> = b"ipfs://b".to_vec().try_into().unwrap();
+        let ct: BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+        pallet_eterra_media::Pallet::<Test>::register_media(
+            RuntimeOrigin::signed(1),
+            None,
+            uri.clone(),
+            ct.clone(),
+            pallet_eterra_media::MediaClass::CoreAsset,
+            pallet_eterra_media::Delivery::RemoteIpfs,
+            None,
+        )
+        .expect("register border");
+        pallet_eterra_media::Pallet::<Test>::register_media(
+            RuntimeOrigin::signed(1),
+            None,
+            uri.clone(),
+            ct.clone(),
+            pallet_eterra_media::MediaClass::CoreAsset,
+            pallet_eterra_media::Delivery::RemoteIpfs,
+            None,
+        )
+        .expect("register background");
+        pallet_eterra_media::Pallet::<Test>::register_media(
+            RuntimeOrigin::signed(1),
+            None,
+            uri,
+            ct,
+            pallet_eterra_media::MediaClass::CoreAsset,
+            pallet_eterra_media::Delivery::RemoteIpfs,
+            None,
+        )
+        .expect("register subject");
+
+        pallet_eterra_slots::Pallet::<Test>::add_season_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            pallet_eterra_slots::AssetKind::Border,
+            0,
+        )
+        .expect("add border asset");
+        pallet_eterra_slots::Pallet::<Test>::add_season_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            pallet_eterra_slots::AssetKind::Background,
+            1,
+        )
+        .expect("add background asset");
+        pallet_eterra_slots::Pallet::<Test>::add_season_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            pallet_eterra_slots::AssetKind::Subject,
+            2,
+        )
+        .expect("add subject asset");
+
+        pallet_eterra_seasons::Pallet::<Test>::activate_season(RuntimeOrigin::signed(1), 1)
+            .expect("activate season");
+
+        System::reset_events();
     });
     ext
 }

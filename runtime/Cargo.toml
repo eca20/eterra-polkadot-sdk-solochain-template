@@ -60,8 +60,9 @@ pallet-eterra                             = { workspace = true }
 pallet-eterra-tcg = { workspace = true }
 pallet-eterra-gamer = { workspace = true }
 pallet-eterra-media = { workspace = true }
+pallet-eterra-seasons = { workspace = true }
+pallet-nfts = { workspace = true }
 pallet-eterra-daily-slots = { workspace = true }
-pallet-eterra-simple-tcg = { workspace = true }
 pallet-eterra-simple-matchmaker = { workspace = true }
 pallet-eterra-faucet = { workspace = true }
 pallet-eterra-monte-carlo-ai = { workspace = true }
@@ -108,7 +109,9 @@ std = [
    "pallet-eterra-simple-matchmaker/std",
   "pallet-eterra-game-authority/std",
   "pallet-eterra-media/std",
+  "pallet-eterra-seasons/std",
   "pallet-eterra-monte-carlo-ai/std",
+  "pallet-nfts/std",
 
 	"sp-api/std",
 	"sp-block-builder/std",
@@ -141,15 +144,16 @@ runtime-benchmarks = [
 	"pallet-timestamp/runtime-benchmarks",
 	"pallet-treasury/runtime-benchmarks",
 	"pallet-eterra/runtime-benchmarks",
-	"pallet-eterra-simple-tcg/runtime-benchmarks",
 	"pallet-eterra-simple-matchmaker/runtime-benchmarks",
 	"pallet-eterra-daily-slots/runtime-benchmarks",
 	"pallet-eterra-faucet/runtime-benchmarks",
 	"pallet-eterra-gamer/runtime-benchmarks",
 	"pallet-eterra-media/runtime-benchmarks",
+	"pallet-eterra-seasons/runtime-benchmarks",
 	"pallet-eterra-monte-carlo-ai/runtime-benchmarks",
 	"pallet-eterra-tcg/runtime-benchmarks",
 	"pallet-eterra-game-authority/runtime-benchmarks",
+	"pallet-nfts/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",
 ]
 
@@ -168,6 +172,7 @@ try-runtime = [
 	"pallet-timestamp/try-runtime",
 	"pallet-transaction-payment/try-runtime",
 	"pallet-treasury/try-runtime",
+	"pallet-nfts/try-runtime",
 	"sp-runtime/try-runtime",
 ]
 
