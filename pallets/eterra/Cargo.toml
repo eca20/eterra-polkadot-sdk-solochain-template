@@ -37,6 +37,9 @@ pallet-eterra-simple-matchmaker = { workspace = true, default-features = false }
 [dev-dependencies]
 sp-core = { workspace = true }
 pallet-assets = { workspace = true, default-features = false }
+pallet-eterra-media = { workspace = true, default-features = false, features = ["std"] }
+pallet-eterra-seasons = { workspace = true, default-features = false, features = ["std"] }
+pallet-nfts = { workspace = true, default-features = false, features = ["std"] }
 
 [features]
 default = ["std"]

@@ -1,5 +1,3 @@
-// TODO: Add limited card storage, 600 cards?
-// TODO: Add ability to add storage for 50 tokens
 #![cfg_attr(not(feature = "std"), no_std)]
 
 pub use pallet::*;
@@ -90,7 +88,7 @@ pub mod pallet {
     use frame_system::pallet_prelude::BlockNumberFor;
     use sp_runtime::traits::StaticLookup;
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
     const ESCROW_PALLET_ID: PalletId = PalletId(*b"et/tcgsc");
 
     /// Balance type bound to the runtime currency.
@@ -176,15 +174,27 @@ pub mod pallet {
         #[pallet::constant]
         type CardsPerPack: Get<u8>;
 
-        /// The maximum number of packs a single account can hold.
-        #[pallet::constant]
-        type MaxPacks: Get<u32>;
-
         /// The maximum number of cards a single account can own.
         ///
         /// This bounds storage reads for dashboards that list cards by owner.
         #[pallet::constant]
         type MaxOwnedCards: Get<u32>;
+
+        /// Base card capacity available to every account before buying extra storage.
+        #[pallet::constant]
+        type BaseCardCapacity: Get<u32>;
+
+        /// Slots added per storage upgrade purchase.
+        #[pallet::constant]
+        type CardCapacityUpgradeAmount: Get<u32>;
+
+        /// Price charged for each storage upgrade purchase.
+        #[pallet::constant]
+        type CardCapacityUpgradePrice: Get<BalanceOf<Self>>;
+
+        /// Account that receives storage upgrade payments.
+        #[pallet::constant]
+        type CardCapacityUpgradePriceReceiver: Get<Self::AccountId>;
 
         /// Maximum number of border layers per season.
         #[pallet::constant]
@@ -294,11 +304,17 @@ pub mod pallet {
     #[pallet::getter(fn converted)]
     pub type Converted<T: Config> = StorageMap<_, Blake2_128Concat, u32, (), OptionQuery>;
 
-    /// A map from account => list of packs
+    /// Additional card capacity purchased by each account.
+    #[pallet::storage]
+    #[pallet::getter(fn card_capacity_bonus)]
+    pub type CardCapacityBonus<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, u32, ValueQuery>;
+
+    /// A map from account => list of currently in-progress packs.
     #[pallet::storage]
     #[pallet::getter(fn player_packs)]
     pub type PlayerPacks<T: Config> =
-        StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<Pack, T::MaxPacks>, ValueQuery>;
+        StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<Pack, T::MaxOwnedCards>, ValueQuery>;
 
     /// A map from account => set of owned card IDs.
     ///
@@ -428,6 +444,13 @@ pub mod pallet {
         },
         /// A card NFT was burned and the card was returned from escrow to the NFT owner.
         CardUnwrappedFromNft { card_id: u32 },
+        /// An account bought additional card storage capacity.
+        CardCapacityUpgraded {
+            player: T::AccountId,
+            added_slots: u32,
+            new_capacity: u32,
+            price_paid: BalanceOf<T>,
+        },
 
         /// A new "pro" card was started for `player` with global `card_id`.
         ProMintStarted { player: T::AccountId, card_id: u32 },
@@ -465,8 +488,6 @@ pub mod pallet {
         PackAlreadyCompleted,
         /// The user has no pack to operate on.
         NoPackFound,
-        /// The user’s pack limit is reached.
-        MaxPacksReached,
         /// Card does not exist in storage.
         NoSuchCard,
         /// You do not own the card you’re trying to act upon.
@@ -480,6 +501,10 @@ pub mod pallet {
         CardAlreadyFinalized,
         /// No more card IDs are available.
         CardIdExhausted,
+        /// This action would exceed the account's configured card capacity.
+        CardCapacityExceeded,
+        /// No more card capacity can be purchased because the hard storage ceiling was reached.
+        CardCapacityMaxReached,
         /// The caller's owned-card limit is reached.
         MaxOwnedCardsReached,
         /// The caller's listed-card limit is reached.
@@ -538,7 +563,7 @@ pub mod pallet {
 
     #[pallet::call]
     impl<T: Config> Pallet<T> {
-        /// Mint a new pack of cards for the caller, up to `MaxPacks`.
+        /// Mint a new pack of cards for the caller.
         ///
         /// Charges `PackPrice` (in native `COIN`) and mints `CardsPerPack` unique card IDs.
         /// Each card is stored globally in `Cards<T>`.
@@ -549,10 +574,8 @@ pub mod pallet {
             let player = ensure_signed(origin)?;
 
             let mut packs = PlayerPacks::<T>::get(&player);
-            ensure!(
-                packs.len() < T::MaxPacks::get() as usize,
-                Error::<T>::MaxPacksReached
-            );
+            Self::prune_completed_packs(&mut packs);
+            Self::ensure_can_receive_cards(&player, u32::from(T::CardsPerPack::get()))?;
 
             // Charge the pack price up-front.
             let price = T::PackPrice::get();
@@ -574,7 +597,7 @@ pub mod pallet {
                 // Attach this card to the pack
                 card_ids
                     .try_push(new_card_id)
-                    .map_err(|_| Error::<T>::MaxPacksReached)?;
+                    .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
             }
 
             let first_card_id = card_ids.get(0).copied();
@@ -588,7 +611,7 @@ pub mod pallet {
 
             packs
                 .try_push(new_pack)
-                .map_err(|_| Error::<T>::MaxPacksReached)?;
+                .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
 
             PlayerPacks::<T>::insert(&player, packs);
             ActiveCard::<T>::insert(&player, Some(0));
@@ -611,6 +634,7 @@ pub mod pallet {
         #[transactional]
         pub fn mint_card(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
+            Self::ensure_can_receive_cards(&player, 1)?;
 
             // Charge the mint price up-front.
             let price = T::MintCardPrice::get();
@@ -673,8 +697,15 @@ pub mod pallet {
                 CardAttempts::<T>::insert(card_id, attempts);
 
                 // 9) If attempts == max, finalize now
-                if attempts == T::MaxAttempts::get() {
+                let pack_completed = if attempts == T::MaxAttempts::get() {
                     Self::finalize_card_and_advance(&player, card_id, pack, active_card_idx)?;
+                    pack.completed
+                } else {
+                    false
+                };
+
+                if pack_completed {
+                    Self::prune_completed_packs(packs);
                 }
 
                 Self::deposit_event(Event::SlotGenerated { card_id, values });
@@ -711,6 +742,11 @@ pub mod pallet {
 
                 // Finalize
                 Self::finalize_card_and_advance(&player, card_id, pack, active_card_idx)?;
+                let pack_completed = pack.completed;
+
+                if pack_completed {
+                    Self::prune_completed_packs(packs);
+                }
 
                 Self::deposit_event(Event::SlotAccepted { card_id });
                 Ok(())
@@ -763,6 +799,7 @@ pub mod pallet {
                 !ProInProgress::<T>::contains_key(&player),
                 Error::<T>::ProMintAlreadyInProgress
             );
+            Self::ensure_can_receive_cards(&player, 1)?;
 
             // Charge the pro price up-front.
             let price = T::ProPrice::get();
@@ -1028,6 +1065,41 @@ pub mod pallet {
             Ok(())
         }
 
+        /// Buy one configured step of additional card storage capacity.
+        #[pallet::call_index(13)]
+        #[pallet::weight(<T as Config>::WeightInfo::buy_card_capacity())]
+        #[transactional]
+        pub fn buy_card_capacity(origin: OriginFor<T>) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+
+            let added_slots = T::CardCapacityUpgradeAmount::get();
+            let current_bonus = CardCapacityBonus::<T>::get(&player);
+            let next_bonus = current_bonus.saturating_add(added_slots);
+            let new_capacity = T::BaseCardCapacity::get().saturating_add(next_bonus);
+            ensure!(
+                new_capacity <= T::MaxOwnedCards::get(),
+                Error::<T>::CardCapacityMaxReached
+            );
+
+            let price = T::CardCapacityUpgradePrice::get();
+            let receiver = T::CardCapacityUpgradePriceReceiver::get();
+            T::PaymentCurrency::transfer(
+                &player,
+                &receiver,
+                price,
+                ExistenceRequirement::KeepAlive,
+            )?;
+
+            CardCapacityBonus::<T>::insert(&player, next_bonus);
+            Self::deposit_event(Event::CardCapacityUpgraded {
+                player,
+                added_slots,
+                new_capacity,
+                price_paid: price,
+            });
+            Ok(())
+        }
+
         /// Assign seasonal artwork to previously-minted legacy cards that do not yet have
         /// `CardArtwork` set.
         ///
@@ -1204,6 +1276,35 @@ pub mod pallet {
             ESCROW_PALLET_ID.into_account_truncating()
         }
 
+        fn owned_card_count(owner: &T::AccountId) -> u32 {
+            CardsByOwner::<T>::get(owner).len().saturated_into::<u32>()
+        }
+
+        fn owned_card_capacity(owner: &T::AccountId) -> u32 {
+            T::BaseCardCapacity::get().saturating_add(CardCapacityBonus::<T>::get(owner))
+        }
+
+        fn ensure_can_receive_cards(owner: &T::AccountId, additional_cards: u32) -> DispatchResult {
+            let next_total = Self::owned_card_count(owner).saturating_add(additional_cards);
+            ensure!(
+                next_total <= Self::owned_card_capacity(owner),
+                Error::<T>::CardCapacityExceeded
+            );
+            Ok(())
+        }
+
+        fn prune_completed_packs(packs: &mut BoundedVec<Pack, T::MaxOwnedCards>) {
+            let retained: Vec<Pack> = packs
+                .iter()
+                .filter(|pack| !pack.completed)
+                .cloned()
+                .collect();
+            *packs = match retained.try_into() {
+                Ok(filtered) => filtered,
+                Err(_) => unreachable!("filtered packs cannot exceed original bounded length"),
+            };
+        }
+
         fn ensure_season_admin(who: &T::AccountId) -> DispatchResult {
             ensure!(
                 pallet_eterra_seasons::Admins::<T>::contains_key(who),
@@ -1311,6 +1412,7 @@ pub mod pallet {
 
         /// Create a brand-new card with `owner`.
         fn create_new_card(owner: &T::AccountId) -> Result<u32, DispatchError> {
+            Self::ensure_can_receive_cards(owner, 1)?;
             let card_id = NextCardId::<T>::get();
             let next_card_id = card_id.checked_add(1).ok_or(Error::<T>::CardIdExhausted)?;
             let new_card_info = CardInfo {
@@ -1333,6 +1435,7 @@ pub mod pallet {
 
         /// Create a brand-new, immediately-finalized card with `owner`.
         fn create_new_finalized_card(owner: &T::AccountId) -> Result<u32, DispatchError> {
+            Self::ensure_can_receive_cards(owner, 1)?;
             let card_id = NextCardId::<T>::get();
             let next_card_id = card_id.checked_add(1).ok_or(Error::<T>::CardIdExhausted)?;
 
@@ -1373,6 +1476,10 @@ pub mod pallet {
                 !T::HandChecker::is_card_in_current_hand(from, card_id),
                 Error::<T>::CardInCurrentHand
             );
+
+            if from != to && *to != Self::escrow_account_id() {
+                Self::ensure_can_receive_cards(to, 1)?;
+            }
 
             // Update the card owner in main storage (ensures existence and ownership)
             Cards::<T>::try_mutate(card_id, |maybe_card| -> DispatchResult {

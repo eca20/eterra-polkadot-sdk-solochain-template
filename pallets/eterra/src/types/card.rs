@@ -4,6 +4,7 @@ use scale_info::TypeInfo;
 
 #[derive(Encode, Decode, TypeInfo, MaxEncodedLen, Clone, PartialEq, Eq, Debug)]
 pub struct Card {
+    pub card_id: u32,
     pub top: u8,
     pub right: u8,
     pub bottom: u8,
@@ -14,12 +15,18 @@ pub struct Card {
 impl Card {
     pub fn new(top: u8, right: u8, bottom: u8, left: u8) -> Self {
         Self {
+            card_id: 0,
             top,
             right,
             bottom,
             left,
             possession: None,
         }
+    }
+
+    pub fn with_card_id(mut self, card_id: u32) -> Self {
+        self.card_id = card_id;
+        self
     }
 
     pub fn with_possession(mut self, possession: Player) -> Self {

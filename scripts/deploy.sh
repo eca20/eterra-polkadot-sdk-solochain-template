@@ -292,6 +292,29 @@ if servers is not None:
         if server not in balance_accounts:
             raise SystemExit("[deploy] production balances must fund all initialServers accounts")
 
+season_admins = patch.get("eterraSeasons", {}).get("admins", [])
+if season_admins is not None:
+    if not isinstance(season_admins, list):
+        raise SystemExit("[deploy] eterraSeasons.admins must be an array when present")
+    if not season_admins:
+        raise SystemExit("[deploy] production spec must include at least one season admin")
+    for admin in season_admins:
+        if not isinstance(admin, str) or not admin:
+            raise SystemExit("[deploy] eterraSeasons.admins entries must be non-empty strings")
+        if admin in dev_aura:
+            raise SystemExit("[deploy] production season admins must not use dev accounts (Alice/Bob)")
+        if admin not in balance_accounts:
+            raise SystemExit("[deploy] production balances must fund all season admins")
+
+media_owner = patch.get("eterraMedia", {}).get("defaultCollectionOwner")
+if media_owner is not None:
+    if not isinstance(media_owner, str) or not media_owner:
+        raise SystemExit("[deploy] eterraMedia.defaultCollectionOwner must be a non-empty string")
+    if media_owner in dev_aura:
+        raise SystemExit("[deploy] production media collection owner must not use dev account (Alice/Bob)")
+    if media_owner not in balance_accounts:
+        raise SystemExit("[deploy] production balances must fund eterraMedia.defaultCollectionOwner")
+
 print(f"[deploy] strict production validation passed for {spec_path}")
 PY
 }
@@ -457,6 +480,25 @@ if "initial_servers" in cfg:
         if srv not in balance_accounts:
             raise SystemExit("[deploy] balances must include each initial_servers account")
     patch.setdefault("eterraGameAuthority", {})["initialServers"] = servers
+
+if "season_admins" in cfg:
+    season_admins = cfg["season_admins"]
+    if not isinstance(season_admins, list) or not season_admins:
+        raise SystemExit("[deploy] season_admins must be a non-empty array when provided")
+    for admin in season_admins:
+        if not isinstance(admin, str) or not admin:
+            raise SystemExit("[deploy] each season_admins entry must be a non-empty string")
+        if admin not in balance_accounts:
+            raise SystemExit("[deploy] balances must include each season_admins account")
+    patch.setdefault("eterraSeasons", {})["admins"] = season_admins
+
+if "media_collection_owner" in cfg:
+    media_owner = cfg["media_collection_owner"]
+    if not isinstance(media_owner, str) or not media_owner:
+        raise SystemExit("[deploy] media_collection_owner must be a non-empty string when provided")
+    if media_owner not in balance_accounts:
+        raise SystemExit("[deploy] balances must include media_collection_owner")
+    patch.setdefault("eterraMedia", {})["defaultCollectionOwner"] = media_owner
 
 out_plain.write_text(json.dumps(spec, indent=2) + "\n")
 print(f"[deploy] wrote finalized production plain spec: {out_plain}")

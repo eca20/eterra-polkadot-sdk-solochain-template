@@ -85,7 +85,7 @@ pub mod pallet {
     use pallet_eterra_monte_carlo_ai as mc_ai;
     use pallet_eterra_tcg as cards;
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(4);
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -99,7 +99,9 @@ pub mod pallet {
 
             // v3 adds `locked_mask` to the `Game` struct stored in `GameStorage`.
             if current < StorageVersion::new(3) {
-                weight = weight.saturating_add(Self::migrate_game_storage_add_locked_mask());
+                weight = weight.saturating_add(Self::migrate_game_storage_v2_to_v4());
+            } else if current < StorageVersion::new(4) {
+                weight = weight.saturating_add(Self::migrate_game_storage_add_card_ids());
             }
 
             if current < STORAGE_VERSION {
@@ -442,6 +444,7 @@ pub mod pallet {
         MovePlayed {
             game_id: GameId<T>,
             player: T::AccountId,
+            card_id: u32,
             x: u8,
             y: u8,
         },
@@ -837,6 +840,7 @@ pub mod pallet {
             Self::deposit_event(Event::MovePlayed {
                 game_id,
                 player: who,
+                card_id: player_move.place_card.card_id,
                 x: player_move.place_index_x,
                 y: player_move.place_index_y,
             });
@@ -976,13 +980,7 @@ pub mod pallet {
             // Build the placed card from the saved stats
             let player_ix = Self::get_current_player_index(&game, &who);
             let h = hand[idx].clone();
-            let placed = Card {
-                top: h.north,
-                right: h.east,
-                bottom: h.south,
-                left: h.west,
-                possession: None,
-            };
+            let placed = Card::new(h.north, h.east, h.south, h.west).with_card_id(h.card_id);
             let mv = Move {
                 place_card: placed,
                 place_index_x: x,
@@ -1013,6 +1011,7 @@ pub mod pallet {
             Self::deposit_event(Event::MovePlayed {
                 game_id,
                 player: who,
+                card_id: h.card_id,
                 x,
                 y,
             });
@@ -1431,7 +1430,18 @@ impl<T: Config> Pallet<T> {
         mask
     }
 
-    fn migrate_game_storage_add_locked_mask() -> frame_support::weights::Weight {
+    fn migrate_game_storage_v2_to_v4() -> frame_support::weights::Weight {
+        #[derive(Decode)]
+        struct CardV2 {
+            pub top: u8,
+            pub right: u8,
+            pub bottom: u8,
+            pub left: u8,
+            pub possession: Option<Player>,
+        }
+
+        type BoardV2 = [[Option<CardV2>; 4]; 4];
+
         #[derive(Decode)]
         struct GameV2<Account, BlockNumber, NumPlayers>
         where
@@ -1443,7 +1453,7 @@ impl<T: Config> Pallet<T> {
             pub player_turn: u8,
             pub round: u8,
             pub max_rounds: u8,
-            pub board: Board,
+            pub board: BoardV2,
             pub scores: (u8, u8),
         }
 
@@ -1459,7 +1469,15 @@ impl<T: Config> Pallet<T> {
                     player_turn: old.player_turn,
                     round: old.round,
                     max_rounds: old.max_rounds,
-                    board: old.board,
+                    board: old.board.map(|column| {
+                        column.map(|cell| {
+                            cell.map(|card| {
+                                let mut next = Card::new(card.top, card.right, card.bottom, card.left);
+                                next.possession = card.possession;
+                                next
+                            })
+                        })
+                    }),
                     locked_mask: 0,
                     scores: old.scores,
                 })
@@ -1467,6 +1485,65 @@ impl<T: Config> Pallet<T> {
         );
 
         // We iterated keys once and translated (read+write) each value.
+        T::DbWeight::get()
+            .reads(n.saturating_mul(2))
+            .saturating_add(T::DbWeight::get().writes(n))
+    }
+
+    fn migrate_game_storage_add_card_ids() -> frame_support::weights::Weight {
+        #[derive(Decode)]
+        struct CardV3 {
+            pub top: u8,
+            pub right: u8,
+            pub bottom: u8,
+            pub left: u8,
+            pub possession: Option<Player>,
+        }
+
+        type BoardV3 = [[Option<CardV3>; 4]; 4];
+
+        #[derive(Decode)]
+        struct GameV3<Account, BlockNumber, NumPlayers>
+        where
+            NumPlayers: Clone,
+        {
+            pub state: GameState,
+            pub last_played_block: BlockNumber,
+            pub players: Players<Account, NumPlayers>,
+            pub player_turn: u8,
+            pub round: u8,
+            pub max_rounds: u8,
+            pub board: BoardV3,
+            pub locked_mask: u16,
+            pub scores: (u8, u8),
+        }
+
+        let n: u64 = GameStorage::<T>::iter_keys().count() as u64;
+
+        GameStorage::<T>::translate_values::<GameV3<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>, _>(
+            |old| {
+                Some(Game::<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> {
+                    state: old.state,
+                    last_played_block: old.last_played_block,
+                    players: old.players,
+                    player_turn: old.player_turn,
+                    round: old.round,
+                    max_rounds: old.max_rounds,
+                    board: old.board.map(|column| {
+                        column.map(|cell| {
+                            cell.map(|card| {
+                                let mut next = Card::new(card.top, card.right, card.bottom, card.left);
+                                next.possession = card.possession;
+                                next
+                            })
+                        })
+                    }),
+                    locked_mask: old.locked_mask,
+                    scores: old.scores,
+                })
+            },
+        );
+
         T::DbWeight::get()
             .reads(n.saturating_mul(2))
             .saturating_add(T::DbWeight::get().writes(n))
@@ -1820,13 +1897,8 @@ impl<T: Config> Pallet<T> {
                             if let Some(cell) = col.get(yi) {
                                 if cell.is_none() {
                                     let h = slot.clone();
-                                    let placed = Card {
-                                        top: h.north,
-                                        right: h.east,
-                                        bottom: h.south,
-                                        left: h.west,
-                                        possession: None,
-                                    };
+                                    let placed =
+                                        Card::new(h.north, h.east, h.south, h.west).with_card_id(h.card_id);
                                     let mv = Move {
                                         place_card: placed,
                                         place_index_x: x,
@@ -1860,6 +1932,7 @@ impl<T: Config> Pallet<T> {
                                     Self::deposit_event(Event::MovePlayed {
                                         game_id: *game_id,
                                         player: ai_acc,
+                                        card_id: h.card_id,
                                         x,
                                         y,
                                     });

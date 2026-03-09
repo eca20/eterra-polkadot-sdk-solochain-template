@@ -36,6 +36,7 @@ pub trait WeightInfo {
 	fn buy_card() -> Weight;
 	fn add_season_asset() -> Weight;
 	fn remove_season_asset() -> Weight;
+	fn buy_card_capacity() -> Weight;
 	fn backfill_card_artwork() -> Weight;
 	fn init_card_nft_collection() -> Weight;
 	fn convert_to_nft() -> Weight;
@@ -80,6 +81,9 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn remove_season_asset() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn buy_card_capacity() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 	fn backfill_card_artwork() -> Weight {
@@ -285,6 +289,12 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 
 	fn remove_season_asset() -> Weight {
 		Weight::from_parts(10_000, 0)
+	}
+
+	fn buy_card_capacity() -> Weight {
+		Weight::from_parts(25_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(2))
 	}
 
 	fn backfill_card_artwork() -> Weight {

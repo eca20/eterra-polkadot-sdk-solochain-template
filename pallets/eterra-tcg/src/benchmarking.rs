@@ -10,12 +10,15 @@ fn fund<T: Config>(who: &T::AccountId) {
     let pack_price = T::PackPrice::get();
     let pro_price = T::ProPrice::get();
     let mint_price = T::MintCardPrice::get();
+    let storage_price = T::CardCapacityUpgradePrice::get();
     let amount = pack_price
         .saturating_add(pack_price)
         .saturating_add(pro_price)
         .saturating_add(pro_price)
         .saturating_add(mint_price)
-        .saturating_add(mint_price);
+        .saturating_add(mint_price)
+        .saturating_add(storage_price)
+        .saturating_add(storage_price);
     let _ = T::PaymentCurrency::deposit_creating(who, amount);
 }
 
@@ -171,6 +174,17 @@ benchmarks! {
     verify {
         assert!(CardPrices::<T>::get(card_id).is_none());
         assert!(!ListedByOwner::<T>::get(&caller).contains(&card_id));
+    }
+
+    buy_card_capacity {
+        let caller: T::AccountId = whitelisted_caller();
+        fund::<T>(&caller);
+    }: _(RawOrigin::Signed(caller.clone()))
+    verify {
+        assert_eq!(
+            CardCapacityBonus::<T>::get(&caller),
+            T::CardCapacityUpgradeAmount::get()
+        );
     }
 
     buy_card {

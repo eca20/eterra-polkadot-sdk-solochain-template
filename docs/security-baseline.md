@@ -87,6 +87,28 @@ The strict production validator additionally enforces non-placeholder authoritie
    - `AURA_SURI=<sr25519> GRAN_SURI=<ed25519> ./scripts/run-node.sh production production release validator`
 3. Unsafe RPC on production is blocked unless explicitly overridden with `ALLOW_UNSAFE_RPC_IN_PRODUCTION=1`.
 
+### Beta Ownership / Admin Finalization
+
+1. The production override generator now accepts a direct `sudo_address` so the beta owner key can be a multisig address rather than a single SURI-backed account.
+2. Production override/finalization also supports:
+   - `season_admin_suris` / `season_admin_addresses`
+   - `media_collection_owner_suri` / `media_collection_owner_address`
+3. Strict production spec validation now rejects:
+   - empty `eterraSeasons.admins`
+   - Alice/Bob placeholders as season admins
+   - Alice/Bob placeholders as the default media collection owner
+   - unfunded season admin / media owner accounts
+
+### NFT Beta Posture
+
+1. `pallet-nfts` remains intentionally configured with zero deposits for beta:
+   - `CollectionDeposit = 0`
+   - `ItemDeposit = 0`
+   - `MetadataDepositBase = 0`
+   - `DepositPerByte = 0`
+2. `PalletFeatures::all_enabled()` remains the current beta posture and should be treated as an explicit release setting, not an incidental default.
+3. Before public launch beyond controlled beta, review whether the enabled feature set should be narrowed and whether deposits should move away from zero.
+
 ## Origin/Access Audit (By Extrinsic)
 
 1. `pallet-eterra`

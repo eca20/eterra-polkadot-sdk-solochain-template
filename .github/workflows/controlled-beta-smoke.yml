@@ -1,0 +1,36 @@
+name: Controlled Beta Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      chain_rpc_url:
+        description: Chain JSON-RPC base URL
+        required: true
+        type: string
+      media_base_url:
+        description: Media service base URL
+        required: true
+        type: string
+      web_base_url:
+        description: Optional web base URL
+        required: false
+        type: string
+      card_id:
+        description: Optional card ID for metadata/image validation
+        required: false
+        type: string
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    environment: controlled-beta
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run controlled beta smoke
+        env:
+          CHAIN_RPC_URL: ${{ inputs.chain_rpc_url }}
+          MEDIA_BASE_URL: ${{ inputs.media_base_url }}
+          WEB_BASE_URL: ${{ inputs.web_base_url }}
+          CARD_ID: ${{ inputs.card_id }}
+        run: ./scripts/smoke-controlled-beta.sh

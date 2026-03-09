@@ -14,12 +14,17 @@
       "grandpa_weight": 1
     }
   ],
-  "sudo_suri": "@/secure/owner-sudo.suri",
+  "sudo_address": "REPLACE_WITH_OWNER_MULTISIG_SS58",
   "faucet_suri": "@/secure/faucet.suri",
   "initial_server_suris": [
     "@/secure/game-server-1.suri",
     "@/secure/game-server-2.suri"
   ],
+  "season_admin_suris": [
+    "@/secure/media-service-signer.suri",
+    "@/secure/ops-season-admin.suri"
+  ],
+  "media_collection_owner_address": "REPLACE_WITH_MEDIA_COLLECTION_OWNER_SS58",
   "extra_endowed_suris": [
     "@/secure/ops-wallet.suri"
   ],

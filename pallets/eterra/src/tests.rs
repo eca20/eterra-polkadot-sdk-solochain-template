@@ -285,12 +285,12 @@ fn set_current_hand_rejects_listed_cards_and_buy_is_defensive() {
             frame_system::RawOrigin::Signed(seller).into()
         ));
 
-        let packs = cards::PlayerPacks::<Test>::get(seller);
-        let pack = packs.last().expect("pack exists");
-        let for_sale = *pack
-            .get_card_ids()
-            .get(5)
-            .expect("pack has 6 cards");
+        let owned_cards = cards::CardsByOwner::<Test>::get(seller);
+        let for_sale = owned_cards
+            .iter()
+            .copied()
+            .find(|card_id| !hand_ids.contains(card_id))
+            .expect("owner has one extra finalized card outside the current hand");
 
         // List the card while it is NOT in the current hand.
         assert_ok!(cards::Pallet::<Test>::set_price(
@@ -1865,6 +1865,40 @@ fn play_from_hand_marks_used_and_prevents_reuse() {
             0,
         );
         assert_noop!(res, crate::Error::<Test>::CardAlreadyUsed);
+    });
+}
+
+#[test]
+fn play_from_hand_persists_card_id_on_board() {
+    init_logger();
+    new_test_ext().execute_with(|| {
+        let (game_id, creator, opponent) = setup_new_game();
+        assert_ok!(Eterra::submit_hand(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            BoundedVec::<u32, crate::pallet::HandLimit>::default(),
+        ));
+
+        ensure_my_turn(game_id, creator, opponent);
+
+        let current_hand = crate::CurrentHandOf::<Test>::get(creator).expect("preset hand exists");
+        let expected_card_id = current_hand[0];
+
+        assert_ok!(Eterra::play_from_hand(
+            frame_system::RawOrigin::Signed(creator).into(),
+            game_id,
+            0,
+            0,
+            0,
+        ));
+
+        let placed = GameStorage::<Test>::get(&game_id)
+            .expect("game exists")
+            .board[0][0]
+            .clone()
+            .expect("card placed");
+
+        assert_eq!(placed.card_id, expected_card_id);
     });
 }
 

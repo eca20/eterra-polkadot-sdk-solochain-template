@@ -84,6 +84,61 @@ def require_str(obj: dict[str, Any], field: str) -> str:
     return value
 
 
+def read_address_or_suri(
+    cfg: dict[str, Any],
+    node_bin: str,
+    *,
+    address_field: str,
+    suri_field: str,
+    scheme: str,
+    required: bool = True,
+) -> str | None:
+    address_raw = cfg.get(address_field)
+    if address_raw is not None:
+        if not isinstance(address_raw, str) or not address_raw:
+            fail(f"field `{address_field}` must be a non-empty string when provided")
+        return address_raw
+
+    suri_raw = cfg.get(suri_field)
+    if suri_raw is None:
+        if required:
+            fail(f"missing `{address_field}` or `{suri_field}`")
+        return None
+    if not isinstance(suri_raw, str) or not suri_raw:
+        fail(f"field `{suri_field}` must be a non-empty string when provided")
+    return inspect_ss58(node_bin, read_secret(suri_raw), scheme)
+
+
+def read_address_list_or_suris(
+    cfg: dict[str, Any],
+    node_bin: str,
+    *,
+    address_field: str,
+    suri_field: str,
+    scheme: str,
+) -> list[str]:
+    addresses_raw = cfg.get(address_field)
+    if addresses_raw is not None:
+        if not isinstance(addresses_raw, list):
+            fail(f"field `{address_field}` must be an array when provided")
+        result: list[str] = []
+        for idx, value in enumerate(addresses_raw):
+            if not isinstance(value, str) or not value:
+                fail(f"{address_field}[{idx}] must be a non-empty string")
+            result.append(value)
+        return result
+
+    suris_raw = cfg.get(suri_field, [])
+    if not isinstance(suris_raw, list):
+        fail(f"field `{suri_field}` must be an array when provided")
+    result: list[str] = []
+    for idx, value in enumerate(suris_raw):
+        if not isinstance(value, str) or not value:
+            fail(f"{suri_field}[{idx}] must be a non-empty string")
+        result.append(inspect_ss58(node_bin, read_secret(value), scheme))
+    return result
+
+
 def dedup_keep_order(values: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -180,21 +235,30 @@ def main() -> None:
             fail(f"validators[{idx}].grandpa_weight must be a positive integer")
         grandpa_authorities.append([grandpa_address, weight])
 
-    sudo_suri = read_secret(require_str(cfg, "sudo_suri"))
-    sudo_key = inspect_ss58(args.node_bin, sudo_suri, "sr25519")
+    sudo_key = read_address_or_suri(
+        cfg,
+        args.node_bin,
+        address_field="sudo_address",
+        suri_field="sudo_suri",
+        scheme="sr25519",
+    )
+    assert sudo_key is not None
     if not args.allow_sudo_validator and sudo_key in aura_set:
         fail(
             "sudo key matches a validator Aura key; use a separate cold owner key "
             "(or pass --allow-sudo-validator to override)"
         )
 
-    faucet_suri_raw = cfg.get("faucet_suri")
-    if faucet_suri_raw is None:
+    faucet_account = read_address_or_suri(
+        cfg,
+        args.node_bin,
+        address_field="faucet_address",
+        suri_field="faucet_suri",
+        scheme="sr25519",
+        required=False,
+    )
+    if faucet_account is None:
         faucet_account = sudo_key
-    else:
-        if not isinstance(faucet_suri_raw, str) or not faucet_suri_raw:
-            fail("field `faucet_suri` must be a non-empty string when provided")
-        faucet_account = inspect_ss58(args.node_bin, read_secret(faucet_suri_raw), "sr25519")
 
     initial_server_suris_raw = cfg.get("initial_server_suris", [])
     if not isinstance(initial_server_suris_raw, list):
@@ -214,6 +278,22 @@ def main() -> None:
             fail(f"extra_endowed_suris[{idx}] must be a non-empty string")
         extra_endowed.append(inspect_ss58(args.node_bin, read_secret(value), "sr25519"))
 
+    season_admins = read_address_list_or_suris(
+        cfg,
+        args.node_bin,
+        address_field="season_admin_addresses",
+        suri_field="season_admin_suris",
+        scheme="sr25519",
+    )
+    media_collection_owner = read_address_or_suri(
+        cfg,
+        args.node_bin,
+        address_field="media_collection_owner_address",
+        suri_field="media_collection_owner_suri",
+        scheme="sr25519",
+        required=False,
+    )
+
     endowment = cfg.get("endowment", 1 << 60)
     if not isinstance(endowment, int) or endowment <= 0:
         fail("field `endowment` must be a positive integer when provided")
@@ -223,7 +303,12 @@ def main() -> None:
         fail("field `faucet_payout_amount` must be a positive integer when provided")
 
     balance_accounts = dedup_keep_order(
-        aura_authorities + [sudo_key, faucet_account] + initial_servers + extra_endowed
+        aura_authorities
+        + [sudo_key, faucet_account]
+        + initial_servers
+        + extra_endowed
+        + season_admins
+        + ([media_collection_owner] if media_collection_owner else [])
     )
     balances = [[address, endowment] for address in balance_accounts]
 
@@ -238,6 +323,10 @@ def main() -> None:
         "faucet_payout_amount": faucet_payout_amount,
         "initial_servers": initial_servers,
     }
+    if season_admins:
+        overrides["season_admins"] = dedup_keep_order(season_admins)
+    if media_collection_owner:
+        overrides["media_collection_owner"] = media_collection_owner
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(overrides, indent=2) + "\n")

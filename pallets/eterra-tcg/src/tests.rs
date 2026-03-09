@@ -1,11 +1,11 @@
 use crate::pallet::Config as EterraSlotsConfig;
 use crate::{
-    mock::*, ActiveCard, CardArtwork, CardArtworkInfo, CardPrices, Cards, CardsByOwner, Error,
-    Event, ListedByOwner, NextCardId, PackCardInProgress, PackInProgress, PlayerPacks,
+    mock::*, ActiveCard, CardArtwork, CardArtworkInfo, CardCapacityBonus, CardPrices, Cards,
+    CardsByOwner, Error, Event, ListedByOwner, NextCardId, PackCardInProgress, PackInProgress,
+    PlayerPacks,
 };
 use frame_support::traits::Get;
-use frame_support::{assert_noop, assert_ok};
-use frame_support::BoundedVec;
+use frame_support::{assert_noop, assert_ok, BoundedBTreeSet, BoundedVec};
 use log::{debug, Level, Metadata, Record};
 use sp_runtime::traits::AccountIdConversion;
 use std::sync::Once;
@@ -71,6 +71,14 @@ fn run_to_block(n: u64) {
             &Default::default(),
         );
     }
+}
+
+fn seed_owned_card_index(owner: u64, count: u32, id_offset: u32) {
+    let mut ids = BoundedBTreeSet::<u32, MaxOwnedCards>::new();
+    for id in id_offset..id_offset.saturating_add(count) {
+        assert!(ids.try_insert(id).is_ok());
+    }
+    CardsByOwner::<Test>::insert(owner, ids);
 }
 
 #[test]
@@ -675,27 +683,24 @@ fn test_accept_slot_success() {
 }
 
 #[test]
-fn test_mint_pack_fail_when_max_packs_reached() {
+fn mint_pack_fails_when_card_capacity_would_be_exceeded_without_charging_fee() {
     init_logger();
     new_test_ext().execute_with(|| {
-        let player = 1;
-        debug!("Minting maximum allowed packs for player {}", player);
+        let player = 1u64;
+        let receiver = <Test as EterraSlotsConfig>::PackPriceReceiver::get();
+        let player_before = Balances::free_balance(player);
+        let receiver_before = Balances::free_balance(receiver);
 
-        for _ in 0..10 {
-            assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(player)));
-            run_to_block(System::block_number() + 1);
-        }
+        seed_owned_card_index(player, 495, 10_000);
 
-        debug!(
-            "Attempting to mint an 11th pack for player {} (should fail).",
-            player
-        );
         assert_noop!(
             EterraSlots::mint_pack(RuntimeOrigin::signed(player)),
-            Error::<Test>::MaxPacksReached
+            Error::<Test>::CardCapacityExceeded
         );
 
-        debug!("Correctly failed for exceeding max packs.");
+        assert_eq!(Balances::free_balance(player), player_before);
+        assert_eq!(Balances::free_balance(receiver), receiver_before);
+        assert!(PlayerPacks::<Test>::get(player).is_empty());
     });
 }
 
@@ -776,12 +781,11 @@ fn pack_completed_clears_active_card_and_emits_event() {
         assert!(PackInProgress::<Test>::get(player).is_none());
         assert!(PackCardInProgress::<Test>::get(player).is_none());
         let packs = EterraSlots::player_packs(player);
-        let pack = packs.last().expect("pack exists");
-        assert!(pack.get_completed());
+        assert!(packs.is_empty());
 
         System::assert_has_event(RuntimeEvent::EterraSlots(Event::PackCompleted {
             player,
-            pack_id: pack.get_id(),
+            pack_id: 1,
         }));
     });
 }
@@ -973,6 +977,27 @@ fn test_transfer_card_success() {
 }
 
 #[test]
+fn transfer_card_fails_when_recipient_card_capacity_is_full() {
+    new_test_ext().execute_with(|| {
+        let original_owner = 1u64;
+        let new_owner = 2u64;
+
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(original_owner)));
+        let card_id = NextCardId::<Test>::get().saturating_sub(1);
+
+        seed_owned_card_index(new_owner, BaseCardCapacity::get(), 30_000);
+
+        assert_noop!(
+            EterraSlots::transfer_card(RuntimeOrigin::signed(original_owner), card_id, new_owner),
+            Error::<Test>::CardCapacityExceeded
+        );
+
+        let card = EterraSlots::cards(card_id).expect("card exists");
+        assert_eq!(*card.get_owner(), original_owner);
+    });
+}
+
+#[test]
 fn mint_card_charges_price_and_mints() {
     new_test_ext().execute_with(|| {
         System::set_block_number(1);
@@ -998,6 +1023,54 @@ fn mint_card_charges_price_and_mints() {
         assert_eq!(Balances::free_balance(receiver), receiver_before + price);
 
         System::assert_has_event(RuntimeEvent::EterraSlots(Event::CardMinted { player, card_id }));
+    });
+}
+
+#[test]
+fn mint_card_fails_when_card_capacity_is_full_without_charging_fee() {
+    new_test_ext().execute_with(|| {
+        let player = 1u64;
+        let receiver = <Test as EterraSlotsConfig>::MintCardPriceReceiver::get();
+        let player_before = Balances::free_balance(player);
+        let receiver_before = Balances::free_balance(receiver);
+
+        seed_owned_card_index(player, BaseCardCapacity::get(), 20_000);
+
+        assert_noop!(
+            EterraSlots::mint_card(RuntimeOrigin::signed(player)),
+            Error::<Test>::CardCapacityExceeded
+        );
+
+        assert_eq!(Balances::free_balance(player), player_before);
+        assert_eq!(Balances::free_balance(receiver), receiver_before);
+    });
+}
+
+#[test]
+fn buy_card_capacity_increases_capacity_and_charges_price() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let receiver = <Test as EterraSlotsConfig>::CardCapacityUpgradePriceReceiver::get();
+        let price = <Test as EterraSlotsConfig>::CardCapacityUpgradePrice::get();
+
+        let player_before = Balances::free_balance(player);
+        let receiver_before = Balances::free_balance(receiver);
+
+        assert_ok!(EterraSlots::buy_card_capacity(RuntimeOrigin::signed(player)));
+
+        assert_eq!(
+            CardCapacityBonus::<Test>::get(player),
+            CardCapacityUpgradeAmount::get()
+        );
+        assert_eq!(Balances::free_balance(player), player_before - price);
+        assert_eq!(Balances::free_balance(receiver), receiver_before + price);
+
+        System::assert_has_event(RuntimeEvent::EterraSlots(Event::CardCapacityUpgraded {
+            player,
+            added_slots: CardCapacityUpgradeAmount::get(),
+            new_capacity: BaseCardCapacity::get() + CardCapacityUpgradeAmount::get(),
+            price_paid: price,
+        }));
     });
 }
 

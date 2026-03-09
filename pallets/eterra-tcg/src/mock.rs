@@ -29,8 +29,11 @@ parameter_types! {
     pub const ExistentialDeposit: u128 = 1;
     pub const MaxAttempts: u8 = 3;
     pub const CardsPerPack: u8 = 6;
-    pub const MaxPacks: u32 = 10;
-    pub const MaxOwnedCards: u32 = 1024;
+    pub const MaxOwnedCards: u32 = 5_000;
+    pub const BaseCardCapacity: u32 = 500;
+    pub const CardCapacityUpgradeAmount: u32 = 100;
+    pub const CardCapacityUpgradePrice: u128 = 100;
+    pub const CardCapacityUpgradePriceReceiver: u64 = 999;
     pub const PackPrice: u128 = 500;
     pub const PackPriceReceiver: u64 = 999;
     pub const ProPrice: u128 = 200;
@@ -178,8 +181,11 @@ impl pallet_eterra_slots::Config for Test {
     type MaxProSpins = MaxProSpins;
     type MaxAttempts = ConstU8<3>;
     type CardsPerPack = ConstU8<6>;
-    type MaxPacks = ConstU32<10>;
     type MaxOwnedCards = MaxOwnedCards;
+    type BaseCardCapacity = BaseCardCapacity;
+    type CardCapacityUpgradeAmount = CardCapacityUpgradeAmount;
+    type CardCapacityUpgradePrice = CardCapacityUpgradePrice;
+    type CardCapacityUpgradePriceReceiver = CardCapacityUpgradePriceReceiver;
     type MaxBorders = MaxBorders;
     type MaxBackgrounds = MaxBackgrounds;
     type MaxSubjects = MaxSubjects;

@@ -24,13 +24,20 @@ Use the deployment helper to keep local and CI command paths aligned:
 # Strict validation for a finalized production plain spec (expects real keys + bootnodes + sudo key)
 ./scripts/deploy.sh verify-production chain-specs/production-plain.json
 
+# Cross-stack smoke for a running local beta stack
+CHAIN_RPC_URL=http://127.0.0.1:9944 \
+MEDIA_BASE_URL=http://127.0.0.1:4000 \
+WEB_BASE_URL=http://127.0.0.1:3000 \
+CARD_ID=1 \
+./scripts/smoke-controlled-beta.sh
+
 # Finalize production plain/raw specs from generated baseline + overrides config
 cp chain-specs/production-keys.example.json chain-specs/production-keys.json
 # fills addresses from suris (supports "@/path/to/secret" entries)
 ./scripts/generate-production-overrides.py \
   --in chain-specs/production-keys.json \
   --out chain-specs/production-overrides.json
-# enforces a separate sudo key (not one of validator aura keys) by default
+# accepts either sudo_suri or sudo_address (use sudo_address for multisig owner control)
 ./scripts/deploy.sh finalize-production-spec production chain-specs/production-overrides.json
 # outputs: chain-specs/finalized/production/production-{plain,raw}.json
 
@@ -59,6 +66,20 @@ make help
 ```
 
 `scripts/run-node.sh` defaults to exposed RPC on `dev`/`testnet` (so dockerized services can connect; validator uses `--unsafe-rpc-external` per Substrate CLI rules) and local-only RPC on `production` unless explicitly overridden.
+
+Production override support now includes:
+
+- `sudo_address` for multisig owner control
+- `season_admin_suris` or `season_admin_addresses`
+- `media_collection_owner_suri` or `media_collection_owner_address`
+
+Strict production validation also checks that:
+
+- `eterraSeasons.admins` is non-empty
+- season admins are funded and not Alice/Bob placeholders
+- `eterraMedia.defaultCollectionOwner` is funded and not a dev placeholder
+
+For the operational release checklist, see `docs/beta-release-checklist.md`.
 
 Faucet policy: faucet claim sponsorship is only for zero-balance accounts (`dest == signer`), capped per on-chain window; claims are also cooldown-limited on-chain.
 

@@ -38,5 +38,10 @@
   "initial_servers": [
     "REPLACE_WITH_SERVER_ACCOUNT_1",
     "REPLACE_WITH_SERVER_ACCOUNT_2"
-  ]
+  ],
+  "season_admins": [
+    "REPLACE_WITH_SEASON_ADMIN_1",
+    "REPLACE_WITH_SEASON_ADMIN_2"
+  ],
+  "media_collection_owner": "REPLACE_WITH_MEDIA_COLLECTION_OWNER"
 }

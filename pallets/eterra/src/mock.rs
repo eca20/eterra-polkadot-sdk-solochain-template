@@ -1,14 +1,17 @@
 use crate as pallet_eterra;
 use frame_support::{
     parameter_types,
-    traits::{ConstU16, ConstU32, Currency, Get},
+    traits::{ConstU128, ConstU16, ConstU32, ConstU64, Get},
 };
 use frame_system as system;
+use pallet_eterra_media;
 use pallet_assets;
 use pallet_balances;
 use pallet_eterra_gamer;
 use pallet_eterra_monte_carlo_ai as mc_ai;
+use pallet_eterra_seasons;
 use pallet_eterra_tcg;
+use pallet_nfts;
 use parity_scale_codec::{Decode, Encode}; 
 use scale_info::TypeInfo;
 use sp_core::H256; 
@@ -25,6 +28,9 @@ frame_support::construct_runtime!(
         Balances: pallet_balances,
         Assets: pallet_assets,
         Gamer: pallet_eterra_gamer,
+        EterraMedia: pallet_eterra_media,
+        EterraSeasons: pallet_eterra_seasons,
+        Nfts: pallet_nfts,
         Cards: pallet_eterra_tcg,
         Eterra: pallet_eterra,
         EterraMonteCarloAi: pallet_eterra_monte_carlo_ai,
@@ -56,8 +62,22 @@ parameter_types! {
     pub const MaxProSpinsConst: u8 = 5;
     pub const MaxAttemptsConst: u8 = 3;
     pub const CardsPerPackConst: u8 = 6;
-    pub const MaxPacksConst: u32 = 10;
     pub const MaxOwnedCardsConst: u32 = 1024;
+    pub const BaseCardCapacityConst: u32 = 500;
+    pub const CardCapacityUpgradeAmountConst: u32 = 100;
+    pub const CardCapacityUpgradePriceConst: u128 = 100;
+    pub const CardCapacityUpgradePriceReceiverConst: u64 = 999;
+    pub const MaxBordersConst: u32 = 32;
+    pub const MaxBackgroundsConst: u32 = 32;
+    pub const MaxSubjectsConst: u32 = 128;
+    pub const MaxMediaUriLen: u32 = 256;
+    pub const MaxMediaContentTypeLen: u32 = 64;
+    pub const MaxMediaNameLen: u32 = 64;
+    pub const MaxMediaDescriptionLen: u32 = 256;
+    pub const MaxMediaRolesPerAccount: u32 = 8;
+    pub const DefaultMediaCollectionId: u32 = 0;
+    pub const MaxSeasonNameLen: u32 = 64;
+    pub const MaxSeasonDescLen: u32 = 256;
 }
 
 pub struct MockHandChecker;
@@ -169,6 +189,60 @@ impl pallet_assets::Config for Test {
     type RemoveItemsLimit = ConstU32<1_000>;
 }
 
+parameter_types! {
+    pub NftsFeatures: pallet_nfts::PalletFeatures = pallet_nfts::PalletFeatures::all_enabled();
+}
+
+impl pallet_nfts::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type CollectionId = u32;
+    type ItemId = u32;
+    type Currency = Balances;
+    type ForceOrigin = frame_system::EnsureRoot<u64>;
+    type CreateOrigin =
+        frame_support::traits::AsEnsureOriginWithArg<frame_system::EnsureSigned<u64>>;
+    type Locker = ();
+    type CollectionDeposit = ConstU128<0>;
+    type ItemDeposit = ConstU128<0>;
+    type MetadataDepositBase = ConstU128<0>;
+    type AttributeDepositBase = ConstU128<0>;
+    type DepositPerByte = ConstU128<0>;
+    type StringLimit = ConstU32<256>;
+    type KeyLimit = ConstU32<64>;
+    type ValueLimit = ConstU32<256>;
+    type ApprovalsLimit = ConstU32<20>;
+    type ItemAttributesApprovalsLimit = ConstU32<20>;
+    type MaxTips = ConstU32<10>;
+    type MaxDeadlineDuration = ConstU64<100_000>;
+    type MaxAttributesPerCall = ConstU32<10>;
+    type Features = NftsFeatures;
+    type OffchainSignature = sp_runtime::testing::TestSignature;
+    type OffchainPublic = sp_runtime::testing::UintAuthorityId;
+    #[cfg(feature = "runtime-benchmarks")]
+    type Helper = ();
+    type WeightInfo = ();
+}
+
+impl pallet_eterra_seasons::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type AdminOrigin = frame_system::EnsureRoot<u64>;
+    type MaxSeasonNameLen = MaxSeasonNameLen;
+    type MaxSeasonDescLen = MaxSeasonDescLen;
+    type WeightInfo = ();
+}
+
+impl pallet_eterra_media::Config for Test {
+    type RuntimeEvent = RuntimeEvent;
+    type MaxUriLen = MaxMediaUriLen;
+    type MaxContentTypeLen = MaxMediaContentTypeLen;
+    type MaxNameLen = MaxMediaNameLen;
+    type MaxDescriptionLen = MaxMediaDescriptionLen;
+    type MaxRolesPerAccount = MaxMediaRolesPerAccount;
+    type DefaultCollectionId = DefaultMediaCollectionId;
+    type DefaultCollectionOwner = MintCardPriceReceiverConst;
+    type WeightInfo = ();
+}
+
 impl pallet_eterra_gamer::Config for Test {
     type Currency = Balances;
     type ExpIssuerOrigin = frame_system::EnsureRoot<u64>;
@@ -182,7 +256,7 @@ impl pallet_eterra_gamer::Config for Test {
 
 impl pallet_eterra_tcg::Config for Test {
     type RuntimeEvent = RuntimeEvent;
-    type Currency = Balances;
+    type PaymentCurrency = Balances;
     type HandChecker = MockHandChecker;
     type PackPrice = PackPriceConst;
     type PackPriceReceiver = PackPriceReceiverConst;
@@ -193,8 +267,14 @@ impl pallet_eterra_tcg::Config for Test {
     type MaxProSpins = MaxProSpinsConst;
     type MaxAttempts = MaxAttemptsConst;
     type CardsPerPack = CardsPerPackConst;
-    type MaxPacks = MaxPacksConst;
     type MaxOwnedCards = MaxOwnedCardsConst;
+    type BaseCardCapacity = BaseCardCapacityConst;
+    type CardCapacityUpgradeAmount = CardCapacityUpgradeAmountConst;
+    type CardCapacityUpgradePrice = CardCapacityUpgradePriceConst;
+    type CardCapacityUpgradePriceReceiver = CardCapacityUpgradePriceReceiverConst;
+    type MaxBorders = MaxBordersConst;
+    type MaxBackgrounds = MaxBackgroundsConst;
+    type MaxSubjects = MaxSubjectsConst;
     type WeightInfo = ();
 }
 
@@ -283,17 +363,36 @@ impl mc_ai::pallet::Config for Test {
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
-    let t = frame_system::GenesisConfig::<Test>::default() // Explicit type annotation
+    let mut storage = frame_system::GenesisConfig::<Test>::default()
         .build_storage()
         .unwrap();
 
-    let mut ext = sp_io::TestExternalities::from(t);
+    pallet_balances::GenesisConfig::<Test> {
+        balances: vec![(1, 1 * UNIT), (2, 1 * UNIT), (999, 1 * UNIT)],
+    }
+    .assimilate_storage(&mut storage)
+    .expect("balances genesis assimilates");
+
+    pallet_eterra_seasons::GenesisConfig::<Test> {
+        admins: vec![1],
+        initial_draft_season: None,
+        initial_active_season: None,
+    }
+    .assimilate_storage(&mut storage)
+    .expect("seasons genesis assimilates");
+
+    pallet_eterra_media::GenesisConfig::<Test> {
+        create_default_collection: true,
+        default_collection_name: b"Default".to_vec(),
+        default_collection_description: b"Default".to_vec(),
+        default_collection_owner: Some(1),
+    }
+    .assimilate_storage(&mut storage)
+    .expect("media genesis assimilates");
+
+    let mut ext = sp_io::TestExternalities::from(storage);
     ext.execute_with(|| {
         System::set_block_number(1); // Reset block number
-                                     // fund some accounts
-        let _ = <Balances as Currency<u64>>::deposit_creating(&1u64, 1 * UNIT);
-        let _ = <Balances as Currency<u64>>::deposit_creating(&2u64, 1 * UNIT);
-        let _ = <Balances as Currency<u64>>::deposit_creating(&999u64, 1 * UNIT);
 
         // Create devCOIN (asset 1) and betaCOIN (asset 2) for reward tests.
         let _ = Assets::force_create(
@@ -310,6 +409,71 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
             false,
             1u128,
         );
+
+        let name: frame_support::BoundedVec<u8, MaxSeasonNameLen> = b"S1".to_vec().try_into().unwrap();
+        let desc: frame_support::BoundedVec<u8, MaxSeasonDescLen> = b"D1".to_vec().try_into().unwrap();
+        pallet_eterra_seasons::Pallet::<Test>::create_season(RuntimeOrigin::signed(1), name, desc)
+            .expect("create season");
+
+        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> = b"ipfs://b".to_vec().try_into().unwrap();
+        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+        pallet_eterra_media::Pallet::<Test>::register_media(
+            RuntimeOrigin::signed(1),
+            None,
+            uri.clone(),
+            ct.clone(),
+            pallet_eterra_media::MediaClass::CoreAsset,
+            pallet_eterra_media::Delivery::RemoteIpfs,
+            None,
+        )
+        .expect("register border");
+        pallet_eterra_media::Pallet::<Test>::register_media(
+            RuntimeOrigin::signed(1),
+            None,
+            uri.clone(),
+            ct.clone(),
+            pallet_eterra_media::MediaClass::CoreAsset,
+            pallet_eterra_media::Delivery::RemoteIpfs,
+            None,
+        )
+        .expect("register background");
+        pallet_eterra_media::Pallet::<Test>::register_media(
+            RuntimeOrigin::signed(1),
+            None,
+            uri,
+            ct,
+            pallet_eterra_media::MediaClass::CoreAsset,
+            pallet_eterra_media::Delivery::RemoteIpfs,
+            None,
+        )
+        .expect("register subject");
+
+        pallet_eterra_tcg::Pallet::<Test>::add_season_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            pallet_eterra_tcg::AssetKind::Border,
+            0,
+        )
+        .expect("add border asset");
+        pallet_eterra_tcg::Pallet::<Test>::add_season_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            pallet_eterra_tcg::AssetKind::Background,
+            1,
+        )
+        .expect("add background asset");
+        pallet_eterra_tcg::Pallet::<Test>::add_season_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            pallet_eterra_tcg::AssetKind::Subject,
+            2,
+        )
+        .expect("add subject asset");
+
+        pallet_eterra_seasons::Pallet::<Test>::activate_season(RuntimeOrigin::signed(1), 1)
+            .expect("activate season");
+
+        System::reset_events();
     });
     ext
 }
