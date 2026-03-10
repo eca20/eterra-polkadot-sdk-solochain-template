@@ -650,6 +650,8 @@ impl pallet_eterra_tcg::Config for Runtime {
     type MaxBorders = ConstU32<32>;
     type MaxBackgrounds = ConstU32<32>;
     type MaxSubjects = ConstU32<128>;
+    type MaxSeasonCollections = ConstU32<32>;
+    type MaxSeasonCollectionNameLen = ConstU32<64>;
     type WeightInfo = pallet_eterra_tcg::weights::SubstrateWeight<Runtime>;
 }
 

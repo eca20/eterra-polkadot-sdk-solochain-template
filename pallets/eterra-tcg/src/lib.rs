@@ -28,6 +28,7 @@ use sp_std::prelude::*;
 
 pub type MediaId = pallet_eterra_media::MediaId;
 pub type SeasonId = pallet_eterra_seasons::SeasonId;
+pub type SeasonCollectionId = u32;
 
 /// Provides a runtime-defined view of whether a given `card_id` is currently included
 /// in `owner`'s configured "current hand".
@@ -79,6 +80,20 @@ pub struct CardArtworkInfo {
     pub subject_media_id: MediaId,
 }
 
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum SeasonCollectionStatus {
+    Draft,
+    Published,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct SeasonCollectionInfo<BName, BlockNumber> {
+    pub name: BName,
+    pub status: SeasonCollectionStatus,
+    pub created_at: BlockNumber,
+    pub published_at: Option<BlockNumber>,
+}
+
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
@@ -88,7 +103,7 @@ pub mod pallet {
     use frame_system::pallet_prelude::BlockNumberFor;
     use sp_runtime::traits::StaticLookup;
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(4);
     const ESCROW_PALLET_ID: PalletId = PalletId(*b"et/tcgsc");
 
     /// Balance type bound to the runtime currency.
@@ -98,8 +113,14 @@ pub mod pallet {
     type BoundedBorders<T> = BoundedVec<MediaId, <T as Config>::MaxBorders>;
     type BoundedBackgrounds<T> = BoundedVec<MediaId, <T as Config>::MaxBackgrounds>;
     type BoundedSubjects<T> = BoundedVec<MediaId, <T as Config>::MaxSubjects>;
+    type BoundedSeasonCollectionName<T> =
+        BoundedVec<u8, <T as Config>::MaxSeasonCollectionNameLen>;
+    type BoundedSeasonCollectionIds<T> =
+        BoundedVec<SeasonCollectionId, <T as Config>::MaxSeasonCollections>;
     type SeasonAssetsInfoOf<T> =
         SeasonAssetsInfo<BoundedBorders<T>, BoundedBackgrounds<T>, BoundedSubjects<T>>;
+    type SeasonCollectionInfoOf<T> =
+        SeasonCollectionInfo<BoundedSeasonCollectionName<T>, BlockNumberFor<T>>;
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -208,6 +229,14 @@ pub mod pallet {
         #[pallet::constant]
         type MaxSubjects: Get<u32>;
 
+        /// Maximum number of art collections per season.
+        #[pallet::constant]
+        type MaxSeasonCollections: Get<u32>;
+
+        /// Maximum byte length of a season art collection name.
+        #[pallet::constant]
+        type MaxSeasonCollectionNameLen: Get<u32>;
+
         /// Weight information for this pallet's extrinsics.
         type WeightInfo: WeightInfo;
     }
@@ -282,17 +311,55 @@ pub mod pallet {
     pub type Cards<T: Config> =
         StorageMap<_, Blake2_128Concat, u32, CardInfo<T::AccountId>, OptionQuery>;
 
-    /// Season-scoped lists of available artwork layer MediaIds.
+    /// Ordered collection ids for each season.
     #[pallet::storage]
-    #[pallet::getter(fn season_assets)]
-    pub type SeasonAssets<T: Config> =
-        StorageMap<_, Blake2_128Concat, SeasonId, SeasonAssetsInfoOf<T>, ValueQuery>;
+    #[pallet::getter(fn season_collection_ids)]
+    pub type SeasonCollectionIds<T: Config> =
+        StorageMap<_, Blake2_128Concat, SeasonId, BoundedSeasonCollectionIds<T>, ValueQuery>;
+
+    /// Next collection id to use for a given season.
+    #[pallet::storage]
+    #[pallet::getter(fn next_season_collection_id)]
+    pub type NextSeasonCollectionId<T: Config> =
+        StorageMap<_, Blake2_128Concat, SeasonId, SeasonCollectionId, ValueQuery>;
+
+    /// Season-scoped collection metadata.
+    #[pallet::storage]
+    #[pallet::getter(fn season_collections)]
+    pub type SeasonCollections<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        SeasonId,
+        Blake2_128Concat,
+        SeasonCollectionId,
+        SeasonCollectionInfoOf<T>,
+        OptionQuery,
+    >;
+
+    /// Artwork assets contained within a season collection.
+    #[pallet::storage]
+    #[pallet::getter(fn season_collection_assets)]
+    pub type SeasonCollectionAssets<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        SeasonId,
+        Blake2_128Concat,
+        SeasonCollectionId,
+        SeasonAssetsInfoOf<T>,
+        ValueQuery,
+    >;
 
     /// Immutable assigned artwork for each card: `card_id => CardArtworkInfo`.
     #[pallet::storage]
     #[pallet::getter(fn card_artwork)]
     pub type CardArtwork<T: Config> =
         StorageMap<_, Blake2_128Concat, u32, CardArtworkInfo, OptionQuery>;
+
+    /// The season collection used to assign artwork for a card, when applicable.
+    #[pallet::storage]
+    #[pallet::getter(fn card_artwork_collection_id)]
+    pub type CardArtworkCollectionId<T: Config> =
+        StorageMap<_, Blake2_128Concat, u32, SeasonCollectionId, OptionQuery>;
 
     /// The NFT collection ID used for converted cards (single collection).
     #[pallet::storage]
@@ -419,17 +486,43 @@ pub mod pallet {
             card_id: u32,
             price: BalanceOf<T>,
         },
-        /// A seasonal artwork layer was added.
-        SeasonAssetAdded {
+        /// A new season art collection was created.
+        SeasonCollectionCreated {
             season_id: SeasonId,
+            collection_id: SeasonCollectionId,
+        },
+        /// A season art collection was published and became mint-eligible.
+        SeasonCollectionPublished {
+            season_id: SeasonId,
+            collection_id: SeasonCollectionId,
+        },
+        /// A draft season art collection was removed.
+        SeasonCollectionRemoved {
+            season_id: SeasonId,
+            collection_id: SeasonCollectionId,
+        },
+        /// A collection-scoped seasonal artwork layer was added.
+        SeasonCollectionAssetAdded {
+            season_id: SeasonId,
+            collection_id: SeasonCollectionId,
             kind: AssetKind,
             media_id: MediaId,
         },
-        /// A seasonal artwork layer was removed.
-        SeasonAssetRemoved {
+        /// A collection-scoped seasonal artwork layer was removed.
+        SeasonCollectionAssetRemoved {
             season_id: SeasonId,
+            collection_id: SeasonCollectionId,
             kind: AssetKind,
             media_id: MediaId,
+        },
+        /// A collection-scoped seasonal artwork layer was moved within its list.
+        SeasonCollectionAssetMoved {
+            season_id: SeasonId,
+            collection_id: SeasonCollectionId,
+            kind: AssetKind,
+            media_id: MediaId,
+            old_index: u32,
+            new_index: u32,
         },
         /// The NFT collection used for converted cards was initialized.
         CardNftCollectionInitialized {
@@ -518,8 +611,16 @@ pub mod pallet {
         NotSeasonAdmin,
         /// Season does not exist in the seasons pallet.
         UnknownSeason,
-        /// Season is not in Draft status.
-        SeasonNotDraft,
+        /// Season is closed and can no longer accept new collections or assets.
+        SeasonClosed,
+        /// Season art collection does not exist.
+        UnknownSeasonCollection,
+        /// Season art collection is not in Draft status.
+        SeasonCollectionNotDraft,
+        /// Season art collection is already published.
+        SeasonCollectionAlreadyPublished,
+        /// Season art collection does not yet contain one of each required asset type.
+        SeasonCollectionIncomplete,
         /// MediaId not found in the media registry.
         UnknownMedia,
         /// MediaId is deprecated and cannot be used.
@@ -528,10 +629,12 @@ pub mod pallet {
         AssetListFull,
         /// The specified MediaId is not present in the seasonal asset list.
         AssetNotFound,
+        /// The specified seasonal asset index is outside the current list bounds.
+        AssetIndexOutOfBounds,
         /// No active season is currently set.
         NoActiveSeason,
-        /// One or more seasonal asset lists are empty.
-        SeasonAssetsEmpty,
+        /// The active season has no published collection with a complete art set.
+        NoPublishedSeasonCollection,
         /// Card artwork has not been assigned for this card.
         CardArtworkMissing,
         /// The card NFT collection has already been initialized.
@@ -964,25 +1067,145 @@ pub mod pallet {
             Ok(())
         }
 
-        /// Add a seasonal artwork layer (border/background/subject) by MediaId.
+        /// Create a new season-scoped art collection.
         ///
-        /// The season must exist and be in `Draft` status.
-        #[pallet::call_index(11)]
-        #[pallet::weight(<T as Config>::WeightInfo::add_season_asset())]
+        /// Collections may be created while the season is Draft or Active. They remain in Draft
+        /// until explicitly published, at which point they become eligible for minting.
+        #[pallet::call_index(19)]
+        #[pallet::weight(<T as Config>::WeightInfo::create_season_collection())]
         #[transactional]
-        pub fn add_season_asset(
+        pub fn create_season_collection(
             origin: OriginFor<T>,
             season_id: SeasonId,
+            name: BoundedSeasonCollectionName<T>,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_season_admin(&who)?;
+            Self::ensure_season_manageable(season_id)?;
+
+            let collection_id = NextSeasonCollectionId::<T>::get(season_id);
+            let next_collection_id = collection_id
+                .checked_add(1)
+                .ok_or(Error::<T>::AssetListFull)?;
+
+            SeasonCollectionIds::<T>::try_mutate(season_id, |ids| -> DispatchResult {
+                ids.try_push(collection_id)
+                    .map_err(|_| Error::<T>::AssetListFull)?;
+                Ok(())
+            })?;
+
+            SeasonCollections::<T>::insert(
+                season_id,
+                collection_id,
+                SeasonCollectionInfo {
+                    name,
+                    status: SeasonCollectionStatus::Draft,
+                    created_at: <frame_system::Pallet<T>>::block_number(),
+                    published_at: None,
+                },
+            );
+            SeasonCollectionAssets::<T>::insert(
+                season_id,
+                collection_id,
+                SeasonAssetsInfoOf::<T>::default(),
+            );
+            NextSeasonCollectionId::<T>::insert(season_id, next_collection_id);
+
+            Self::deposit_event(Event::SeasonCollectionCreated {
+                season_id,
+                collection_id,
+            });
+            Ok(())
+        }
+
+        /// Publish a fully-populated season art collection so minting can use it.
+        #[pallet::call_index(20)]
+        #[pallet::weight(<T as Config>::WeightInfo::publish_season_collection())]
+        #[transactional]
+        pub fn publish_season_collection(
+            origin: OriginFor<T>,
+            season_id: SeasonId,
+            collection_id: SeasonCollectionId,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_season_admin(&who)?;
+            Self::ensure_season_manageable(season_id)?;
+
+            let assets = SeasonCollectionAssets::<T>::get(season_id, collection_id);
+            Self::ensure_assets_non_empty(&assets)
+                .map_err(|_| Error::<T>::SeasonCollectionIncomplete)?;
+
+            SeasonCollections::<T>::try_mutate(
+                season_id,
+                collection_id,
+                |maybe_collection| -> DispatchResult {
+                    let collection = maybe_collection
+                        .as_mut()
+                        .ok_or(Error::<T>::UnknownSeasonCollection)?;
+                    ensure!(
+                        collection.status == SeasonCollectionStatus::Draft,
+                        Error::<T>::SeasonCollectionAlreadyPublished
+                    );
+                    collection.status = SeasonCollectionStatus::Published;
+                    collection.published_at = Some(<frame_system::Pallet<T>>::block_number());
+                    Ok(())
+                },
+            )?;
+
+            Self::deposit_event(Event::SeasonCollectionPublished {
+                season_id,
+                collection_id,
+            });
+            Ok(())
+        }
+
+        /// Remove a draft season art collection.
+        #[pallet::call_index(21)]
+        #[pallet::weight(<T as Config>::WeightInfo::remove_season_collection())]
+        #[transactional]
+        pub fn remove_season_collection(
+            origin: OriginFor<T>,
+            season_id: SeasonId,
+            collection_id: SeasonCollectionId,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_season_admin(&who)?;
+            Self::ensure_season_collection_draft(season_id, collection_id)?;
+
+            SeasonCollectionIds::<T>::mutate(season_id, |ids| {
+                if let Some(position) = ids.iter().position(|id| *id == collection_id) {
+                    ids.remove(position);
+                }
+            });
+            SeasonCollections::<T>::remove(season_id, collection_id);
+            SeasonCollectionAssets::<T>::remove(season_id, collection_id);
+
+            Self::deposit_event(Event::SeasonCollectionRemoved {
+                season_id,
+                collection_id,
+            });
+            Ok(())
+        }
+
+        /// Add an artwork layer to a draft season art collection.
+        #[pallet::call_index(22)]
+        #[pallet::weight(<T as Config>::WeightInfo::add_season_collection_asset())]
+        #[transactional]
+        pub fn add_season_collection_asset(
+            origin: OriginFor<T>,
+            season_id: SeasonId,
+            collection_id: SeasonCollectionId,
             kind: AssetKind,
             media_id: MediaId,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
             Self::ensure_season_admin(&who)?;
-            Self::ensure_season_draft(season_id)?;
+            Self::ensure_season_collection_draft(season_id, collection_id)?;
             Self::ensure_media_valid(media_id)?;
 
-            let inserted = SeasonAssets::<T>::try_mutate(
+            let inserted = SeasonCollectionAssets::<T>::try_mutate(
                 season_id,
+                collection_id,
                 |assets| -> Result<bool, DispatchError> {
                     match kind {
                         AssetKind::Border => {
@@ -1018,8 +1241,9 @@ pub mod pallet {
             )?;
 
             if inserted {
-                Self::deposit_event(Event::SeasonAssetAdded {
+                Self::deposit_event(Event::SeasonCollectionAssetAdded {
                     season_id,
+                    collection_id,
                     kind,
                     media_id,
                 });
@@ -1027,40 +1251,94 @@ pub mod pallet {
             Ok(())
         }
 
-        /// Remove a seasonal artwork layer by MediaId.
-        ///
-        /// The season must exist and be in `Draft` status.
-        #[pallet::call_index(12)]
-        #[pallet::weight(<T as Config>::WeightInfo::remove_season_asset())]
+        /// Remove an artwork layer from a draft season art collection.
+        #[pallet::call_index(23)]
+        #[pallet::weight(<T as Config>::WeightInfo::remove_season_collection_asset())]
         #[transactional]
-        pub fn remove_season_asset(
+        pub fn remove_season_collection_asset(
             origin: OriginFor<T>,
             season_id: SeasonId,
+            collection_id: SeasonCollectionId,
             kind: AssetKind,
             media_id: MediaId,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
             Self::ensure_season_admin(&who)?;
-            Self::ensure_season_draft(season_id)?;
+            Self::ensure_season_collection_draft(season_id, collection_id)?;
 
-            SeasonAssets::<T>::try_mutate(season_id, |assets| -> DispatchResult {
-                let removed = match kind {
-                    AssetKind::Border => Self::remove_asset_from_list(&mut assets.borders, media_id),
-                    AssetKind::Background => {
-                        Self::remove_asset_from_list(&mut assets.backgrounds, media_id)
-                    }
-                    AssetKind::Subject => {
-                        Self::remove_asset_from_list(&mut assets.subjects, media_id)
-                    }
-                };
-                ensure!(removed, Error::<T>::AssetNotFound);
-                Ok(())
-            })?;
-
-            Self::deposit_event(Event::SeasonAssetRemoved {
+            SeasonCollectionAssets::<T>::try_mutate(
                 season_id,
+                collection_id,
+                |assets| -> DispatchResult {
+                    let removed = match kind {
+                        AssetKind::Border => {
+                            Self::remove_asset_from_list(&mut assets.borders, media_id)
+                        }
+                        AssetKind::Background => {
+                            Self::remove_asset_from_list(&mut assets.backgrounds, media_id)
+                        }
+                        AssetKind::Subject => {
+                            Self::remove_asset_from_list(&mut assets.subjects, media_id)
+                        }
+                    };
+                    ensure!(removed, Error::<T>::AssetNotFound);
+                    Ok(())
+                },
+            )?;
+
+            Self::deposit_event(Event::SeasonCollectionAssetRemoved {
+                season_id,
+                collection_id,
                 kind,
                 media_id,
+            });
+            Ok(())
+        }
+
+        /// Reorder an artwork layer inside a draft season art collection.
+        #[pallet::call_index(24)]
+        #[pallet::weight(<T as Config>::WeightInfo::move_season_collection_asset())]
+        #[transactional]
+        pub fn move_season_collection_asset(
+            origin: OriginFor<T>,
+            season_id: SeasonId,
+            collection_id: SeasonCollectionId,
+            kind: AssetKind,
+            media_id: MediaId,
+            new_index: u32,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_season_admin(&who)?;
+            Self::ensure_season_collection_draft(season_id, collection_id)?;
+
+            let (old_index, bounded_new_index) = SeasonCollectionAssets::<T>::try_mutate(
+                season_id,
+                collection_id,
+                |assets| -> Result<(u32, u32), DispatchError> {
+                    let (old_index, bounded_new_index) = match kind {
+                        AssetKind::Border => {
+                            Self::move_asset_within_list(&mut assets.borders, media_id, new_index)?
+                        }
+                        AssetKind::Background => Self::move_asset_within_list(
+                            &mut assets.backgrounds,
+                            media_id,
+                            new_index,
+                        )?,
+                        AssetKind::Subject => {
+                            Self::move_asset_within_list(&mut assets.subjects, media_id, new_index)?
+                        }
+                    };
+                    Ok((old_index, bounded_new_index))
+                },
+            )?;
+
+            Self::deposit_event(Event::SeasonCollectionAssetMoved {
+                season_id,
+                collection_id,
+                kind,
+                media_id,
+                old_index,
+                new_index: bounded_new_index,
             });
             Ok(())
         }
@@ -1097,40 +1375,6 @@ pub mod pallet {
                 new_capacity,
                 price_paid: price,
             });
-            Ok(())
-        }
-
-        /// Assign seasonal artwork to previously-minted legacy cards that do not yet have
-        /// `CardArtwork` set.
-        ///
-        /// Uses a separate hash domain to avoid matching the mint-time assignment.
-        #[pallet::call_index(14)]
-        #[pallet::weight(<T as Config>::WeightInfo::backfill_card_artwork())]
-        #[transactional]
-        pub fn backfill_card_artwork(
-            origin: OriginFor<T>,
-            start_card_id: u32,
-            limit: u32,
-            season_id: SeasonId,
-        ) -> DispatchResult {
-            let who = ensure_signed(origin)?;
-            Self::ensure_season_admin(&who)?;
-            Self::ensure_season_exists(season_id)?;
-
-            // Ensure this season has renderable assets.
-            let assets = SeasonAssets::<T>::get(season_id);
-            Self::ensure_assets_non_empty(&assets)?;
-
-            let end = start_card_id.saturating_add(limit);
-            for card_id in start_card_id..end {
-                if Cards::<T>::contains_key(card_id) && !CardArtwork::<T>::contains_key(card_id) {
-                    Self::assign_artwork_for_card(
-                        card_id,
-                        season_id,
-                        b"eterra-tcg/art-backfill",
-                    )?;
-                }
-            }
             Ok(())
         }
 
@@ -1313,20 +1557,26 @@ pub mod pallet {
             Ok(())
         }
 
-        fn ensure_season_exists(season_id: SeasonId) -> DispatchResult {
+        fn ensure_season_manageable(season_id: SeasonId) -> DispatchResult {
+            let season =
+                pallet_eterra_seasons::Seasons::<T>::get(season_id).ok_or(Error::<T>::UnknownSeason)?;
             ensure!(
-                pallet_eterra_seasons::Seasons::<T>::contains_key(season_id),
-                Error::<T>::UnknownSeason
+                season.status != pallet_eterra_seasons::SeasonStatus::Closed,
+                Error::<T>::SeasonClosed
             );
             Ok(())
         }
 
-        fn ensure_season_draft(season_id: SeasonId) -> DispatchResult {
-            let season =
-                pallet_eterra_seasons::Seasons::<T>::get(season_id).ok_or(Error::<T>::UnknownSeason)?;
+        fn ensure_season_collection_draft(
+            season_id: SeasonId,
+            collection_id: SeasonCollectionId,
+        ) -> DispatchResult {
+            Self::ensure_season_manageable(season_id)?;
+            let collection = SeasonCollections::<T>::get(season_id, collection_id)
+                .ok_or(Error::<T>::UnknownSeasonCollection)?;
             ensure!(
-                season.status == pallet_eterra_seasons::SeasonStatus::Draft,
-                Error::<T>::SeasonNotDraft
+                collection.status == SeasonCollectionStatus::Draft,
+                Error::<T>::SeasonCollectionNotDraft
             );
             Ok(())
         }
@@ -1343,7 +1593,7 @@ pub mod pallet {
                 !assets.borders.is_empty()
                     && !assets.backgrounds.is_empty()
                     && !assets.subjects.is_empty(),
-                Error::<T>::SeasonAssetsEmpty
+                Error::<T>::NoPublishedSeasonCollection
             );
             Ok(())
         }
@@ -1359,6 +1609,52 @@ pub mod pallet {
             false
         }
 
+        fn move_asset_within_list<ListLen: Get<u32>>(
+            list: &mut BoundedVec<MediaId, ListLen>,
+            media_id: MediaId,
+            new_index: u32,
+        ) -> Result<(u32, u32), DispatchError> {
+            ensure!(
+                (new_index as usize) < list.len(),
+                Error::<T>::AssetIndexOutOfBounds
+            );
+            let old_index = list
+                .iter()
+                .position(|&id| id == media_id)
+                .ok_or(Error::<T>::AssetNotFound)? as u32;
+
+            if new_index == old_index {
+                return Ok((old_index, new_index));
+            }
+
+            let mut reordered: Vec<MediaId> = list.iter().copied().collect();
+            let value = reordered.remove(old_index as usize);
+            let insert_at = new_index as usize;
+            ensure!(insert_at <= reordered.len(), Error::<T>::AssetIndexOutOfBounds);
+            reordered.insert(insert_at, value);
+            *list = reordered
+                .try_into()
+                .map_err(|_| Error::<T>::AssetListFull)?;
+
+            Ok((old_index, new_index))
+        }
+
+        fn published_collection_ids(season_id: SeasonId) -> Vec<SeasonCollectionId> {
+            SeasonCollectionIds::<T>::get(season_id)
+                .into_iter()
+                .filter(|collection_id| {
+                    matches!(
+                        SeasonCollections::<T>::get(season_id, *collection_id)
+                            .map(|collection| collection.status),
+                        Some(SeasonCollectionStatus::Published)
+                    ) && Self::ensure_assets_non_empty(
+                        &SeasonCollectionAssets::<T>::get(season_id, *collection_id),
+                    )
+                    .is_ok()
+                })
+                .collect()
+        }
+
         fn assign_artwork_from_active_season(card_id: u32) -> DispatchResult {
             let season_id = pallet_eterra_seasons::ActiveSeasonId::<T>::get()
                 .ok_or(Error::<T>::NoActiveSeason)?;
@@ -1370,9 +1666,6 @@ pub mod pallet {
             season_id: SeasonId,
             domain: &'static [u8],
         ) -> DispatchResult {
-            let assets = SeasonAssets::<T>::get(season_id);
-            Self::ensure_assets_non_empty(&assets)?;
-
             let parent_hash = <frame_system::Pallet<T>>::parent_hash();
             let ext_index = <frame_system::Pallet<T>>::extrinsic_index().unwrap_or(0);
             let now = <frame_system::Pallet<T>>::block_number();
@@ -1380,6 +1673,17 @@ pub mod pallet {
             let subject = (domain, season_id, card_id, now, parent_hash, ext_index).encode();
             let hash = T::Hashing::hash(&subject);
             let bytes = hash.as_ref();
+
+            let published_collections = Self::published_collection_ids(season_id);
+            ensure!(
+                !published_collections.is_empty(),
+                Error::<T>::NoPublishedSeasonCollection
+            );
+            let collection_ix =
+                (bytes.get(3).copied().unwrap_or(0) as usize) % published_collections.len();
+            let collection_id = published_collections[collection_ix];
+            let assets = SeasonCollectionAssets::<T>::get(season_id, collection_id);
+            Self::ensure_assets_non_empty(&assets)?;
 
             let border_ix = (bytes.get(0).copied().unwrap_or(0) as usize) % assets.borders.len();
             let bg_ix = (bytes.get(1).copied().unwrap_or(0) as usize) % assets.backgrounds.len();
@@ -1407,6 +1711,7 @@ pub mod pallet {
                     subject_media_id,
                 },
             );
+            CardArtworkCollectionId::<T>::insert(card_id, collection_id);
             Ok(())
         }
 

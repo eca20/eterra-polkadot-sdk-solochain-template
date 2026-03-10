@@ -45,6 +45,10 @@ cp chain-specs/production-keys.example.json chain-specs/production-keys.json
 ./scripts/run-node.sh default testnet release validator
 ./scripts/run-node.sh production production release full
 
+# Reset local dev state (chain base-path + media/IPFS docker volumes)
+./scripts/reset-local-dev-stack.sh --yes
+./scripts/reset-local-dev-stack.sh --yes --media-only --restart-media
+
 # Start a production validator (requires non-dev key suris)
 AURA_SURI="<sr25519_suri>" GRAN_SURI="<ed25519_suri>" \
   ./scripts/run-node.sh production production release validator
@@ -62,10 +66,13 @@ make deploy-generate-production-overrides-production
 make deploy-finalize-production-production PROD_CONFIG=chain-specs/production-overrides.json
 make run-default-testnet
 make run-production
+make reset-local-dev RESET_ARGS="--yes --restart-media"
 make help
 ```
 
 `scripts/run-node.sh` defaults to exposed RPC on `dev`/`testnet` (so dockerized services can connect; validator uses `--unsafe-rpc-external` per Substrate CLI rules) and local-only RPC on `production` unless explicitly overridden.
+
+`scripts/reset-local-dev-stack.sh` is intentionally destructive and requires `--yes`. By default it removes the local node base-path for `MODE=default CHAIN=dev ROLE=validator` and runs `docker compose down --volumes` for the sibling `eterra-ipfs-media-service` repo. Use `--media-only`, `--chain-only`, or `--restart-media` to narrow or streamline the reset flow.
 
 Production override support now includes:
 

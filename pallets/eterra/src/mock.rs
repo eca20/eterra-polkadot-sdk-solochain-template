@@ -70,6 +70,8 @@ parameter_types! {
     pub const MaxBordersConst: u32 = 32;
     pub const MaxBackgroundsConst: u32 = 32;
     pub const MaxSubjectsConst: u32 = 128;
+    pub const MaxSeasonCollectionsConst: u32 = 32;
+    pub const MaxSeasonCollectionNameLenConst: u32 = 64;
     pub const MaxMediaUriLen: u32 = 256;
     pub const MaxMediaContentTypeLen: u32 = 64;
     pub const MaxMediaNameLen: u32 = 64;
@@ -275,6 +277,8 @@ impl pallet_eterra_tcg::Config for Test {
     type MaxBorders = MaxBordersConst;
     type MaxBackgrounds = MaxBackgroundsConst;
     type MaxSubjects = MaxSubjectsConst;
+    type MaxSeasonCollections = MaxSeasonCollectionsConst;
+    type MaxSeasonCollectionNameLen = MaxSeasonCollectionNameLenConst;
     type WeightInfo = ();
 }
 
@@ -448,27 +452,44 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
         )
         .expect("register subject");
 
-        pallet_eterra_tcg::Pallet::<Test>::add_season_asset(
+        let collection_name: frame_support::BoundedVec<u8, MaxSeasonCollectionNameLenConst> =
+            b"Core Set".to_vec().try_into().unwrap();
+        pallet_eterra_tcg::Pallet::<Test>::create_season_collection(
             RuntimeOrigin::signed(1),
             1,
+            collection_name,
+        )
+        .expect("create season collection");
+        pallet_eterra_tcg::Pallet::<Test>::add_season_collection_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            0,
             pallet_eterra_tcg::AssetKind::Border,
             0,
         )
         .expect("add border asset");
-        pallet_eterra_tcg::Pallet::<Test>::add_season_asset(
+        pallet_eterra_tcg::Pallet::<Test>::add_season_collection_asset(
             RuntimeOrigin::signed(1),
             1,
+            0,
             pallet_eterra_tcg::AssetKind::Background,
             1,
         )
         .expect("add background asset");
-        pallet_eterra_tcg::Pallet::<Test>::add_season_asset(
+        pallet_eterra_tcg::Pallet::<Test>::add_season_collection_asset(
             RuntimeOrigin::signed(1),
             1,
+            0,
             pallet_eterra_tcg::AssetKind::Subject,
             2,
         )
         .expect("add subject asset");
+        pallet_eterra_tcg::Pallet::<Test>::publish_season_collection(
+            RuntimeOrigin::signed(1),
+            1,
+            0,
+        )
+        .expect("publish season collection");
 
         pallet_eterra_seasons::Pallet::<Test>::activate_season(RuntimeOrigin::signed(1), 1)
             .expect("activate season");

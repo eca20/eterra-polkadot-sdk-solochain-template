@@ -16,7 +16,7 @@ NODE_BIN ?= ./target/debug/solochain-eterra-node
 	deploy-check-default deploy-check-production \
 	deploy-specs-default deploy-specs-production deploy-generate-production-overrides-production deploy-finalize-production-default deploy-finalize-production-production deploy-try-runtime-default deploy-try-runtime-production \
 	deploy-verify-default deploy-verify-generated-production deploy-verify-production-path \
-	run-node run-default-testnet run-production
+	run-node run-default-testnet run-production reset-local-dev
 
 help:
 	@echo "Available targets:"
@@ -30,6 +30,7 @@ help:
 	@echo "  make deploy-smoke MODE=<default|production> OUT_DIR=<path>"
 	@echo "  make deploy-check MODE=<default|production>"
 	@echo "  make run-node MODE=<default|production> CHAIN=<dev|testnet|production> PROFILE=<debug|release> ROLE=<validator|full>"
+	@echo "  make reset-local-dev RESET_ARGS=\"--yes [--media-only|--chain-only] [--restart-media]\""
 	@echo ""
 	@echo "Shortcuts:"
 	@echo "  make deploy-check-default"
@@ -118,3 +119,6 @@ run-default-testnet:
 
 run-production:
 	$(MAKE) run-node MODE=production CHAIN=production PROFILE=release
+
+reset-local-dev:
+	./scripts/reset-local-dev-stack.sh $(RESET_ARGS)

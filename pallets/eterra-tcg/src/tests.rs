@@ -1,8 +1,9 @@
 use crate::pallet::Config as EterraSlotsConfig;
 use crate::{
-    mock::*, ActiveCard, CardArtwork, CardArtworkInfo, CardCapacityBonus, CardPrices, Cards,
-    CardsByOwner, Error, Event, ListedByOwner, NextCardId, PackCardInProgress, PackInProgress,
-    PlayerPacks,
+    mock::*, ActiveCard, CardArtworkCollectionId,
+    CardCapacityBonus, CardPrices, Cards, CardsByOwner, Error, Event, ListedByOwner, NextCardId,
+    PackCardInProgress, PackInProgress, PlayerPacks, SeasonCollectionIds, SeasonCollections,
+    SeasonCollectionStatus,
 };
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok, BoundedBTreeSet, BoundedVec};
@@ -104,23 +105,30 @@ fn mint_fails_without_active_season() {
 }
 
 #[test]
-fn mint_fails_when_active_season_assets_empty() {
+fn mint_fails_when_active_season_has_no_published_collection() {
     new_test_ext().execute_with(|| {
         let player = 2u64;
 
-        // Create and activate a fresh season without adding any assets.
         let name: BoundedVec<u8, MaxSeasonNameLen> = b"S2".to_vec().try_into().unwrap();
         let desc: BoundedVec<u8, MaxSeasonDescLen> = b"D2".to_vec().try_into().unwrap();
+        let collection_name: BoundedVec<u8, MaxSeasonCollectionNameLen> =
+            b"DraftOnly".to_vec().try_into().unwrap();
+
         assert_ok!(EterraSeasons::create_season(
             RuntimeOrigin::signed(1),
             name,
             desc
         ));
+        assert_ok!(EterraSlots::create_season_collection(
+            RuntimeOrigin::signed(1),
+            2,
+            collection_name
+        ));
         assert_ok!(EterraSeasons::activate_season(RuntimeOrigin::signed(1), 2));
 
         assert_noop!(
             EterraSlots::mint_card(RuntimeOrigin::signed(player)),
-            Error::<Test>::SeasonAssetsEmpty
+            Error::<Test>::NoPublishedSeasonCollection
         );
     });
 }
@@ -142,67 +150,300 @@ fn mint_card_writes_card_artwork() {
 }
 
 #[test]
-fn backfill_only_sets_missing_artwork() {
+fn publish_season_collection_requires_complete_art_set() {
     new_test_ext().execute_with(|| {
-        let player = 2u64;
-
-        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(player))); // card 0
-        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(player))); // card 1
-
-        // Overwrite card 0 with a sentinel so we can detect unintended changes.
-        CardArtwork::<Test>::insert(
-            0,
-            CardArtworkInfo {
-                season_id: 99,
-                border_media_id: 777,
-                background_media_id: 778,
-                subject_media_id: 779,
-            },
-        );
-
-        // Simulate a legacy card missing artwork.
-        CardArtwork::<Test>::remove(1);
-
-        assert_ok!(EterraSlots::backfill_card_artwork(
-            RuntimeOrigin::signed(1),
-            0,
-            10,
-            1
-        ));
-
-        let art0 = EterraSlots::card_artwork(0).expect("artwork exists");
-        assert_eq!(art0.season_id, 99);
-
-        let art1 = EterraSlots::card_artwork(1).expect("artwork backfilled");
-        assert_eq!(art1.season_id, 1);
-        assert_eq!(art1.border_media_id, 0);
-        assert_eq!(art1.background_media_id, 1);
-        assert_eq!(art1.subject_media_id, 2);
-    });
-}
-
-#[test]
-fn season_assets_cannot_be_modified_once_active() {
-    new_test_ext().execute_with(|| {
-        // Create season 2 and activate it immediately.
         let name: BoundedVec<u8, MaxSeasonNameLen> = b"S2".to_vec().try_into().unwrap();
         let desc: BoundedVec<u8, MaxSeasonDescLen> = b"D2".to_vec().try_into().unwrap();
+        let collection_name: BoundedVec<u8, MaxSeasonCollectionNameLen> =
+            b"Core".to_vec().try_into().unwrap();
+
         assert_ok!(EterraSeasons::create_season(
             RuntimeOrigin::signed(1),
             name,
             desc
         ));
-        assert_ok!(EterraSeasons::activate_season(RuntimeOrigin::signed(1), 2));
+        assert_ok!(EterraSlots::create_season_collection(
+            RuntimeOrigin::signed(1),
+            2,
+            collection_name
+        ));
 
         assert_noop!(
-            EterraSlots::add_season_asset(
+            EterraSlots::publish_season_collection(RuntimeOrigin::signed(1), 2, 0),
+            Error::<Test>::SeasonCollectionIncomplete
+        );
+    });
+}
+
+#[test]
+fn published_season_collection_is_used_for_minting() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let name: BoundedVec<u8, MaxSeasonNameLen> = b"S2".to_vec().try_into().unwrap();
+        let desc: BoundedVec<u8, MaxSeasonDescLen> = b"D2".to_vec().try_into().unwrap();
+        let collection_name: BoundedVec<u8, MaxSeasonCollectionNameLen> =
+            b"Core".to_vec().try_into().unwrap();
+        let ct: BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+
+        assert_ok!(EterraSeasons::create_season(
+            RuntimeOrigin::signed(1),
+            name,
+            desc
+        ));
+
+        for suffix in [b"border".as_slice(), b"background".as_slice(), b"subject".as_slice()] {
+            let mut uri_bytes = b"ipfs://season2-".to_vec();
+            uri_bytes.extend_from_slice(suffix);
+            let uri: BoundedVec<u8, MaxMediaUriLen> = uri_bytes.try_into().unwrap();
+            assert_ok!(EterraMedia::register_media(
+                RuntimeOrigin::signed(1),
+                None,
+                uri,
+                ct.clone(),
+                pallet_eterra_media::MediaClass::CoreAsset,
+                pallet_eterra_media::Delivery::RemoteIpfs,
+                None,
+            ));
+        }
+
+        assert_ok!(EterraSlots::create_season_collection(
+            RuntimeOrigin::signed(1),
+            2,
+            collection_name
+        ));
+        assert_ok!(EterraSlots::add_season_collection_asset(
+            RuntimeOrigin::signed(1),
+            2,
+            0,
+            crate::AssetKind::Border,
+            3
+        ));
+        assert_ok!(EterraSlots::add_season_collection_asset(
+            RuntimeOrigin::signed(1),
+            2,
+            0,
+            crate::AssetKind::Background,
+            4
+        ));
+        assert_ok!(EterraSlots::add_season_collection_asset(
+            RuntimeOrigin::signed(1),
+            2,
+            0,
+            crate::AssetKind::Subject,
+            5
+        ));
+        assert_ok!(EterraSlots::publish_season_collection(
+            RuntimeOrigin::signed(1),
+            2,
+            0
+        ));
+        assert_ok!(EterraSeasons::activate_season(RuntimeOrigin::signed(1), 2));
+
+        let card_id = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(player)));
+
+        let art = EterraSlots::card_artwork(card_id).expect("card artwork written");
+        assert_eq!(art.season_id, 2);
+        assert_eq!(art.border_media_id, 3);
+        assert_eq!(art.background_media_id, 4);
+        assert_eq!(art.subject_media_id, 5);
+        assert_eq!(CardArtworkCollectionId::<Test>::get(card_id), Some(0));
+    });
+}
+
+#[test]
+fn active_season_can_publish_new_collection_without_mutating_old_one() {
+    new_test_ext().execute_with(|| {
+        let name: BoundedVec<u8, MaxSeasonNameLen> = b"S2".to_vec().try_into().unwrap();
+        let desc: BoundedVec<u8, MaxSeasonDescLen> = b"D2".to_vec().try_into().unwrap();
+        let core_name: BoundedVec<u8, MaxSeasonCollectionNameLen> =
+            b"Core".to_vec().try_into().unwrap();
+        let ct: BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+
+        assert_ok!(EterraSeasons::create_season(
+            RuntimeOrigin::signed(1),
+            name,
+            desc
+        ));
+
+        for suffix in [
+            b"c-border".as_slice(),
+            b"c-background".as_slice(),
+            b"c-subject".as_slice(),
+            b"e-border".as_slice(),
+            b"e-background".as_slice(),
+            b"e-subject".as_slice(),
+        ] {
+            let mut uri_bytes = b"ipfs://season2-".to_vec();
+            uri_bytes.extend_from_slice(suffix);
+            let uri: BoundedVec<u8, MaxMediaUriLen> = uri_bytes.try_into().unwrap();
+            assert_ok!(EterraMedia::register_media(
+                RuntimeOrigin::signed(1),
+                None,
+                uri,
+                ct.clone(),
+                pallet_eterra_media::MediaClass::CoreAsset,
+                pallet_eterra_media::Delivery::RemoteIpfs,
+                None,
+            ));
+        }
+
+        assert_ok!(EterraSlots::create_season_collection(
+            RuntimeOrigin::signed(1),
+            2,
+            core_name
+        ));
+        for (kind, media_id) in [
+            (crate::AssetKind::Border, 3u64),
+            (crate::AssetKind::Background, 4u64),
+            (crate::AssetKind::Subject, 5u64),
+        ] {
+            assert_ok!(EterraSlots::add_season_collection_asset(
                 RuntimeOrigin::signed(1),
                 2,
-                crate::AssetKind::Border,
-                0
-            ),
-            Error::<Test>::SeasonNotDraft
+                0,
+                kind,
+                media_id
+            ));
+        }
+        assert_ok!(EterraSlots::publish_season_collection(
+            RuntimeOrigin::signed(1),
+            2,
+            0
+        ));
+        assert_ok!(EterraSeasons::activate_season(RuntimeOrigin::signed(1), 2));
+
+        let expansion_name: BoundedVec<u8, MaxSeasonCollectionNameLen> =
+            b"Expansion".to_vec().try_into().unwrap();
+        assert_ok!(EterraSlots::create_season_collection(
+            RuntimeOrigin::signed(1),
+            2,
+            expansion_name
+        ));
+        for (kind, media_id) in [
+            (crate::AssetKind::Border, 6u64),
+            (crate::AssetKind::Background, 7u64),
+            (crate::AssetKind::Subject, 8u64),
+        ] {
+            assert_ok!(EterraSlots::add_season_collection_asset(
+                RuntimeOrigin::signed(1),
+                2,
+                1,
+                kind,
+                media_id
+            ));
+        }
+        assert_ok!(EterraSlots::publish_season_collection(
+            RuntimeOrigin::signed(1),
+            2,
+            1
+        ));
+
+        assert_eq!(SeasonCollectionIds::<Test>::get(2).to_vec(), vec![0, 1]);
+        assert_eq!(
+            SeasonCollections::<Test>::get(2, 0).map(|collection| collection.status),
+            Some(SeasonCollectionStatus::Published)
         );
+        assert_eq!(
+            SeasonCollections::<Test>::get(2, 1).map(|collection| collection.status),
+            Some(SeasonCollectionStatus::Published)
+        );
+    });
+}
+
+#[test]
+fn draft_collection_is_not_used_until_published() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let name: BoundedVec<u8, MaxSeasonNameLen> = b"S2".to_vec().try_into().unwrap();
+        let desc: BoundedVec<u8, MaxSeasonDescLen> = b"D2".to_vec().try_into().unwrap();
+        let ct: BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+
+        assert_ok!(EterraSeasons::create_season(
+            RuntimeOrigin::signed(1),
+            name,
+            desc
+        ));
+
+        for suffix in [
+            b"core-border".as_slice(),
+            b"core-background".as_slice(),
+            b"core-subject".as_slice(),
+            b"draft-border".as_slice(),
+            b"draft-background".as_slice(),
+            b"draft-subject".as_slice(),
+        ] {
+            let mut uri_bytes = b"ipfs://season2-".to_vec();
+            uri_bytes.extend_from_slice(suffix);
+            let uri: BoundedVec<u8, MaxMediaUriLen> = uri_bytes.try_into().unwrap();
+            assert_ok!(EterraMedia::register_media(
+                RuntimeOrigin::signed(1),
+                None,
+                uri,
+                ct.clone(),
+                pallet_eterra_media::MediaClass::CoreAsset,
+                pallet_eterra_media::Delivery::RemoteIpfs,
+                None,
+            ));
+        }
+
+        let core_name: BoundedVec<u8, MaxSeasonCollectionNameLen> =
+            b"Core".to_vec().try_into().unwrap();
+        let draft_name: BoundedVec<u8, MaxSeasonCollectionNameLen> =
+            b"Draft".to_vec().try_into().unwrap();
+
+        assert_ok!(EterraSlots::create_season_collection(
+            RuntimeOrigin::signed(1),
+            2,
+            core_name
+        ));
+        for (kind, media_id) in [
+            (crate::AssetKind::Border, 3u64),
+            (crate::AssetKind::Background, 4u64),
+            (crate::AssetKind::Subject, 5u64),
+        ] {
+            assert_ok!(EterraSlots::add_season_collection_asset(
+                RuntimeOrigin::signed(1),
+                2,
+                0,
+                kind,
+                media_id
+            ));
+        }
+        assert_ok!(EterraSlots::publish_season_collection(
+            RuntimeOrigin::signed(1),
+            2,
+            0
+        ));
+
+        assert_ok!(EterraSlots::create_season_collection(
+            RuntimeOrigin::signed(1),
+            2,
+            draft_name
+        ));
+        for (kind, media_id) in [
+            (crate::AssetKind::Border, 6u64),
+            (crate::AssetKind::Background, 7u64),
+            (crate::AssetKind::Subject, 8u64),
+        ] {
+            assert_ok!(EterraSlots::add_season_collection_asset(
+                RuntimeOrigin::signed(1),
+                2,
+                1,
+                kind,
+                media_id
+            ));
+        }
+
+        assert_ok!(EterraSeasons::activate_season(RuntimeOrigin::signed(1), 2));
+        let card_id = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(player)));
+
+        let art = EterraSlots::card_artwork(card_id).expect("card artwork written");
+        assert_eq!(art.border_media_id, 3);
+        assert_eq!(art.background_media_id, 4);
+        assert_eq!(art.subject_media_id, 5);
+        assert_eq!(CardArtworkCollectionId::<Test>::get(card_id), Some(0));
     });
 }
 

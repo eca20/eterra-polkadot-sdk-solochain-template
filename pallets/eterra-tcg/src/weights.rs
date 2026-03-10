@@ -34,10 +34,13 @@ pub trait WeightInfo {
 	fn set_price() -> Weight;
 	fn remove_price() -> Weight;
 	fn buy_card() -> Weight;
-	fn add_season_asset() -> Weight;
-	fn remove_season_asset() -> Weight;
+	fn create_season_collection() -> Weight;
+	fn publish_season_collection() -> Weight;
+	fn remove_season_collection() -> Weight;
+	fn add_season_collection_asset() -> Weight;
+	fn remove_season_collection_asset() -> Weight;
+	fn move_season_collection_asset() -> Weight;
 	fn buy_card_capacity() -> Weight;
-	fn backfill_card_artwork() -> Weight;
 	fn init_card_nft_collection() -> Weight;
 	fn convert_to_nft() -> Weight;
 	fn unwrap_from_nft() -> Weight;
@@ -77,16 +80,25 @@ impl WeightInfo for () {
 	fn buy_card() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
-	fn add_season_asset() -> Weight {
+	fn create_season_collection() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
-	fn remove_season_asset() -> Weight {
+	fn publish_season_collection() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn remove_season_collection() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn add_season_collection_asset() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn remove_season_collection_asset() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn move_season_collection_asset() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 	fn buy_card_capacity() -> Weight {
-		Weight::from_parts(10_000, 0)
-	}
-	fn backfill_card_artwork() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 	fn init_card_nft_collection() -> Weight {
@@ -283,22 +295,46 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().writes(6))
 	}
 
-	fn add_season_asset() -> Weight {
-		Weight::from_parts(10_000, 0)
+	fn create_season_collection() -> Weight {
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(4))
 	}
 
-	fn remove_season_asset() -> Weight {
-		Weight::from_parts(10_000, 0)
+	fn publish_season_collection() -> Weight {
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+
+	fn remove_season_collection() -> Weight {
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(3))
+	}
+
+	fn add_season_collection_asset() -> Weight {
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+
+	fn remove_season_collection_asset() -> Weight {
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+
+	fn move_season_collection_asset() -> Weight {
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
 
 	fn buy_card_capacity() -> Weight {
 		Weight::from_parts(25_000_000, 0)
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(2))
-	}
-
-	fn backfill_card_artwork() -> Weight {
-		Weight::from_parts(10_000, 0)
 	}
 
 	fn init_card_nft_collection() -> Weight {
