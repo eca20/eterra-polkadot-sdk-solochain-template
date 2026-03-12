@@ -70,6 +70,9 @@ parameter_types! {
     pub const MaxBordersConst: u32 = 32;
     pub const MaxBackgroundsConst: u32 = 32;
     pub const MaxSubjectsConst: u32 = 128;
+    pub const MaxBacksConst: u32 = 32;
+    pub const MaxPackagingFrontsConst: u32 = 16;
+    pub const MaxPackagingBacksConst: u32 = 16;
     pub const MaxSeasonCollectionsConst: u32 = 32;
     pub const MaxSeasonCollectionNameLenConst: u32 = 64;
     pub const MaxMediaUriLen: u32 = 256;
@@ -278,6 +281,9 @@ impl pallet_eterra_tcg::Config for Test {
     type MaxBorders = MaxBordersConst;
     type MaxBackgrounds = MaxBackgroundsConst;
     type MaxSubjects = MaxSubjectsConst;
+    type MaxBacks = MaxBacksConst;
+    type MaxPackagingFronts = MaxPackagingFrontsConst;
+    type MaxPackagingBacks = MaxPackagingBacksConst;
     type MaxSeasonCollections = MaxSeasonCollectionsConst;
     type MaxSeasonCollectionNameLen = MaxSeasonCollectionNameLenConst;
     type WeightInfo = ();
@@ -452,6 +458,40 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
             None,
         )
         .expect("register subject");
+        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> = b"ipfs://back".to_vec().try_into().unwrap();
+        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+        pallet_eterra_media::Pallet::<Test>::register_media(
+            RuntimeOrigin::signed(1),
+            None,
+            uri.clone(),
+            ct.clone(),
+            pallet_eterra_media::MediaClass::CoreAsset,
+            pallet_eterra_media::Delivery::RemoteIpfs,
+            None,
+        )
+        .expect("register back");
+        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> = b"ipfs://pack-front".to_vec().try_into().unwrap();
+        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+        pallet_eterra_media::Pallet::<Test>::register_media(
+            RuntimeOrigin::signed(1),
+            None,
+            uri.clone(),
+            ct.clone(),
+            pallet_eterra_media::MediaClass::CoreAsset,
+            pallet_eterra_media::Delivery::RemoteIpfs,
+            None,
+        )
+        .expect("register packaging front");
+        pallet_eterra_media::Pallet::<Test>::register_media(
+            RuntimeOrigin::signed(1),
+            None,
+            uri,
+            ct,
+            pallet_eterra_media::MediaClass::CoreAsset,
+            pallet_eterra_media::Delivery::RemoteIpfs,
+            None,
+        )
+        .expect("register packaging back");
 
         let collection_name: frame_support::BoundedVec<u8, MaxSeasonCollectionNameLenConst> =
             b"Core Set".to_vec().try_into().unwrap();
@@ -485,6 +525,30 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
             2,
         )
         .expect("add subject asset");
+        pallet_eterra_tcg::Pallet::<Test>::add_season_collection_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            0,
+            pallet_eterra_tcg::AssetKind::Back,
+            3,
+        )
+        .expect("add back asset");
+        pallet_eterra_tcg::Pallet::<Test>::add_season_collection_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            0,
+            pallet_eterra_tcg::AssetKind::PackagingFront,
+            4,
+        )
+        .expect("add packaging front asset");
+        pallet_eterra_tcg::Pallet::<Test>::add_season_collection_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            0,
+            pallet_eterra_tcg::AssetKind::PackagingBack,
+            5,
+        )
+        .expect("add packaging back asset");
         pallet_eterra_tcg::Pallet::<Test>::publish_season_collection(
             RuntimeOrigin::signed(1),
             1,

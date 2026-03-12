@@ -52,18 +52,92 @@ pub enum AssetKind {
     Background,
     Subject,
     Back,
+    PackagingFront,
+    PackagingBack,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum AssetWeightKind {
+    Border,
+    Background,
+    Subject,
+    Back,
+    Packaging,
+}
+
+pub type WeightPercentage = u8;
+pub type WeightMultiplier = u16;
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct AssetWeightConfig<BWeights, BMultipliers> {
+    pub weights: BWeights,
+    pub multipliers: BMultipliers,
+}
+
+impl<BWeights: Default, BMultipliers: Default> Default
+    for AssetWeightConfig<BWeights, BMultipliers>
+{
+    fn default() -> Self {
+        Self {
+            weights: Default::default(),
+            multipliers: Default::default(),
+        }
+    }
 }
 
 #[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
-pub struct SeasonAssetsInfo<BBorders, BBackgrounds, BSubjects, BBacks> {
+pub struct SeasonAssetsInfo<
+    BBorders,
+    BBackgrounds,
+    BSubjects,
+    BBacks,
+    BPackagingFronts,
+    BPackagingBacks,
+    BBorderWeights,
+    BBackgroundWeights,
+    BSubjectWeights,
+    BBackWeights,
+    BPackagingWeights,
+> {
     pub borders: BBorders,
     pub backgrounds: BBackgrounds,
     pub subjects: BSubjects,
     pub backs: BBacks,
+    pub packaging_fronts: BPackagingFronts,
+    pub packaging_backs: BPackagingBacks,
+    pub border_weights: BBorderWeights,
+    pub background_weights: BBackgroundWeights,
+    pub subject_weights: BSubjectWeights,
+    pub back_weights: BBackWeights,
+    pub packaging_weights: BPackagingWeights,
 }
 
-impl<BBorders: Default, BBackgrounds: Default, BSubjects: Default, BBacks: Default> Default
-    for SeasonAssetsInfo<BBorders, BBackgrounds, BSubjects, BBacks>
+impl<
+        BBorders: Default,
+        BBackgrounds: Default,
+        BSubjects: Default,
+        BBacks: Default,
+        BPackagingFronts: Default,
+        BPackagingBacks: Default,
+        BBorderWeights: Default,
+        BBackgroundWeights: Default,
+        BSubjectWeights: Default,
+        BBackWeights: Default,
+        BPackagingWeights: Default,
+    > Default
+    for SeasonAssetsInfo<
+        BBorders,
+        BBackgrounds,
+        BSubjects,
+        BBacks,
+        BPackagingFronts,
+        BPackagingBacks,
+        BBorderWeights,
+        BBackgroundWeights,
+        BSubjectWeights,
+        BBackWeights,
+        BPackagingWeights,
+    >
 {
     fn default() -> Self {
         Self {
@@ -71,6 +145,13 @@ impl<BBorders: Default, BBackgrounds: Default, BSubjects: Default, BBacks: Defau
             backgrounds: Default::default(),
             subjects: Default::default(),
             backs: Default::default(),
+            packaging_fronts: Default::default(),
+            packaging_backs: Default::default(),
+            border_weights: Default::default(),
+            background_weights: Default::default(),
+            subject_weights: Default::default(),
+            back_weights: Default::default(),
+            packaging_weights: Default::default(),
         }
     }
 }
@@ -113,8 +194,11 @@ pub mod pallet {
     use frame_system::pallet_prelude::BlockNumberFor;
     use sp_runtime::traits::StaticLookup;
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(8);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(10);
     const ESCROW_PALLET_ID: PalletId = PalletId(*b"et/tcgsc");
+    const WEIGHT_TOTAL_PERCENT: u32 = 100;
+    const DEFAULT_WEIGHT_MULTIPLIER: WeightMultiplier = 100;
+    const NORMALIZED_WEIGHT_POINTS: u32 = 10_000;
 
     /// Balance type bound to the runtime currency.
     pub type BalanceOf<T> =
@@ -124,12 +208,45 @@ pub mod pallet {
     type BoundedBackgrounds<T> = BoundedVec<MediaId, <T as Config>::MaxBackgrounds>;
     type BoundedSubjects<T> = BoundedVec<MediaId, <T as Config>::MaxSubjects>;
     type BoundedBacks<T> = BoundedVec<MediaId, <T as Config>::MaxBacks>;
+    type BoundedPackagingFronts<T> = BoundedVec<MediaId, <T as Config>::MaxPackagingFronts>;
+    type BoundedPackagingBacks<T> = BoundedVec<MediaId, <T as Config>::MaxPackagingBacks>;
+    type BoundedBorderWeightConfig<T> = AssetWeightConfig<
+        BoundedVec<WeightPercentage, <T as Config>::MaxBorders>,
+        BoundedVec<WeightMultiplier, <T as Config>::MaxBorders>,
+    >;
+    type BoundedBackgroundWeightConfig<T> = AssetWeightConfig<
+        BoundedVec<WeightPercentage, <T as Config>::MaxBackgrounds>,
+        BoundedVec<WeightMultiplier, <T as Config>::MaxBackgrounds>,
+    >;
+    type BoundedSubjectWeightConfig<T> = AssetWeightConfig<
+        BoundedVec<WeightPercentage, <T as Config>::MaxSubjects>,
+        BoundedVec<WeightMultiplier, <T as Config>::MaxSubjects>,
+    >;
+    type BoundedBackWeightConfig<T> = AssetWeightConfig<
+        BoundedVec<WeightPercentage, <T as Config>::MaxBacks>,
+        BoundedVec<WeightMultiplier, <T as Config>::MaxBacks>,
+    >;
+    type BoundedPackagingWeightConfig<T> = AssetWeightConfig<
+        BoundedVec<WeightPercentage, <T as Config>::MaxPackagingFronts>,
+        BoundedVec<WeightMultiplier, <T as Config>::MaxPackagingFronts>,
+    >;
     type BoundedSeasonCollectionName<T> =
         BoundedVec<u8, <T as Config>::MaxSeasonCollectionNameLen>;
     type BoundedSeasonCollectionIds<T> =
         BoundedVec<SeasonCollectionId, <T as Config>::MaxSeasonCollections>;
-    type SeasonAssetsInfoOf<T> =
-        SeasonAssetsInfo<BoundedBorders<T>, BoundedBackgrounds<T>, BoundedSubjects<T>, BoundedBacks<T>>;
+    type SeasonAssetsInfoOf<T> = SeasonAssetsInfo<
+        BoundedBorders<T>,
+        BoundedBackgrounds<T>,
+        BoundedSubjects<T>,
+        BoundedBacks<T>,
+        BoundedPackagingFronts<T>,
+        BoundedPackagingBacks<T>,
+        BoundedBorderWeightConfig<T>,
+        BoundedBackgroundWeightConfig<T>,
+        BoundedSubjectWeightConfig<T>,
+        BoundedBackWeightConfig<T>,
+        BoundedPackagingWeightConfig<T>,
+    >;
     type SeasonCollectionInfoOf<T> =
         SeasonCollectionInfo<BoundedSeasonCollectionName<T>, BlockNumberFor<T>>;
 
@@ -137,6 +254,16 @@ pub mod pallet {
     struct SelectedSeasonAsset {
         collection_id: SeasonCollectionId,
         media_id: MediaId,
+        selection_weight: u32,
+    }
+
+    #[allow(dead_code)]
+    #[derive(Clone, Copy)]
+    struct SelectedPackagingAsset {
+        collection_id: SeasonCollectionId,
+        front_media_id: MediaId,
+        back_media_id: MediaId,
+        selection_weight: u32,
     }
 
     #[derive(Default)]
@@ -145,6 +272,7 @@ pub mod pallet {
         backgrounds: Vec<SelectedSeasonAsset>,
         subjects: Vec<SelectedSeasonAsset>,
         backs: Vec<SelectedSeasonAsset>,
+        packagings: Vec<SelectedPackagingAsset>,
     }
 
     #[pallet::pallet]
@@ -245,6 +373,14 @@ pub mod pallet {
         /// Maximum number of back layers per season.
         #[pallet::constant]
         type MaxBacks: Get<u32>;
+
+        /// Maximum number of packaging front images per season.
+        #[pallet::constant]
+        type MaxPackagingFronts: Get<u32>;
+
+        /// Maximum number of packaging back images per season.
+        #[pallet::constant]
+        type MaxPackagingBacks: Get<u32>;
 
         /// Maximum number of art collections per season.
         #[pallet::constant]
@@ -563,6 +699,13 @@ pub mod pallet {
             old_index: u32,
             new_index: u32,
         },
+        /// Collection-scoped asset selection weights were updated.
+        SeasonCollectionAssetWeightsSet {
+            season_id: SeasonId,
+            collection_id: SeasonCollectionId,
+            kind: AssetWeightKind,
+            custom: bool,
+        },
         /// The NFT collection used for converted cards was initialized.
         CardNftCollectionInitialized {
             collection_id: u32,
@@ -670,10 +813,16 @@ pub mod pallet {
         AssetNotFound,
         /// The specified seasonal asset index is outside the current list bounds.
         AssetIndexOutOfBounds,
+        /// The provided asset weight vector does not match the current asset count for that kind.
+        AssetWeightCountMismatch,
+        /// The provided asset weights must sum to exactly 100%.
+        AssetWeightTotalInvalid,
+        /// The provided asset weights result in an effective total weight of zero.
+        AssetWeightMultiplierInvalid,
         /// No active season is currently set.
         NoActiveSeason,
         /// The active season has no published asset pool with at least one border, background,
-        /// subject, and back.
+        /// subject, back, and card packaging pair.
         NoPublishedSeasonCollection,
         /// Card artwork has not been assigned for this card.
         CardArtworkMissing,
@@ -1261,6 +1410,7 @@ pub mod pallet {
                                 .borders
                                 .try_push(media_id)
                                 .map_err(|_| Error::<T>::AssetListFull)?;
+                            Self::clear_asset_weight_config(&mut assets.border_weights);
                         }
                         AssetKind::Background => {
                             if assets.backgrounds.contains(&media_id) {
@@ -1270,6 +1420,7 @@ pub mod pallet {
                                 .backgrounds
                                 .try_push(media_id)
                                 .map_err(|_| Error::<T>::AssetListFull)?;
+                            Self::clear_asset_weight_config(&mut assets.background_weights);
                         }
                         AssetKind::Subject => {
                             if assets.subjects.contains(&media_id) {
@@ -1279,6 +1430,7 @@ pub mod pallet {
                                 .subjects
                                 .try_push(media_id)
                                 .map_err(|_| Error::<T>::AssetListFull)?;
+                            Self::clear_asset_weight_config(&mut assets.subject_weights);
                         }
                         AssetKind::Back => {
                             if assets.backs.contains(&media_id) {
@@ -1288,6 +1440,27 @@ pub mod pallet {
                                 .backs
                                 .try_push(media_id)
                                 .map_err(|_| Error::<T>::AssetListFull)?;
+                            Self::clear_asset_weight_config(&mut assets.back_weights);
+                        }
+                        AssetKind::PackagingFront => {
+                            if assets.packaging_fronts.contains(&media_id) {
+                                return Ok(false);
+                            }
+                            assets
+                                .packaging_fronts
+                                .try_push(media_id)
+                                .map_err(|_| Error::<T>::AssetListFull)?;
+                            Self::clear_asset_weight_config(&mut assets.packaging_weights);
+                        }
+                        AssetKind::PackagingBack => {
+                            if assets.packaging_backs.contains(&media_id) {
+                                return Ok(false);
+                            }
+                            assets
+                                .packaging_backs
+                                .try_push(media_id)
+                                .map_err(|_| Error::<T>::AssetListFull)?;
+                            Self::clear_asset_weight_config(&mut assets.packaging_weights);
                         }
                     }
                     Ok(true)
@@ -1326,16 +1499,49 @@ pub mod pallet {
                 |assets| -> DispatchResult {
                     let removed = match kind {
                         AssetKind::Border => {
-                            Self::remove_asset_from_list(&mut assets.borders, media_id)
+                            let removed = Self::remove_asset_from_list(&mut assets.borders, media_id);
+                            if removed {
+                                Self::clear_asset_weight_config(&mut assets.border_weights);
+                            }
+                            removed
                         }
                         AssetKind::Background => {
-                            Self::remove_asset_from_list(&mut assets.backgrounds, media_id)
+                            let removed =
+                                Self::remove_asset_from_list(&mut assets.backgrounds, media_id);
+                            if removed {
+                                Self::clear_asset_weight_config(&mut assets.background_weights);
+                            }
+                            removed
                         }
                         AssetKind::Subject => {
-                            Self::remove_asset_from_list(&mut assets.subjects, media_id)
+                            let removed = Self::remove_asset_from_list(&mut assets.subjects, media_id);
+                            if removed {
+                                Self::clear_asset_weight_config(&mut assets.subject_weights);
+                            }
+                            removed
                         }
                         AssetKind::Back => {
-                            Self::remove_asset_from_list(&mut assets.backs, media_id)
+                            let removed = Self::remove_asset_from_list(&mut assets.backs, media_id);
+                            if removed {
+                                Self::clear_asset_weight_config(&mut assets.back_weights);
+                            }
+                            removed
+                        }
+                        AssetKind::PackagingFront => {
+                            let removed =
+                                Self::remove_asset_from_list(&mut assets.packaging_fronts, media_id);
+                            if removed {
+                                Self::clear_asset_weight_config(&mut assets.packaging_weights);
+                            }
+                            removed
+                        }
+                        AssetKind::PackagingBack => {
+                            let removed =
+                                Self::remove_asset_from_list(&mut assets.packaging_backs, media_id);
+                            if removed {
+                                Self::clear_asset_weight_config(&mut assets.packaging_weights);
+                            }
+                            removed
                         }
                     };
                     ensure!(removed, Error::<T>::AssetNotFound);
@@ -1374,18 +1580,65 @@ pub mod pallet {
                 |assets| -> Result<(u32, u32), DispatchError> {
                     let (old_index, bounded_new_index) = match kind {
                         AssetKind::Border => {
-                            Self::move_asset_within_list(&mut assets.borders, media_id, new_index)?
+                            let moved =
+                                Self::move_asset_within_list(&mut assets.borders, media_id, new_index)?;
+                            Self::move_asset_weight_config_entry(
+                                &mut assets.border_weights,
+                                moved.0 as usize,
+                                moved.1 as usize,
+                            )?;
+                            moved
                         }
-                        AssetKind::Background => Self::move_asset_within_list(
-                            &mut assets.backgrounds,
-                            media_id,
-                            new_index,
-                        )?,
+                        AssetKind::Background => {
+                            let moved = Self::move_asset_within_list(
+                                &mut assets.backgrounds,
+                                media_id,
+                                new_index,
+                            )?;
+                            Self::move_asset_weight_config_entry(
+                                &mut assets.background_weights,
+                                moved.0 as usize,
+                                moved.1 as usize,
+                            )?;
+                            moved
+                        }
                         AssetKind::Subject => {
-                            Self::move_asset_within_list(&mut assets.subjects, media_id, new_index)?
+                            let moved =
+                                Self::move_asset_within_list(&mut assets.subjects, media_id, new_index)?;
+                            Self::move_asset_weight_config_entry(
+                                &mut assets.subject_weights,
+                                moved.0 as usize,
+                                moved.1 as usize,
+                            )?;
+                            moved
                         }
                         AssetKind::Back => {
-                            Self::move_asset_within_list(&mut assets.backs, media_id, new_index)?
+                            let moved =
+                                Self::move_asset_within_list(&mut assets.backs, media_id, new_index)?;
+                            Self::move_asset_weight_config_entry(
+                                &mut assets.back_weights,
+                                moved.0 as usize,
+                                moved.1 as usize,
+                            )?;
+                            moved
+                        }
+                        AssetKind::PackagingFront => {
+                            let moved = Self::move_asset_within_list(
+                                &mut assets.packaging_fronts,
+                                media_id,
+                                new_index,
+                            )?;
+                            Self::clear_asset_weight_config(&mut assets.packaging_weights);
+                            moved
+                        }
+                        AssetKind::PackagingBack => {
+                            let moved = Self::move_asset_within_list(
+                                &mut assets.packaging_backs,
+                                media_id,
+                                new_index,
+                            )?;
+                            Self::clear_asset_weight_config(&mut assets.packaging_weights);
+                            moved
                         }
                     };
                     Ok((old_index, bounded_new_index))
@@ -1399,6 +1652,39 @@ pub mod pallet {
                 media_id,
                 old_index,
                 new_index: bounded_new_index,
+            });
+            Ok(())
+        }
+
+        /// Set explicit asset selection weights for a draft season art collection.
+        #[pallet::call_index(25)]
+        #[pallet::weight(<T as Config>::WeightInfo::set_season_collection_asset_weights())]
+        #[transactional]
+        pub fn set_season_collection_asset_weights(
+            origin: OriginFor<T>,
+            season_id: SeasonId,
+            collection_id: SeasonCollectionId,
+            kind: AssetWeightKind,
+            weights: Vec<WeightPercentage>,
+            multipliers: Vec<WeightMultiplier>,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_season_admin(&who)?;
+            Self::ensure_season_collection_draft(season_id, collection_id)?;
+
+            let custom = SeasonCollectionAssets::<T>::try_mutate(
+                season_id,
+                collection_id,
+                |assets| -> Result<bool, DispatchError> {
+                    Self::set_asset_weight_config_for_kind(assets, kind, weights, multipliers)
+                },
+            )?;
+
+            Self::deposit_event(Event::SeasonCollectionAssetWeightsSet {
+                season_id,
+                collection_id,
+                kind,
+                custom,
             });
             Ok(())
         }
@@ -1674,7 +1960,9 @@ pub mod pallet {
                 !assets.borders.is_empty()
                     || !assets.backgrounds.is_empty()
                     || !assets.subjects.is_empty()
-                    || !assets.backs.is_empty(),
+                    || !assets.backs.is_empty()
+                    || !assets.packaging_fronts.is_empty()
+                    || !assets.packaging_backs.is_empty(),
                 Error::<T>::SeasonCollectionIncomplete
             );
             Ok(())
@@ -1684,15 +1972,24 @@ pub mod pallet {
             season_id: SeasonId,
             assets: &SeasonAssetsInfoOf<T>,
         ) -> DispatchResult {
-            let existing_pools = Self::published_season_asset_pools(season_id);
+            let existing_pools = Self::published_season_asset_pools(season_id)?;
+            ensure!(
+                assets.packaging_fronts.len() == assets.packaging_backs.len(),
+                Error::<T>::SeasonCollectionIncomplete
+            );
+            Self::ensure_collection_asset_weights_valid(assets)?;
             ensure!(
                 !existing_pools.backs.is_empty() || !assets.backs.is_empty(),
+                Error::<T>::SeasonCollectionIncomplete
+            );
+            ensure!(
+                !existing_pools.packagings.is_empty() || !assets.packaging_fronts.is_empty(),
                 Error::<T>::SeasonCollectionIncomplete
             );
             Ok(())
         }
 
-        fn ensure_required_mint_asset_pools(pools: &PublishedSeasonAssetPools) -> DispatchResult {
+        fn ensure_required_card_art_pools(pools: &PublishedSeasonAssetPools) -> DispatchResult {
             ensure!(
                 !pools.borders.is_empty()
                     && !pools.backgrounds.is_empty()
@@ -1701,6 +1998,215 @@ pub mod pallet {
                 Error::<T>::NoPublishedSeasonCollection
             );
             Ok(())
+        }
+
+        fn ensure_required_season_pools(pools: &PublishedSeasonAssetPools) -> DispatchResult {
+            Self::ensure_required_card_art_pools(pools)?;
+            ensure!(!pools.packagings.is_empty(), Error::<T>::NoPublishedSeasonCollection);
+            Ok(())
+        }
+
+        fn clear_asset_weight_config<ListLen: Get<u32>>(
+            config: &mut AssetWeightConfig<
+                BoundedVec<WeightPercentage, ListLen>,
+                BoundedVec<WeightMultiplier, ListLen>,
+            >,
+        ) {
+            config.weights = Default::default();
+            config.multipliers = Default::default();
+        }
+
+        fn ensure_valid_asset_weight_config<ListLen: Get<u32>>(
+            expected_len: usize,
+            config: &AssetWeightConfig<
+                BoundedVec<WeightPercentage, ListLen>,
+                BoundedVec<WeightMultiplier, ListLen>,
+            >,
+        ) -> DispatchResult {
+            if config.weights.is_empty() && config.multipliers.is_empty() {
+                return Ok(());
+            }
+
+            ensure!(
+                config.weights.len() == expected_len
+                    && config.multipliers.len() == expected_len
+                    && config.weights.len() == config.multipliers.len(),
+                Error::<T>::AssetWeightCountMismatch
+            );
+
+            let total = config
+                .weights
+                .iter()
+                .fold(0u32, |sum, weight| sum.saturating_add(*weight as u32));
+            ensure!(total == WEIGHT_TOTAL_PERCENT, Error::<T>::AssetWeightTotalInvalid);
+
+            let has_positive_effective_weight = config
+                .weights
+                .iter()
+                .zip(config.multipliers.iter())
+                .any(|(weight, multiplier)| *weight > 0 && *multiplier > 0);
+            ensure!(
+                has_positive_effective_weight,
+                Error::<T>::AssetWeightMultiplierInvalid
+            );
+            Ok(())
+        }
+
+        fn ensure_collection_asset_weights_valid(assets: &SeasonAssetsInfoOf<T>) -> DispatchResult {
+            Self::ensure_valid_asset_weight_config(assets.borders.len(), &assets.border_weights)?;
+            Self::ensure_valid_asset_weight_config(
+                assets.backgrounds.len(),
+                &assets.background_weights,
+            )?;
+            Self::ensure_valid_asset_weight_config(assets.subjects.len(), &assets.subject_weights)?;
+            Self::ensure_valid_asset_weight_config(assets.backs.len(), &assets.back_weights)?;
+            Self::ensure_valid_asset_weight_config(
+                assets.packaging_fronts.len().min(assets.packaging_backs.len()),
+                &assets.packaging_weights,
+            )?;
+            Ok(())
+        }
+
+        fn set_asset_weight_config<ListLen: Get<u32>>(
+            expected_len: usize,
+            config: &mut AssetWeightConfig<
+                BoundedVec<WeightPercentage, ListLen>,
+                BoundedVec<WeightMultiplier, ListLen>,
+            >,
+            weights: Vec<WeightPercentage>,
+            multipliers: Vec<WeightMultiplier>,
+        ) -> Result<bool, DispatchError> {
+            if weights.is_empty() && multipliers.is_empty() {
+                Self::clear_asset_weight_config(config);
+                return Ok(false);
+            }
+
+            let next_config = AssetWeightConfig {
+                weights: weights.try_into().map_err(|_| Error::<T>::AssetListFull)?,
+                multipliers: multipliers
+                    .try_into()
+                    .map_err(|_| Error::<T>::AssetListFull)?,
+            };
+            Self::ensure_valid_asset_weight_config(expected_len, &next_config)?;
+            *config = next_config;
+            Ok(true)
+        }
+
+        fn set_asset_weight_config_for_kind(
+            assets: &mut SeasonAssetsInfoOf<T>,
+            kind: AssetWeightKind,
+            weights: Vec<WeightPercentage>,
+            multipliers: Vec<WeightMultiplier>,
+        ) -> Result<bool, DispatchError> {
+            match kind {
+                AssetWeightKind::Border => {
+                    Self::set_asset_weight_config(
+                        assets.borders.len(),
+                        &mut assets.border_weights,
+                        weights,
+                        multipliers,
+                    )
+                }
+                AssetWeightKind::Background => Self::set_asset_weight_config(
+                    assets.backgrounds.len(),
+                    &mut assets.background_weights,
+                    weights,
+                    multipliers,
+                ),
+                AssetWeightKind::Subject => Self::set_asset_weight_config(
+                    assets.subjects.len(),
+                    &mut assets.subject_weights,
+                    weights,
+                    multipliers,
+                ),
+                AssetWeightKind::Back => Self::set_asset_weight_config(
+                    assets.backs.len(),
+                    &mut assets.back_weights,
+                    weights,
+                    multipliers,
+                ),
+                AssetWeightKind::Packaging => {
+                    ensure!(
+                        assets.packaging_fronts.len() == assets.packaging_backs.len(),
+                        Error::<T>::SeasonCollectionIncomplete
+                    );
+                    Self::set_asset_weight_config(
+                        assets.packaging_fronts.len(),
+                        &mut assets.packaging_weights,
+                        weights,
+                        multipliers,
+                    )
+                }
+            }
+        }
+
+        fn move_list_entry<Value: Clone, ListLen: Get<u32>>(
+            list: &mut BoundedVec<Value, ListLen>,
+            old_index: usize,
+            new_index: usize,
+        ) -> Result<(), DispatchError> {
+            ensure!(old_index < list.len(), Error::<T>::AssetIndexOutOfBounds);
+            ensure!(new_index < list.len(), Error::<T>::AssetIndexOutOfBounds);
+            if old_index == new_index {
+                return Ok(());
+            }
+
+            let mut reordered: Vec<Value> = list.iter().cloned().collect();
+            let value = reordered.remove(old_index);
+            reordered.insert(new_index, value);
+            *list = reordered
+                .try_into()
+                .map_err(|_| Error::<T>::AssetListFull)?;
+            Ok(())
+        }
+
+        fn move_asset_weight_config_entry<ListLen: Get<u32>>(
+            config: &mut AssetWeightConfig<
+                BoundedVec<WeightPercentage, ListLen>,
+                BoundedVec<WeightMultiplier, ListLen>,
+            >,
+            old_index: usize,
+            new_index: usize,
+        ) -> DispatchResult {
+            if config.weights.is_empty() && config.multipliers.is_empty() {
+                return Ok(());
+            }
+
+            ensure!(
+                config.weights.len() == config.multipliers.len(),
+                Error::<T>::AssetWeightCountMismatch
+            );
+            Self::move_list_entry(&mut config.weights, old_index, new_index)?;
+            Self::move_list_entry(&mut config.multipliers, old_index, new_index)?;
+            Ok(())
+        }
+
+        fn normalized_weight_points(asset_count: usize, index: usize) -> u32 {
+            if asset_count == 0 {
+                return 0;
+            }
+            let asset_count_u32 = asset_count as u32;
+            let base = NORMALIZED_WEIGHT_POINTS / asset_count_u32;
+            let remainder = NORMALIZED_WEIGHT_POINTS % asset_count_u32;
+            base + u32::from((index as u32) < remainder)
+        }
+
+        fn effective_weight_points<ListLen: Get<u32>>(
+            config: &AssetWeightConfig<
+                BoundedVec<WeightPercentage, ListLen>,
+                BoundedVec<WeightMultiplier, ListLen>,
+            >,
+            asset_count: usize,
+            index: usize,
+        ) -> u32 {
+            if config.weights.is_empty() || config.multipliers.is_empty() {
+                return Self::normalized_weight_points(asset_count, index)
+                    .saturating_mul(DEFAULT_WEIGHT_MULTIPLIER as u32);
+            }
+
+            (config.weights.get(index).copied().unwrap_or(0) as u32)
+                .saturating_mul(NORMALIZED_WEIGHT_POINTS / WEIGHT_TOTAL_PERCENT)
+                .saturating_mul(config.multipliers.get(index).copied().unwrap_or(0) as u32)
         }
 
         fn remove_asset_from_list<ListLen: Get<u32>>(
@@ -1744,7 +2250,54 @@ pub mod pallet {
             Ok((old_index, new_index))
         }
 
-        fn published_season_asset_pools(season_id: SeasonId) -> PublishedSeasonAssetPools {
+        fn append_media_pool_with_weights<ListLen: Get<u32>>(
+            pool: &mut Vec<SelectedSeasonAsset>,
+            collection_id: SeasonCollectionId,
+            media_ids: &BoundedVec<MediaId, ListLen>,
+            config: &AssetWeightConfig<
+                BoundedVec<WeightPercentage, ListLen>,
+                BoundedVec<WeightMultiplier, ListLen>,
+            >,
+        ) {
+            let asset_count = media_ids.len();
+            for (index, media_id) in media_ids.iter().copied().enumerate() {
+                pool.push(SelectedSeasonAsset {
+                    collection_id,
+                    media_id,
+                    selection_weight: Self::effective_weight_points(config, asset_count, index),
+                });
+            }
+        }
+
+        fn append_packaging_pool_with_weights(
+            pool: &mut Vec<SelectedPackagingAsset>,
+            collection_id: SeasonCollectionId,
+            assets: &SeasonAssetsInfoOf<T>,
+        ) {
+            let asset_count = assets.packaging_fronts.len().min(assets.packaging_backs.len());
+            for (index, (front_media_id, back_media_id)) in assets
+                .packaging_fronts
+                .iter()
+                .copied()
+                .zip(assets.packaging_backs.iter().copied())
+                .enumerate()
+            {
+                pool.push(SelectedPackagingAsset {
+                    collection_id,
+                    front_media_id,
+                    back_media_id,
+                    selection_weight: Self::effective_weight_points(
+                        &assets.packaging_weights,
+                        asset_count,
+                        index,
+                    ),
+                });
+            }
+        }
+
+        fn published_season_asset_pools(
+            season_id: SeasonId,
+        ) -> Result<PublishedSeasonAssetPools, DispatchError> {
             let mut pools = PublishedSeasonAssetPools::default();
 
             for collection_id in SeasonCollectionIds::<T>::get(season_id) {
@@ -1758,38 +2311,80 @@ pub mod pallet {
                 }
 
                 let assets = SeasonCollectionAssets::<T>::get(season_id, collection_id);
-                for media_id in assets.borders {
-                    pools.borders.push(SelectedSeasonAsset {
-                        collection_id,
-                        media_id,
-                    });
-                }
-                for media_id in assets.backgrounds {
-                    pools.backgrounds.push(SelectedSeasonAsset {
-                        collection_id,
-                        media_id,
-                    });
-                }
-                for media_id in assets.subjects {
-                    pools.subjects.push(SelectedSeasonAsset {
-                        collection_id,
-                        media_id,
-                    });
-                }
-                for media_id in assets.backs {
-                    pools.backs.push(SelectedSeasonAsset {
-                        collection_id,
-                        media_id,
-                    });
-                }
+                Self::ensure_collection_asset_weights_valid(&assets)?;
+                Self::append_media_pool_with_weights(
+                    &mut pools.borders,
+                    collection_id,
+                    &assets.borders,
+                    &assets.border_weights,
+                );
+                Self::append_media_pool_with_weights(
+                    &mut pools.backgrounds,
+                    collection_id,
+                    &assets.backgrounds,
+                    &assets.background_weights,
+                );
+                Self::append_media_pool_with_weights(
+                    &mut pools.subjects,
+                    collection_id,
+                    &assets.subjects,
+                    &assets.subject_weights,
+                );
+                Self::append_media_pool_with_weights(
+                    &mut pools.backs,
+                    collection_id,
+                    &assets.backs,
+                    &assets.back_weights,
+                );
+                Self::append_packaging_pool_with_weights(&mut pools.packagings, collection_id, &assets);
             }
 
-            pools
+            Ok(pools)
         }
 
         pub fn ensure_season_ready_for_activation(season_id: SeasonId) -> DispatchResult {
-            let pools = Self::published_season_asset_pools(season_id);
-            Self::ensure_required_mint_asset_pools(&pools)
+            let pools = Self::published_season_asset_pools(season_id)?;
+            Self::ensure_required_season_pools(&pools)
+        }
+
+        fn random_u32(bytes: &[u8], offset: usize) -> u32 {
+            let b0 = bytes.get(offset).copied().unwrap_or(0);
+            let b1 = bytes.get(offset + 1).copied().unwrap_or(0);
+            let b2 = bytes.get(offset + 2).copied().unwrap_or(0);
+            let b3 = bytes.get(offset + 3).copied().unwrap_or(0);
+            u32::from_le_bytes([b0, b1, b2, b3])
+        }
+
+        fn select_weighted_item<Item, F>(
+            items: &[Item],
+            random: u32,
+            mut weight_of: F,
+        ) -> Result<&Item, DispatchError>
+        where
+            F: FnMut(&Item) -> u32,
+        {
+            let total_weight = items.iter().fold(0u64, |sum, item| {
+                sum.saturating_add(weight_of(item) as u64)
+            });
+            ensure!(total_weight > 0, Error::<T>::AssetWeightMultiplierInvalid);
+
+            let mut remaining = (random as u64) % total_weight;
+            for item in items {
+                let weight = weight_of(item) as u64;
+                if weight == 0 {
+                    continue;
+                }
+                if remaining < weight {
+                    return Ok(item);
+                }
+                remaining = remaining.saturating_sub(weight);
+            }
+
+            items
+                .iter()
+                .rev()
+                .find(|item| weight_of(item) > 0)
+                .ok_or(Error::<T>::AssetWeightMultiplierInvalid.into())
         }
 
         fn assign_artwork_from_active_season(card_id: u32) -> DispatchResult {
@@ -1811,34 +2406,29 @@ pub mod pallet {
             let hash = T::Hashing::hash(&subject);
             let bytes = hash.as_ref();
 
-            let pools = Self::published_season_asset_pools(season_id);
-            Self::ensure_required_mint_asset_pools(&pools)?;
+            let pools = Self::published_season_asset_pools(season_id)?;
+            Self::ensure_required_card_art_pools(&pools)?;
 
-            let border_ix = (bytes.get(0).copied().unwrap_or(0) as usize) % pools.borders.len();
-            let bg_ix = (bytes.get(1).copied().unwrap_or(0) as usize) % pools.backgrounds.len();
-            let subject_ix = (bytes.get(2).copied().unwrap_or(0) as usize) % pools.subjects.len();
-
-            let border_selection = pools
-                .borders
-                .get(border_ix)
-                .copied()
-                .expect("borders is non-empty; modulo keeps index in range; qed");
-            let background_selection = pools
-                .backgrounds
-                .get(bg_ix)
-                .copied()
-                .expect("backgrounds is non-empty; modulo keeps index in range; qed");
-            let subject_selection = pools
-                .subjects
-                .get(subject_ix)
-                .copied()
-                .expect("subjects is non-empty; modulo keeps index in range; qed");
-            let back_ix = (bytes.get(3).copied().unwrap_or(0) as usize) % pools.backs.len();
-            let back_selection = pools
-                .backs
-                .get(back_ix)
-                .copied()
-                .expect("backs is non-empty; modulo keeps index in range; qed");
+            let border_selection = *Self::select_weighted_item(
+                &pools.borders,
+                Self::random_u32(bytes, 0),
+                |item| item.selection_weight,
+            )?;
+            let background_selection = *Self::select_weighted_item(
+                &pools.backgrounds,
+                Self::random_u32(bytes, 4),
+                |item| item.selection_weight,
+            )?;
+            let subject_selection = *Self::select_weighted_item(
+                &pools.subjects,
+                Self::random_u32(bytes, 8),
+                |item| item.selection_weight,
+            )?;
+            let back_selection = *Self::select_weighted_item(
+                &pools.backs,
+                Self::random_u32(bytes, 12),
+                |item| item.selection_weight,
+            )?;
 
             CardArtwork::<T>::insert(
                 card_id,

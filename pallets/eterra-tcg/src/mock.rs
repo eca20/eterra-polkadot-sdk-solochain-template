@@ -46,6 +46,8 @@ parameter_types! {
     pub const MaxBackgrounds: u32 = 32;
     pub const MaxSubjects: u32 = 128;
     pub const MaxBacks: u32 = 32;
+    pub const MaxPackagingFronts: u32 = 16;
+    pub const MaxPackagingBacks: u32 = 16;
     pub const MaxSeasonCollections: u32 = 32;
     pub const MaxSeasonCollectionNameLen: u32 = 64;
 
@@ -203,6 +205,8 @@ impl pallet_eterra_slots::Config for Test {
     type MaxBackgrounds = MaxBackgrounds;
     type MaxSubjects = MaxSubjects;
     type MaxBacks = MaxBacks;
+    type MaxPackagingFronts = MaxPackagingFronts;
+    type MaxPackagingBacks = MaxPackagingBacks;
     type MaxSeasonCollections = MaxSeasonCollections;
     type MaxSeasonCollectionNameLen = MaxSeasonCollectionNameLen;
 
@@ -289,6 +293,28 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
             None,
         )
         .expect("register back");
+        let uri: BoundedVec<u8, MaxMediaUriLen> = b"ipfs://pf".to_vec().try_into().unwrap();
+        let ct: BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+        pallet_eterra_media::Pallet::<Test>::register_media(
+            RuntimeOrigin::signed(1),
+            None,
+            uri.clone(),
+            ct.clone(),
+            pallet_eterra_media::MediaClass::CoreAsset,
+            pallet_eterra_media::Delivery::RemoteIpfs,
+            None,
+        )
+        .expect("register packaging front");
+        pallet_eterra_media::Pallet::<Test>::register_media(
+            RuntimeOrigin::signed(1),
+            None,
+            uri,
+            ct,
+            pallet_eterra_media::MediaClass::CoreAsset,
+            pallet_eterra_media::Delivery::RemoteIpfs,
+            None,
+        )
+        .expect("register packaging back");
 
         let collection_name: frame_support::BoundedVec<u8, MaxSeasonCollectionNameLen> =
             b"Core Set".to_vec().try_into().unwrap();
@@ -330,6 +356,22 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
             3,
         )
         .expect("add back asset");
+        pallet_eterra_slots::Pallet::<Test>::add_season_collection_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            0,
+            pallet_eterra_slots::AssetKind::PackagingFront,
+            4,
+        )
+        .expect("add packaging front asset");
+        pallet_eterra_slots::Pallet::<Test>::add_season_collection_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            0,
+            pallet_eterra_slots::AssetKind::PackagingBack,
+            5,
+        )
+        .expect("add packaging back asset");
         pallet_eterra_slots::Pallet::<Test>::publish_season_collection(
             RuntimeOrigin::signed(1),
             1,
