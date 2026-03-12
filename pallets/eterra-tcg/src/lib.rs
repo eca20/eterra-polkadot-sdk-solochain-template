@@ -51,23 +51,26 @@ pub enum AssetKind {
     Border,
     Background,
     Subject,
+    Back,
 }
 
 #[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
-pub struct SeasonAssetsInfo<BBorders, BBackgrounds, BSubjects> {
+pub struct SeasonAssetsInfo<BBorders, BBackgrounds, BSubjects, BBacks> {
     pub borders: BBorders,
     pub backgrounds: BBackgrounds,
     pub subjects: BSubjects,
+    pub backs: BBacks,
 }
 
-impl<BBorders: Default, BBackgrounds: Default, BSubjects: Default> Default
-    for SeasonAssetsInfo<BBorders, BBackgrounds, BSubjects>
+impl<BBorders: Default, BBackgrounds: Default, BSubjects: Default, BBacks: Default> Default
+    for SeasonAssetsInfo<BBorders, BBackgrounds, BSubjects, BBacks>
 {
     fn default() -> Self {
         Self {
             borders: Default::default(),
             backgrounds: Default::default(),
             subjects: Default::default(),
+            backs: Default::default(),
         }
     }
 }
@@ -78,6 +81,7 @@ pub struct CardArtworkInfo {
     pub border_media_id: MediaId,
     pub background_media_id: MediaId,
     pub subject_media_id: MediaId,
+    pub back_media_id: MediaId,
 }
 
 #[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
@@ -109,7 +113,7 @@ pub mod pallet {
     use frame_system::pallet_prelude::BlockNumberFor;
     use sp_runtime::traits::StaticLookup;
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(6);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(8);
     const ESCROW_PALLET_ID: PalletId = PalletId(*b"et/tcgsc");
 
     /// Balance type bound to the runtime currency.
@@ -119,30 +123,33 @@ pub mod pallet {
     type BoundedBorders<T> = BoundedVec<MediaId, <T as Config>::MaxBorders>;
     type BoundedBackgrounds<T> = BoundedVec<MediaId, <T as Config>::MaxBackgrounds>;
     type BoundedSubjects<T> = BoundedVec<MediaId, <T as Config>::MaxSubjects>;
+    type BoundedBacks<T> = BoundedVec<MediaId, <T as Config>::MaxBacks>;
     type BoundedSeasonCollectionName<T> =
         BoundedVec<u8, <T as Config>::MaxSeasonCollectionNameLen>;
     type BoundedSeasonCollectionIds<T> =
         BoundedVec<SeasonCollectionId, <T as Config>::MaxSeasonCollections>;
     type SeasonAssetsInfoOf<T> =
-        SeasonAssetsInfo<BoundedBorders<T>, BoundedBackgrounds<T>, BoundedSubjects<T>>;
+        SeasonAssetsInfo<BoundedBorders<T>, BoundedBackgrounds<T>, BoundedSubjects<T>, BoundedBacks<T>>;
     type SeasonCollectionInfoOf<T> =
         SeasonCollectionInfo<BoundedSeasonCollectionName<T>, BlockNumberFor<T>>;
+
+    #[derive(Clone, Copy)]
+    struct SelectedSeasonAsset {
+        collection_id: SeasonCollectionId,
+        media_id: MediaId,
+    }
+
+    #[derive(Default)]
+    struct PublishedSeasonAssetPools {
+        borders: Vec<SelectedSeasonAsset>,
+        backgrounds: Vec<SelectedSeasonAsset>,
+        subjects: Vec<SelectedSeasonAsset>,
+        backs: Vec<SelectedSeasonAsset>,
+    }
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
     pub struct Pallet<T>(_);
-
-    #[pallet::hooks]
-    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-        fn on_runtime_upgrade() -> Weight {
-            let mut weight = T::DbWeight::get().reads(1);
-            if StorageVersion::get::<Pallet<T>>() < STORAGE_VERSION {
-                STORAGE_VERSION.put::<Pallet<T>>();
-                weight = weight.saturating_add(T::DbWeight::get().writes(1));
-            }
-            weight
-        }
-    }
 
     // ------------------
     // Pallet Config
@@ -234,6 +241,10 @@ pub mod pallet {
         /// Maximum number of subject layers per season.
         #[pallet::constant]
         type MaxSubjects: Get<u32>;
+
+        /// Maximum number of back layers per season.
+        #[pallet::constant]
+        type MaxBacks: Get<u32>;
 
         /// Maximum number of art collections per season.
         #[pallet::constant]
@@ -647,7 +658,7 @@ pub mod pallet {
         SeasonCollectionNotDraft,
         /// Season art collection is already published.
         SeasonCollectionAlreadyPublished,
-        /// Season art collection does not yet contain one of each required asset type.
+        /// Season art collection does not satisfy the current publish requirements.
         SeasonCollectionIncomplete,
         /// MediaId not found in the media registry.
         UnknownMedia,
@@ -661,7 +672,8 @@ pub mod pallet {
         AssetIndexOutOfBounds,
         /// No active season is currently set.
         NoActiveSeason,
-        /// The active season has no published collection with a complete art set.
+        /// The active season has no published asset pool with at least one border, background,
+        /// subject, and back.
         NoPublishedSeasonCollection,
         /// Card artwork has not been assigned for this card.
         CardArtworkMissing,
@@ -1149,7 +1161,7 @@ pub mod pallet {
             Ok(())
         }
 
-        /// Publish a fully-populated season art collection so minting can use it.
+        /// Publish a season art collection so it contributes layers into the season-wide mint pool.
         #[pallet::call_index(20)]
         #[pallet::weight(<T as Config>::WeightInfo::publish_season_collection())]
         #[transactional]
@@ -1163,7 +1175,9 @@ pub mod pallet {
             Self::ensure_season_manageable(season_id)?;
 
             let assets = SeasonCollectionAssets::<T>::get(season_id, collection_id);
-            Self::ensure_assets_non_empty(&assets)
+            Self::ensure_collection_has_any_assets(&assets)
+                .map_err(|_| Error::<T>::SeasonCollectionIncomplete)?;
+            Self::ensure_collection_can_publish_into_season(season_id, &assets)
                 .map_err(|_| Error::<T>::SeasonCollectionIncomplete)?;
 
             SeasonCollections::<T>::try_mutate(
@@ -1266,6 +1280,15 @@ pub mod pallet {
                                 .try_push(media_id)
                                 .map_err(|_| Error::<T>::AssetListFull)?;
                         }
+                        AssetKind::Back => {
+                            if assets.backs.contains(&media_id) {
+                                return Ok(false);
+                            }
+                            assets
+                                .backs
+                                .try_push(media_id)
+                                .map_err(|_| Error::<T>::AssetListFull)?;
+                        }
                     }
                     Ok(true)
                 },
@@ -1310,6 +1333,9 @@ pub mod pallet {
                         }
                         AssetKind::Subject => {
                             Self::remove_asset_from_list(&mut assets.subjects, media_id)
+                        }
+                        AssetKind::Back => {
+                            Self::remove_asset_from_list(&mut assets.backs, media_id)
                         }
                     };
                     ensure!(removed, Error::<T>::AssetNotFound);
@@ -1357,6 +1383,9 @@ pub mod pallet {
                         )?,
                         AssetKind::Subject => {
                             Self::move_asset_within_list(&mut assets.subjects, media_id, new_index)?
+                        }
+                        AssetKind::Back => {
+                            Self::move_asset_within_list(&mut assets.backs, media_id, new_index)?
                         }
                     };
                     Ok((old_index, bounded_new_index))
@@ -1640,11 +1669,35 @@ pub mod pallet {
             Ok(())
         }
 
-        fn ensure_assets_non_empty(assets: &SeasonAssetsInfoOf<T>) -> DispatchResult {
+        fn ensure_collection_has_any_assets(assets: &SeasonAssetsInfoOf<T>) -> DispatchResult {
             ensure!(
                 !assets.borders.is_empty()
-                    && !assets.backgrounds.is_empty()
-                    && !assets.subjects.is_empty(),
+                    || !assets.backgrounds.is_empty()
+                    || !assets.subjects.is_empty()
+                    || !assets.backs.is_empty(),
+                Error::<T>::SeasonCollectionIncomplete
+            );
+            Ok(())
+        }
+
+        fn ensure_collection_can_publish_into_season(
+            season_id: SeasonId,
+            assets: &SeasonAssetsInfoOf<T>,
+        ) -> DispatchResult {
+            let existing_pools = Self::published_season_asset_pools(season_id);
+            ensure!(
+                !existing_pools.backs.is_empty() || !assets.backs.is_empty(),
+                Error::<T>::SeasonCollectionIncomplete
+            );
+            Ok(())
+        }
+
+        fn ensure_required_mint_asset_pools(pools: &PublishedSeasonAssetPools) -> DispatchResult {
+            ensure!(
+                !pools.borders.is_empty()
+                    && !pools.backgrounds.is_empty()
+                    && !pools.subjects.is_empty()
+                    && !pools.backs.is_empty(),
                 Error::<T>::NoPublishedSeasonCollection
             );
             Ok(())
@@ -1691,20 +1744,52 @@ pub mod pallet {
             Ok((old_index, new_index))
         }
 
-        fn published_collection_ids(season_id: SeasonId) -> Vec<SeasonCollectionId> {
-            SeasonCollectionIds::<T>::get(season_id)
-                .into_iter()
-                .filter(|collection_id| {
-                    matches!(
-                        SeasonCollections::<T>::get(season_id, *collection_id)
-                            .map(|collection| collection.status),
-                        Some(SeasonCollectionStatus::Published)
-                    ) && Self::ensure_assets_non_empty(
-                        &SeasonCollectionAssets::<T>::get(season_id, *collection_id),
-                    )
-                    .is_ok()
-                })
-                .collect()
+        fn published_season_asset_pools(season_id: SeasonId) -> PublishedSeasonAssetPools {
+            let mut pools = PublishedSeasonAssetPools::default();
+
+            for collection_id in SeasonCollectionIds::<T>::get(season_id) {
+                let is_published = matches!(
+                    SeasonCollections::<T>::get(season_id, collection_id)
+                        .map(|collection| collection.status),
+                    Some(SeasonCollectionStatus::Published)
+                );
+                if !is_published {
+                    continue;
+                }
+
+                let assets = SeasonCollectionAssets::<T>::get(season_id, collection_id);
+                for media_id in assets.borders {
+                    pools.borders.push(SelectedSeasonAsset {
+                        collection_id,
+                        media_id,
+                    });
+                }
+                for media_id in assets.backgrounds {
+                    pools.backgrounds.push(SelectedSeasonAsset {
+                        collection_id,
+                        media_id,
+                    });
+                }
+                for media_id in assets.subjects {
+                    pools.subjects.push(SelectedSeasonAsset {
+                        collection_id,
+                        media_id,
+                    });
+                }
+                for media_id in assets.backs {
+                    pools.backs.push(SelectedSeasonAsset {
+                        collection_id,
+                        media_id,
+                    });
+                }
+            }
+
+            pools
+        }
+
+        pub fn ensure_season_ready_for_activation(season_id: SeasonId) -> DispatchResult {
+            let pools = Self::published_season_asset_pools(season_id);
+            Self::ensure_required_mint_asset_pools(&pools)
         }
 
         fn assign_artwork_from_active_season(card_id: u32) -> DispatchResult {
@@ -1726,44 +1811,46 @@ pub mod pallet {
             let hash = T::Hashing::hash(&subject);
             let bytes = hash.as_ref();
 
-            let published_collections = Self::published_collection_ids(season_id);
-            ensure!(
-                !published_collections.is_empty(),
-                Error::<T>::NoPublishedSeasonCollection
-            );
-            let collection_ix =
-                (bytes.get(3).copied().unwrap_or(0) as usize) % published_collections.len();
-            let collection_id = published_collections[collection_ix];
-            let assets = SeasonCollectionAssets::<T>::get(season_id, collection_id);
-            Self::ensure_assets_non_empty(&assets)?;
+            let pools = Self::published_season_asset_pools(season_id);
+            Self::ensure_required_mint_asset_pools(&pools)?;
 
-            let border_ix = (bytes.get(0).copied().unwrap_or(0) as usize) % assets.borders.len();
-            let bg_ix = (bytes.get(1).copied().unwrap_or(0) as usize) % assets.backgrounds.len();
-            let subject_ix = (bytes.get(2).copied().unwrap_or(0) as usize) % assets.subjects.len();
+            let border_ix = (bytes.get(0).copied().unwrap_or(0) as usize) % pools.borders.len();
+            let bg_ix = (bytes.get(1).copied().unwrap_or(0) as usize) % pools.backgrounds.len();
+            let subject_ix = (bytes.get(2).copied().unwrap_or(0) as usize) % pools.subjects.len();
 
-            let border_media_id = *assets
+            let border_selection = pools
                 .borders
                 .get(border_ix)
+                .copied()
                 .expect("borders is non-empty; modulo keeps index in range; qed");
-            let background_media_id = *assets
+            let background_selection = pools
                 .backgrounds
                 .get(bg_ix)
+                .copied()
                 .expect("backgrounds is non-empty; modulo keeps index in range; qed");
-            let subject_media_id = *assets
+            let subject_selection = pools
                 .subjects
                 .get(subject_ix)
+                .copied()
                 .expect("subjects is non-empty; modulo keeps index in range; qed");
+            let back_ix = (bytes.get(3).copied().unwrap_or(0) as usize) % pools.backs.len();
+            let back_selection = pools
+                .backs
+                .get(back_ix)
+                .copied()
+                .expect("backs is non-empty; modulo keeps index in range; qed");
 
             CardArtwork::<T>::insert(
                 card_id,
                 CardArtworkInfo {
                     season_id,
-                    border_media_id,
-                    background_media_id,
-                    subject_media_id,
+                    border_media_id: border_selection.media_id,
+                    background_media_id: background_selection.media_id,
+                    subject_media_id: subject_selection.media_id,
+                    back_media_id: back_selection.media_id,
                 },
             );
-            CardArtworkCollectionId::<T>::insert(card_id, collection_id);
+            CardArtworkCollectionId::<T>::insert(card_id, subject_selection.collection_id);
             Ok(())
         }
 

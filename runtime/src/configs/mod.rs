@@ -79,6 +79,14 @@ impl pallet_eterra_tcg::HandChecker<AccountId> for TcgHandChecker {
     }
 }
 
+pub struct TcgSeasonActivationValidator;
+
+impl pallet_eterra_seasons::SeasonActivationValidator<u32> for TcgSeasonActivationValidator {
+    fn ensure_can_activate(season_id: u32) -> frame_support::dispatch::DispatchResult {
+        pallet_eterra_tcg::Pallet::<Runtime>::ensure_season_ready_for_activation(season_id)
+    }
+}
+
 parameter_types! {
     pub const BlockHashCount: BlockNumber = 2400;
     pub const Version: RuntimeVersion = VERSION;
@@ -650,6 +658,7 @@ impl pallet_eterra_tcg::Config for Runtime {
     type MaxBorders = ConstU32<32>;
     type MaxBackgrounds = ConstU32<32>;
     type MaxSubjects = ConstU32<128>;
+    type MaxBacks = ConstU32<32>;
     type MaxSeasonCollections = ConstU32<32>;
     type MaxSeasonCollectionNameLen = ConstU32<64>;
     type WeightInfo = pallet_eterra_tcg::weights::SubstrateWeight<Runtime>;
@@ -740,6 +749,7 @@ impl pallet_eterra_seasons::Config for Runtime {
     type AdminOrigin = PrivilegedControlOrigin;
     type MaxSeasonNameLen = MaxSeasonNameLen;
     type MaxSeasonDescLen = MaxSeasonDescLen;
+    type SeasonActivationValidator = TcgSeasonActivationValidator;
     type WeightInfo = pallet_eterra_seasons::weights::SubstrateWeight<Runtime>;
 }
 

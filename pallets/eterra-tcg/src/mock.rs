@@ -1,5 +1,6 @@
 use crate as pallet_eterra_slots;
 use frame_support::{
+    dispatch::DispatchResult,
     parameter_types,
     traits::{ConstU128, ConstU32, ConstU64, ConstU8, Everything},
     BoundedVec,
@@ -44,6 +45,7 @@ parameter_types! {
     pub const MaxBorders: u32 = 32;
     pub const MaxBackgrounds: u32 = 32;
     pub const MaxSubjects: u32 = 128;
+    pub const MaxBacks: u32 = 32;
     pub const MaxSeasonCollections: u32 = 32;
     pub const MaxSeasonCollectionNameLen: u32 = 64;
 
@@ -56,6 +58,14 @@ parameter_types! {
 
     pub const MaxSeasonNameLen: u32 = 64;
     pub const MaxSeasonDescLen: u32 = 256;
+}
+
+pub struct TcgSeasonActivationValidator;
+
+impl pallet_eterra_seasons::SeasonActivationValidator<u32> for TcgSeasonActivationValidator {
+    fn ensure_can_activate(season_id: u32) -> DispatchResult {
+        pallet_eterra_slots::Pallet::<Test>::ensure_season_ready_for_activation(season_id)
+    }
 }
 
 impl system::Config for Test {
@@ -155,6 +165,7 @@ impl pallet_eterra_seasons::Config for Test {
     type AdminOrigin = frame_system::EnsureRoot<u64>;
     type MaxSeasonNameLen = MaxSeasonNameLen;
     type MaxSeasonDescLen = MaxSeasonDescLen;
+    type SeasonActivationValidator = TcgSeasonActivationValidator;
     type WeightInfo = ();
 }
 
@@ -191,6 +202,7 @@ impl pallet_eterra_slots::Config for Test {
     type MaxBorders = MaxBorders;
     type MaxBackgrounds = MaxBackgrounds;
     type MaxSubjects = MaxSubjects;
+    type MaxBacks = MaxBacks;
     type MaxSeasonCollections = MaxSeasonCollections;
     type MaxSeasonCollectionNameLen = MaxSeasonCollectionNameLen;
 
@@ -260,13 +272,23 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
         pallet_eterra_media::Pallet::<Test>::register_media(
             RuntimeOrigin::signed(1),
             None,
+            uri.clone(),
+            ct.clone(),
+            pallet_eterra_media::MediaClass::CoreAsset,
+            pallet_eterra_media::Delivery::RemoteIpfs,
+            None,
+        )
+        .expect("register subject");
+        pallet_eterra_media::Pallet::<Test>::register_media(
+            RuntimeOrigin::signed(1),
+            None,
             uri,
             ct,
             pallet_eterra_media::MediaClass::CoreAsset,
             pallet_eterra_media::Delivery::RemoteIpfs,
             None,
         )
-        .expect("register subject");
+        .expect("register back");
 
         let collection_name: frame_support::BoundedVec<u8, MaxSeasonCollectionNameLen> =
             b"Core Set".to_vec().try_into().unwrap();
@@ -300,6 +322,14 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
             2,
         )
         .expect("add subject asset");
+        pallet_eterra_slots::Pallet::<Test>::add_season_collection_asset(
+            RuntimeOrigin::signed(1),
+            1,
+            0,
+            pallet_eterra_slots::AssetKind::Back,
+            3,
+        )
+        .expect("add back asset");
         pallet_eterra_slots::Pallet::<Test>::publish_season_collection(
             RuntimeOrigin::signed(1),
             1,

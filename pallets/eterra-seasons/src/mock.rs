@@ -37,6 +37,7 @@ impl pallet_eterra_seasons::Config for Test {
     type AdminOrigin = frame_system::EnsureRoot<u64>;
     type MaxSeasonNameLen = MaxSeasonNameLen;
     type MaxSeasonDescLen = MaxSeasonDescLen;
+    type SeasonActivationValidator = ();
     type WeightInfo = ();
 }
 

@@ -38,6 +38,16 @@ pub struct SeasonInfo<BStrName, BStrDesc, BlockNumber> {
     pub closed_at: Option<BlockNumber>,
 }
 
+pub trait SeasonActivationValidator<SeasonId> {
+    fn ensure_can_activate(season_id: SeasonId) -> DispatchResult;
+}
+
+impl<SeasonId> SeasonActivationValidator<SeasonId> for () {
+    fn ensure_can_activate(_season_id: SeasonId) -> DispatchResult {
+        Ok(())
+    }
+}
+
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
@@ -63,6 +73,9 @@ pub mod pallet {
         /// Maximum description length.
         #[pallet::constant]
         type MaxSeasonDescLen: Get<u32>;
+
+        /// Runtime hook used to decide whether a season can be activated.
+        type SeasonActivationValidator: SeasonActivationValidator<SeasonId>;
 
         /// Weight information for this pallet.
         type WeightInfo: WeightInfo;
@@ -250,6 +263,7 @@ pub mod pallet {
         pub fn activate_season(origin: OriginFor<T>, season_id: SeasonId) -> DispatchResult {
             let who = ensure_signed(origin)?;
             ensure!(Admins::<T>::contains_key(&who), Error::<T>::NotAdmin);
+            T::SeasonActivationValidator::ensure_can_activate(season_id)?;
 
             Seasons::<T>::try_mutate(season_id, |maybe_info| -> DispatchResult {
                 let info = maybe_info.as_mut().ok_or(Error::<T>::UnknownSeason)?;
