@@ -47,7 +47,7 @@ pub trait WeightInfo {
 }
 
 impl WeightInfo for () {
-	fn mint_pack() -> Weight {
+		fn mint_pack() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 	fn mint_pro() -> Weight {
@@ -136,11 +136,11 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		//  Measured:  `107`
 		//  Estimated: `7611`
 		// Minimum execution time: 88_000_000 picoseconds.
-		Weight::from_parts(95_000_000, 0)
-			.saturating_add(Weight::from_parts(0, 7611))
-			.saturating_add(T::DbWeight::get().reads(4))
-			.saturating_add(T::DbWeight::get().writes(13))
-	}
+			Weight::from_parts(95_000_000, 0)
+				.saturating_add(Weight::from_parts(0, 7611))
+				.saturating_add(T::DbWeight::get().reads(6))
+				.saturating_add(T::DbWeight::get().writes(21))
+		}
 
 	/// Storage: `EterraTCG::ProInProgress` (r:1 w:1)
 	/// Proof: `EterraTCG::ProInProgress` (`max_values`: None, `max_size`: Some(52), added: 2527, mode: `MaxEncodedLen`)
@@ -152,26 +152,26 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 	/// Proof: `EterraTCG::CardsByOwner` (`max_values`: None, `max_size`: Some(4146), added: 6621, mode: `MaxEncodedLen`)
 	/// Storage: `EterraTCG::Cards` (r:0 w:1)
 	/// Proof: `EterraTCG::Cards` (`max_values`: None, `max_size`: Some(58), added: 2533, mode: `MaxEncodedLen`)
-	fn mint_pro() -> Weight {
+		fn mint_pro() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `107`
 		//  Estimated: `7611`
 		// Minimum execution time: 51_000_000 picoseconds.
-		Weight::from_parts(52_000_000, 0)
-			.saturating_add(Weight::from_parts(0, 7611))
-			.saturating_add(T::DbWeight::get().reads(4))
-			.saturating_add(T::DbWeight::get().writes(5))
-	}
+			Weight::from_parts(52_000_000, 0)
+				.saturating_add(Weight::from_parts(0, 7611))
+				.saturating_add(T::DbWeight::get().reads(6))
+				.saturating_add(T::DbWeight::get().writes(8))
+		}
 
 	/// Storage: `System::Account` (r:1 w:1)
 	/// Storage: `EterraTCG::NextCardId` (r:1 w:1)
 	/// Storage: `EterraTCG::CardsByOwner` (r:1 w:1)
 	/// Storage: `EterraTCG::Cards` (r:0 w:1)
-	fn mint_card() -> Weight {
-		Weight::from_parts(45_000_000, 0)
-			.saturating_add(T::DbWeight::get().reads(3))
-			.saturating_add(T::DbWeight::get().writes(4))
-	}
+		fn mint_card() -> Weight {
+			Weight::from_parts(45_000_000, 0)
+				.saturating_add(T::DbWeight::get().reads(5))
+				.saturating_add(T::DbWeight::get().writes(7))
+		}
 
 	/// Storage: `EterraTCG::PlayerPacks` (r:1 w:1)
 	/// Proof: `EterraTCG::PlayerPacks` (`max_values`: None, `max_size`: Some(759), added: 3234, mode: `MaxEncodedLen`)

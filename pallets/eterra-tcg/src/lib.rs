@@ -80,6 +80,12 @@ pub struct CardArtworkInfo {
     pub subject_media_id: MediaId,
 }
 
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct CardMintInfo<AccountId, BlockNumber> {
+    pub minter: AccountId,
+    pub minted_at: BlockNumber,
+}
+
 #[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
 pub enum SeasonCollectionStatus {
     Draft,
@@ -103,7 +109,7 @@ pub mod pallet {
     use frame_system::pallet_prelude::BlockNumberFor;
     use sp_runtime::traits::StaticLookup;
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(4);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(6);
     const ESCROW_PALLET_ID: PalletId = PalletId(*b"et/tcgsc");
 
     /// Balance type bound to the runtime currency.
@@ -361,6 +367,17 @@ pub mod pallet {
     pub type CardArtworkCollectionId<T: Config> =
         StorageMap<_, Blake2_128Concat, u32, SeasonCollectionId, OptionQuery>;
 
+    /// Original mint provenance for each card.
+    #[pallet::storage]
+    #[pallet::getter(fn card_mint_info)]
+    pub type CardMintInfoByCard<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        u32,
+        CardMintInfo<T::AccountId, BlockNumberFor<T>>,
+        OptionQuery,
+    >;
+
     /// The NFT collection ID used for converted cards (single collection).
     #[pallet::storage]
     #[pallet::getter(fn card_nft_collection_id)]
@@ -413,6 +430,17 @@ pub mod pallet {
         BoundedBTreeSet<u32, T::MaxOwnedCards>,
         ValueQuery,
     >;
+
+    /// Tracks whether an account has ever minted at least one card or pack.
+    #[pallet::storage]
+    #[pallet::getter(fn has_minted)]
+    pub type HasMinted<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, (), OptionQuery>;
+
+    /// Total number of distinct accounts that have minted at least one card or pack.
+    #[pallet::storage]
+    #[pallet::getter(fn unique_minter_count)]
+    pub type UniqueMinterCount<T: Config> = StorageValue<_, u32, ValueQuery>;
 
     /// Tracks the currently “active” card index (within a pack) for each account
     #[pallet::storage]
@@ -675,6 +703,7 @@ pub mod pallet {
         #[transactional]
         pub fn mint_pack(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
+            Self::note_minter(&player);
 
             let mut packs = PlayerPacks::<T>::get(&player);
             Self::prune_completed_packs(&mut packs);
@@ -737,6 +766,7 @@ pub mod pallet {
         #[transactional]
         pub fn mint_card(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
+            Self::note_minter(&player);
             Self::ensure_can_receive_cards(&player, 1)?;
 
             // Charge the mint price up-front.
@@ -898,6 +928,7 @@ pub mod pallet {
         #[transactional]
         pub fn mint_pro(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
+            Self::note_minter(&player);
             ensure!(
                 !ProInProgress::<T>::contains_key(&player),
                 Error::<T>::ProMintAlreadyInProgress
@@ -1524,6 +1555,27 @@ pub mod pallet {
             CardsByOwner::<T>::get(owner).len().saturated_into::<u32>()
         }
 
+        fn note_minter(account: &T::AccountId) {
+            if HasMinted::<T>::contains_key(account) {
+                return;
+            }
+
+            HasMinted::<T>::insert(account, ());
+            UniqueMinterCount::<T>::mutate(|count| {
+                *count = count.saturating_add(1);
+            });
+        }
+
+        fn record_card_mint(card_id: u32, owner: &T::AccountId) {
+            CardMintInfoByCard::<T>::insert(
+                card_id,
+                CardMintInfo {
+                    minter: owner.clone(),
+                    minted_at: <frame_system::Pallet<T>>::block_number(),
+                },
+            );
+        }
+
         fn owned_card_capacity(owner: &T::AccountId) -> u32 {
             T::BaseCardCapacity::get().saturating_add(CardCapacityBonus::<T>::get(owner))
         }
@@ -1727,6 +1779,7 @@ pub mod pallet {
             };
 
             Cards::<T>::insert(card_id, new_card_info);
+            Self::record_card_mint(card_id, owner);
             CardsByOwner::<T>::try_mutate(owner, |set| -> Result<(), DispatchError> {
                 set.try_insert(card_id)
                     .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
@@ -1752,6 +1805,7 @@ pub mod pallet {
             };
 
             Cards::<T>::insert(card_id, new_card_info);
+            Self::record_card_mint(card_id, owner);
             CardsByOwner::<T>::try_mutate(owner, |set| -> Result<(), DispatchError> {
                 set.try_insert(card_id)
                     .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;

@@ -146,6 +146,31 @@ fn mint_card_writes_card_artwork() {
         assert_eq!(art.border_media_id, 0);
         assert_eq!(art.background_media_id, 1);
         assert_eq!(art.subject_media_id, 2);
+
+        let mint_info = EterraSlots::card_mint_info(next_before).expect("card mint info written");
+        assert_eq!(mint_info.minter, player);
+        assert_eq!(mint_info.minted_at, System::block_number());
+    });
+}
+
+#[test]
+fn unique_minter_count_tracks_distinct_accounts_only_once() {
+    new_test_ext().execute_with(|| {
+        let first = 2u64;
+        let second = 3u64;
+
+        assert_eq!(EterraSlots::unique_minter_count(), 0);
+
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(first)));
+        assert_eq!(EterraSlots::unique_minter_count(), 1);
+        assert!(EterraSlots::has_minted(first).is_some());
+
+        assert_ok!(EterraSlots::mint_pack(RuntimeOrigin::signed(first)));
+        assert_eq!(EterraSlots::unique_minter_count(), 1);
+
+        assert_ok!(EterraSlots::mint_pro(RuntimeOrigin::signed(second)));
+        assert_eq!(EterraSlots::unique_minter_count(), 2);
+        assert!(EterraSlots::has_minted(second).is_some());
     });
 }
 
