@@ -577,6 +577,8 @@ impl pallet_eterra_monte_carlo_ai::pallet::Config for Runtime {
 impl pallet_eterra_game_authority::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type MaxPlayersPerGame = MaxPlayersPerGameConst;
+    type MaxRequestIdLen = frame_support::traits::ConstU32<128>;
+    type MaxOutcomeLen = frame_support::traits::ConstU32<128>;
     type AdminOrigin = PrivilegedControlOrigin;
     type MaxExpirationsPerBlock = MaxExpirationsPerBlock;
     // If your BlockNumber is u32/u64, set 30 blocks:

@@ -17,6 +17,8 @@ pub type AccountId = u64;
 parameter_types! {
     pub const BlockHashCount: u64 = 250;
     pub const MaxPlayersPerGame: u32 = 128;
+    pub const MaxRequestIdLen: u32 = 128;
+    pub const MaxOutcomeLen: u32 = 128;
 }
 
 impl frame_system::Config for Test {
@@ -54,6 +56,8 @@ impl frame_system::Config for Test {
 impl pallet_eterra_game_authority::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type MaxPlayersPerGame = MaxPlayersPerGame;
+    type MaxRequestIdLen = MaxRequestIdLen;
+    type MaxOutcomeLen = MaxOutcomeLen;
     // Governance-only management of server whitelist for tests:
     type AdminOrigin = EnsureRoot<AccountId>;
     type MaxExpirationsPerBlock = frame_support::traits::ConstU32<256>;
@@ -110,4 +114,9 @@ impl ExtBuilder {
         ext.execute_with(|| System::set_block_number(1));
         ext
     }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub fn new_test_ext() -> TestExternalities {
+    ExtBuilder::default().build()
 }

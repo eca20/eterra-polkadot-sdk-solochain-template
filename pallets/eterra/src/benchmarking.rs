@@ -19,7 +19,7 @@ fn fund<T: Config>(who: &T::AccountId) {
         .saturating_add(pack_price)
         .saturating_add(pro_price)
         .saturating_add(pro_price);
-    let _ = <<T as cards::pallet::Config>::Currency as frame_support::traits::Currency<
+    let _ = <<T as cards::pallet::Config>::PaymentCurrency as frame_support::traits::Currency<
         T::AccountId,
     >>::deposit_creating(who, amount);
 }

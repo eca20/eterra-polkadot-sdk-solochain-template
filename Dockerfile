@@ -1,12 +1,14 @@
 # -------------------------
 # Builder stage
 # -------------------------
-FROM rust:1.79-bookworm AS builder
+FROM rust:1.85-bookworm AS builder
 
 # Build deps for Substrate (kept minimal; extend if your pallets need more)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     clang pkg-config libssl-dev cmake protobuf-compiler git \
  && rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add wasm32-unknown-unknown
 
 WORKDIR /code
 

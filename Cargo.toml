@@ -19,7 +19,6 @@ members = [
     "pallets/eterra-monte-carlo-ai",
     "pallets/eterra-media",
     "pallets/eterra-game-authority",
-    "pallets/nfts",
     "crates/eterra-card-ai-adapter",   
     "runtime",
 ]
@@ -113,4 +112,4 @@ pallet-eterra-gamer                     = { path = "pallets/eterra-gamer", defau
 pallet-eterra-game-authority            = { path = "pallets/eterra-game-authority", default-features = false }
 pallet-eterra-media                     = { path = "pallets/eterra-media", default-features = false }
 pallet-eterra-seasons                   = { path = "pallets/eterra-seasons", default-features = false }
-pallet-nfts                             = { path = "pallets/nfts", default-features = false }
+pallet-nfts                             = { version = "32.0.0", default-features = false }

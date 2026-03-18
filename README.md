@@ -70,6 +70,16 @@ make reset-local-dev RESET_ARGS="--yes --restart-media"
 make help
 ```
 
+## Rapid Dev Deploy To The 2010 Mac mini
+
+The `deploy/macmini2010/` toolkit treats this MacBook as the source of truth and the 2010 mini as a runtime target for the dev node plus the IPFS media stack.
+
+1. Copy `deploy/macmini2010.env.example` to `deploy/macmini2010.env` and fill in the LAN/SSH values.
+2. Run `deploy/macmini2010/bootstrap.sh` once to prepare Docker, `systemd`, `/opt/eterra/...`, `/var/lib/eterra-node-dev`, and the LAN-only UFW rules on the mini.
+3. Run `deploy/macmini2010/deploy-node.sh` to build the Linux `amd64` node artifact locally, ship `solochain-eterra-node` plus `dev-raw.json`, and restart `eterra-node.service`.
+4. Run `deploy/macmini2010/deploy-media.sh` to `rsync` the sibling `eterra-ipfs-media-service` repo to `/opt/eterra/media/current` and rebuild the remote Docker Compose stack.
+5. Use `deploy/macmini2010/deploy-all.sh`, `status.sh`, `logs.sh`, `reset-node.sh --yes`, and `reset-media.sh --yes` for the everyday loop.
+
 `scripts/run-node.sh` defaults to exposed RPC on `dev`/`testnet` (so dockerized services can connect; validator uses `--unsafe-rpc-external` per Substrate CLI rules) and local-only RPC on `production` unless explicitly overridden.
 
 `scripts/reset-local-dev-stack.sh` is intentionally destructive and requires `--yes`. By default it removes the local node base-path for `MODE=default CHAIN=dev ROLE=validator` and runs `docker compose down --volumes` for the sibling `eterra-ipfs-media-service` repo. Use `--media-only`, `--chain-only`, or `--restart-media` to narrow or streamline the reset flow.

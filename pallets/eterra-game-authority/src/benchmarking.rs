@@ -5,6 +5,15 @@ use frame_benchmarking::{account, benchmarks, whitelisted_caller};
 use frame_support::{BoundedBTreeSet, BoundedVec};
 use frame_support::traits::Get;
 use frame_system::RawOrigin;
+use sp_std::vec::Vec;
+
+fn request_id<T: Config>(value: &[u8]) -> RequestIdOf<T> {
+    BoundedVec::try_from(value.to_vec()).expect("request id within bounds")
+}
+
+fn outcome<T: Config>(value: &[u8]) -> OutcomeOf<T> {
+    BoundedVec::try_from(value.to_vec()).expect("outcome within bounds")
+}
 
 benchmarks! {
     add_server {
@@ -22,77 +31,60 @@ benchmarks! {
         assert!(!WhitelistedServers::<T>::contains_key(&server));
     }
 
-    create_game {
-        let server: T::AccountId = whitelisted_caller();
-        WhitelistedServers::<T>::insert(&server, ());
-    }: _(RawOrigin::Signed(server.clone()))
-    verify {
-        assert!(Games::<T>::contains_key(0));
-    }
-
-    add_player {
-        let server: T::AccountId = whitelisted_caller();
-        let player: T::AccountId = account("player", 0, 0);
-        WhitelistedServers::<T>::insert(&server, ());
-        let game_id = NextGameId::<T>::get();
-        let info = GameInfo::<T::AccountId, T::MaxPlayersPerGame> {
-            server: server.clone(),
-            players: BoundedBTreeSet::new(),
-            started: true,
-            ended: false,
-        };
-        Games::<T>::insert(game_id, info);
-    }: _(RawOrigin::Signed(server.clone()), game_id, player.clone())
-    verify {
-        assert_eq!(ActiveGameByPlayer::<T>::get(&player), Some(game_id));
-    }
-
-    add_players_batch {
-        let server: T::AccountId = whitelisted_caller();
-        let n in 1 .. T::MaxBatchAdd::get();
-        WhitelistedServers::<T>::insert(&server, ());
-        let game_id = NextGameId::<T>::get();
-        let info = GameInfo::<T::AccountId, T::MaxPlayersPerGame> {
-            server: server.clone(),
-            players: BoundedBTreeSet::new(),
-            started: true,
-            ended: false,
-        };
-        Games::<T>::insert(game_id, info);
-
-        let mut players: BoundedVec<T::AccountId, T::MaxBatchAdd> = BoundedVec::default();
-        for i in 0..n {
-            let p: T::AccountId = account("player", i, 0);
-            let _ = players.try_push(p);
-        }
-    }: _(RawOrigin::Signed(server.clone()), game_id, players.clone())
-    verify {
-        for p in players {
-            assert_eq!(ActiveGameByPlayer::<T>::get(&p), Some(game_id));
-        }
-    }
-
-    create_game_with_batch_add {
+    create_game_with_round_id {
         let server: T::AccountId = whitelisted_caller();
         let n in 1 .. T::MaxBatchAdd::get();
         WhitelistedServers::<T>::insert(&server, ());
 
         let mut players: BoundedVec<T::AccountId, T::MaxBatchAdd> = BoundedVec::default();
         for i in 0..n {
-            let p: T::AccountId = account("player", i, 0);
-            let _ = players.try_push(p);
+            let player: T::AccountId = account("player", i, 0);
+            let _ = players.try_push(player);
         }
 
+        let round_id = request_id::<T>(b"bench-round");
         let game_id = NextGameId::<T>::get();
-    }: _(RawOrigin::Signed(server.clone()), players.clone())
+    }: _(RawOrigin::Signed(server.clone()), round_id.clone(), players.clone())
     verify {
+        assert_eq!(GameIdByRoundId::<T>::get(&round_id), Some(game_id));
         assert!(Games::<T>::contains_key(game_id));
-        for p in players {
-            assert_eq!(ActiveGameByPlayer::<T>::get(&p), Some(game_id));
+        for player in players {
+            assert_eq!(ActiveGameByPlayer::<T>::get(&player), Some(game_id));
         }
     }
 
-    record_eliminations {
+    end_game_with_command_id {
+        let server: T::AccountId = whitelisted_caller();
+        WhitelistedServers::<T>::insert(&server, ());
+        let game_id = NextGameId::<T>::get();
+        let mut info = GameInfo::<T::AccountId, T::MaxPlayersPerGame> {
+            server: server.clone(),
+            players: BoundedBTreeSet::new(),
+            started: true,
+            ended: false,
+        };
+        let max_players = T::MaxPlayersPerGame::get();
+        let mut players = Vec::new();
+        for i in 0..max_players {
+            let player: T::AccountId = account("player", i, 0);
+            let _ = info.players.try_insert(player.clone());
+            ActiveGameByPlayer::<T>::insert(&player, game_id);
+            players.push(player);
+        }
+        Games::<T>::insert(game_id, info);
+        let command_id = request_id::<T>(b"bench-end-command");
+        let outcome = outcome::<T>(b"round_complete");
+    }: _(RawOrigin::Signed(server.clone()), game_id, command_id.clone(), outcome)
+    verify {
+        let game = Games::<T>::get(game_id).expect("game exists");
+        assert!(game.ended);
+        for player in players {
+            assert_eq!(ActiveGameByPlayer::<T>::get(&player), None);
+        }
+        assert!(ProcessedEndCommands::<T>::contains_key(&command_id));
+    }
+
+    record_eliminations_with_event_id {
         let server: T::AccountId = whitelisted_caller();
         let player: T::AccountId = account("player", 0, 0);
         WhitelistedServers::<T>::insert(&server, ());
@@ -105,26 +97,12 @@ benchmarks! {
         };
         let _ = info.players.try_insert(player.clone());
         Games::<T>::insert(game_id, info);
-    }: _(RawOrigin::Signed(server.clone()), game_id, player.clone(), 1u32)
+        ActiveGameByPlayer::<T>::insert(&player, game_id);
+        let event_id = request_id::<T>(b"bench-elim-event");
+    }: _(RawOrigin::Signed(server.clone()), game_id, event_id.clone(), player.clone(), 1u32)
     verify {
         assert_eq!(Eliminations::<T>::get(game_id, &player), 1u32);
-    }
-
-    end_game {
-        let server: T::AccountId = whitelisted_caller();
-        WhitelistedServers::<T>::insert(&server, ());
-        let game_id = NextGameId::<T>::get();
-        let info = GameInfo::<T::AccountId, T::MaxPlayersPerGame> {
-            server: server.clone(),
-            players: BoundedBTreeSet::new(),
-            started: true,
-            ended: false,
-        };
-        Games::<T>::insert(game_id, info);
-    }: _(RawOrigin::Signed(server.clone()), game_id)
-    verify {
-        let game = Games::<T>::get(game_id).expect("game exists");
-        assert!(game.ended);
+        assert!(ProcessedEliminationEvents::<T>::contains_key(&event_id));
     }
 }
 
@@ -133,9 +111,5 @@ mod tests {
     use super::*;
     use frame_benchmarking::impl_benchmark_test_suite;
 
-    impl_benchmark_test_suite!(
-        Pallet,
-        crate::mock::new_test_ext(),
-        crate::mock::Test
-    );
+    impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);
 }
