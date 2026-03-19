@@ -1,0 +1,39 @@
+{
+  "name": "Eterra Alpha",
+  "bootnodes": [],
+  "aura_authorities": [
+    "REPLACE_WITH_ALPHA_AURA_SS58_1"
+  ],
+  "grandpa_authorities": [
+    [
+      "REPLACE_WITH_ALPHA_GRANDPA_SS58_1",
+      1
+    ]
+  ],
+  "balances": [
+    [
+      "REPLACE_WITH_ALPHA_ENDOWED_ACCOUNT_1",
+      1152921504606846976
+    ],
+    [
+      "REPLACE_WITH_ALPHA_ENDOWED_ACCOUNT_2",
+      1152921504606846976
+    ],
+    [
+      "REPLACE_WITH_ALPHA_ENDOWED_ACCOUNT_3",
+      1152921504606846976
+    ]
+  ],
+  "sudo_key": "REPLACE_WITH_ALPHA_OWNER_ACCOUNT",
+  "faucet_account": "REPLACE_WITH_ALPHA_FAUCET_ACCOUNT",
+  "faucet_payout_amount": 1000000000000000,
+  "initial_servers": [],
+  "season_admins": [
+    "REPLACE_WITH_ALPHA_SEASON_ADMIN_1"
+  ],
+  "media_collection_owner": "REPLACE_WITH_ALPHA_MEDIA_OWNER",
+  "council_members": [
+    "REPLACE_WITH_ALPHA_COUNCIL_MEMBER_1"
+  ],
+  "asset_owner": "REPLACE_WITH_ALPHA_ASSET_OWNER"
+}

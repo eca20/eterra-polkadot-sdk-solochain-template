@@ -198,6 +198,41 @@ pub fn production_config() -> Result<ChainSpec, String> {
     .build())
 }
 
+pub fn alpha_config() -> Result<ChainSpec, String> {
+    let treasury = treasury_account();
+    let owner = get_account_id_from_seed::<sr25519::Public>("AlphaOwner");
+    let validator = get_account_id_from_seed::<sr25519::Public>("AlphaValidator");
+    let media_signer = get_account_id_from_seed::<sr25519::Public>("AlphaMediaSigner");
+    let hot_admin =
+        AccountId::from_ss58check("5Dq5eLhbKhUpzcuwbsFYisiWnRQkXonTt2RTmvaiVsFwkUsY")
+            .expect("hard-coded ss58 address is valid");
+    let council_members = vec![owner.clone()];
+    let mut season_admins = vec![hot_admin.clone(), media_signer.clone()];
+    season_admins.sort();
+    season_admins.dedup();
+
+    Ok(ChainSpec::builder(
+        WASM_BINARY.ok_or_else(|| "Alpha wasm not available".to_string())?,
+        None,
+    )
+    .with_name("Eterra Alpha")
+    .with_id("eterra_alpha")
+    .with_chain_type(ChainType::Live)
+    .with_properties(chain_properties())
+    .with_genesis_config_patch(testnet_genesis(
+        vec![authority_keys_from_seed("AlphaValidator")],
+        Some(owner.clone()),
+        vec![owner.clone(), validator, media_signer, treasury.clone(), hot_admin],
+        true,
+        owner,
+        1_000_000_000_000_000u128,
+        vec![],
+        council_members,
+        season_admins,
+    ))
+    .build())
+}
+
 /// Configure initial storage state for FRAME modules.
 fn testnet_genesis(
     initial_authorities: Vec<(AuraId, GrandpaId)>,
@@ -311,6 +346,7 @@ pub fn load_spec(id: &str) -> Result<ChainSpec, String> {
         // Treat it as `dev` instead of trying to open an empty filename.
         "" => development_config(),
         "dev" | "development" => development_config(),
+        "alpha" | "eterra_alpha" => alpha_config(),
         "local" | "local_testnet" => local_testnet_config(),
         "testnet" => testnet_config(),
         "production" | "mainnet" | "eterra_production" => production_config(),

@@ -1,0 +1,23 @@
+{
+  "name": "Eterra Alpha",
+  "validators": [
+    {
+      "aura_suri": "@/secure/alpha-validator-aura.suri",
+      "grandpa_suri": "@/secure/alpha-validator-grandpa.suri",
+      "grandpa_weight": 1
+    }
+  ],
+  "sudo_suri": "@/secure/alpha-owner.suri",
+  "faucet_suri": "@/secure/alpha-owner.suri",
+  "media_signer_suri": "@/secure/alpha-media-signer.suri",
+  "season_admin_addresses": [
+    "5Dq5eLhbKhUpzcuwbsFYisiWnRQkXonTt2RTmvaiVsFwkUsY"
+  ],
+  "council_suris": [
+    "@/secure/alpha-owner.suri"
+  ],
+  "asset_owner_suri": "@/secure/alpha-owner.suri",
+  "extra_endowed_suris": [],
+  "endowment": 1152921504606846976,
+  "faucet_payout_amount": 1000000000000000
+}

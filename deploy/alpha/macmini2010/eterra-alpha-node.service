@@ -1,0 +1,18 @@
+[Unit]
+Description=Eterra alpha solochain node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=eterra2010
+Group=eterra2010
+EnvironmentFile=-/opt/eterra-alpha/shared/env/node.env
+WorkingDirectory=/opt/eterra-alpha/node/current
+ExecStart=/opt/eterra-alpha/node/current/start-alpha-node.sh
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
