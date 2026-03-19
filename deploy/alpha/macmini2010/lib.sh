@@ -132,6 +132,10 @@ load_env() {
 	REMOTE_CARGO_JOBS="${REMOTE_CARGO_JOBS:-2}"
 	REMOTE_CARGO_HOME="${REMOTE_CARGO_HOME:-/home/${DEPLOY_USER}/.cargo}"
 	REMOTE_CARGO_ENV_FILE="${REMOTE_CARGO_ENV_FILE:-${REMOTE_CARGO_HOME}/env}"
+	REMOTE_CARGO_TARGET_DIR="${REMOTE_CARGO_TARGET_DIR:-${DEPLOY_ROOT}/cache/cargo-target}"
+	REMOTE_CARGO_INCREMENTAL="${REMOTE_CARGO_INCREMENTAL:-1}"
+	ENABLE_REMOTE_SCCACHE="${ENABLE_REMOTE_SCCACHE:-1}"
+	REMOTE_SCCACHE_DIR="${REMOTE_SCCACHE_DIR:-${DEPLOY_ROOT}/cache/sccache}"
 
 	[[ -n "${DEPLOY_HOST}" ]] || die "DEPLOY_HOST must be set in ${env_file}"
 	if [[ -n "${DEPLOY_PASSWORD}" ]]; then
@@ -178,6 +182,13 @@ load_env() {
 	REMOTE_MEDIA_COMPOSE_BASE="${REMOTE_MEDIA_DIR}/docker-compose.yaml"
 	REMOTE_MEDIA_COMPOSE_OVERRIDE="${REMOTE_MEDIA_DIR}/docker-compose.macmini2010.yaml"
 	REMOTE_DOCKER_COMPOSE_CMD="docker compose --project-name '${REMOTE_MEDIA_PROJECT_NAME}' -f '${REMOTE_MEDIA_COMPOSE_BASE}' -f '${REMOTE_MEDIA_COMPOSE_OVERRIDE}' --env-file '${REMOTE_MEDIA_ENV_FILE}'"
+	REMOTE_STATE_DIR="${DEPLOY_ROOT}/shared/state"
+	REMOTE_NODE_CODE_HASH_FILE="${REMOTE_STATE_DIR}/node-code.sha256"
+	REMOTE_NODE_SPEC_HASH_FILE="${REMOTE_STATE_DIR}/node-spec.sha256"
+	REMOTE_NODE_RUNTIME_HASH_FILE="${REMOTE_STATE_DIR}/node-runtime.sha256"
+	REMOTE_MEDIA_BUILD_HASH_FILE="${REMOTE_STATE_DIR}/media-build.sha256"
+	REMOTE_MEDIA_RUNTIME_HASH_FILE="${REMOTE_STATE_DIR}/media-runtime.sha256"
+	REMOTE_NODE_SERVICE_UNIT_FILE="/etc/systemd/system/${REMOTE_NODE_SERVICE_NAME}.service"
 	REMOTE_SCRIPT_DIR="${REMOTE_SCRIPT_DIR:-/tmp/alpha-macmini2010-${DEPLOY_USER}}"
 	LEGACY_NODE_SERVICE_NAME="${LEGACY_NODE_SERVICE_NAME:-eterra-node}"
 	LEGACY_MEDIA_COMPOSE_BASE="${LEGACY_DEPLOY_ROOT}/media/current/docker-compose.yaml"
@@ -335,6 +346,75 @@ make_temp_dir() {
 	dir="$(mktemp -d "${TMPDIR:-/tmp}/alpha-macmini2010.XXXXXX")"
 	register_cleanup_path "${dir}"
 	printf '%s\n' "${dir}"
+}
+
+hash_file() {
+	local path="$1"
+
+	require_cmd shasum
+	[[ -f "${path}" ]] || die "hash input file not found: ${path}"
+	shasum -a 256 "${path}" | awk '{print $1}'
+}
+
+combine_hash_values() {
+	[[ $# -gt 0 ]] || die "combine_hash_values requires at least one hash value"
+	require_cmd shasum
+	printf '%s\n' "$@" | shasum -a 256 | awk '{print $1}'
+}
+
+hash_repo_paths() {
+	local root="$1"
+	shift
+
+	local list_file
+
+	[[ $# -gt 0 ]] || die "hash_repo_paths requires at least one path"
+	require_cmd git
+	require_cmd shasum
+
+	list_file="$(mktemp "${TMPDIR:-/tmp}/alpha-macmini2010.hashlist.XXXXXX")"
+	register_cleanup_path "${list_file}"
+
+	git -C "${root}" ls-files -z --cached --others --exclude-standard -- "$@" >"${list_file}"
+	[[ -s "${list_file}" ]] || die "no deploy hash inputs found under ${root}"
+
+	(
+		cd "${root}"
+		tr '\0' '\n' <"${list_file}" | LC_ALL=C sort | while IFS= read -r rel_path; do
+			[[ -n "${rel_path}" ]] || continue
+			shasum -a 256 "${rel_path}"
+		done | shasum -a 256 | awk '{print $1}'
+	)
+}
+
+compute_node_code_hash() {
+	hash_repo_paths "${REPO_ROOT}" Cargo.toml Cargo.lock node runtime pallets crates
+}
+
+compute_node_spec_hash() {
+	combine_hash_values \
+		"$(hash_repo_paths "${REPO_ROOT}" scripts/finalize-alpha-spec.py)" \
+		"$(hash_file "${ALPHA_OVERRIDES_FILE}")"
+}
+
+compute_node_runtime_hash() {
+	local env_file="$1"
+
+	combine_hash_values \
+		"$(hash_file "${env_file}")" \
+		"$(hash_repo_paths "${REPO_ROOT}" deploy/alpha/macmini2010/start-alpha-node.sh deploy/alpha/macmini2010/eterra-alpha-node.service)"
+}
+
+compute_media_build_hash() {
+	hash_repo_paths "${MEDIA_REPO_DIR}" Dockerfile package.json package-lock.json yarn.lock tsconfig.json src
+}
+
+compute_media_runtime_hash() {
+	local env_file="$1"
+
+	combine_hash_values \
+		"$(hash_file "${env_file}")" \
+		"$(hash_repo_paths "${MEDIA_REPO_DIR}" docker-compose.yaml docker-compose.macmini2010.yaml)"
 }
 
 ensure_local_artifacts_dir() {

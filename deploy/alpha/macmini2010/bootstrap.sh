@@ -33,6 +33,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
 compose_pkg=""
+extra_pkgs=()
 if apt-cache show docker-compose-v2 >/dev/null 2>&1; then
 	compose_pkg="docker-compose-v2"
 elif apt-cache show docker-compose-plugin >/dev/null 2>&1; then
@@ -40,6 +41,9 @@ elif apt-cache show docker-compose-plugin >/dev/null 2>&1; then
 else
 	echo "[bootstrap] unable to find a docker compose plugin package" >&2
 	exit 1
+fi
+if [[ "${ENABLE_REMOTE_SCCACHE}" == "1" ]] && apt-cache show sccache >/dev/null 2>&1; then
+	extra_pkgs+=(sccache)
 fi
 apt-get install -y \
 	ca-certificates \
@@ -55,7 +59,8 @@ apt-get install -y \
 	protobuf-compiler \
 	rsync \
 	ufw \
-	"\${compose_pkg}"
+	"\${compose_pkg}" \
+	"\${extra_pkgs[@]}"
 
 systemctl enable --now docker
 usermod -aG docker "${DEPLOY_USER}" || true
@@ -64,12 +69,17 @@ mkdir -p \
 	"${REMOTE_NODE_DIR}" \
 	"${REMOTE_MEDIA_DIR}" \
 	"${REMOTE_SHARED_ENV_DIR}" \
+	"${REMOTE_STATE_DIR}" \
+	"${REMOTE_CARGO_TARGET_DIR}" \
+	"${REMOTE_SCCACHE_DIR}" \
 	"${DEPLOY_ROOT}/tmp" \
 	"${REMOTE_NODE_DATA_DIR}" \
 	"/home/${DEPLOY_USER}/.ssh"
 chown -R "${DEPLOY_USER}:${DEPLOY_USER}" \
 	"${DEPLOY_ROOT}" \
 	"${REMOTE_NODE_DATA_DIR}" \
+	"${REMOTE_CARGO_TARGET_DIR}" \
+	"${REMOTE_SCCACHE_DIR}" \
 	"/home/${DEPLOY_USER}/.ssh"
 chmod 700 "/home/${DEPLOY_USER}/.ssh"
 touch "/home/${DEPLOY_USER}/.ssh/authorized_keys"
@@ -127,8 +137,14 @@ rustup toolchain install "${REMOTE_RUST_TOOLCHAIN}" --profile minimal
 rustup default "${REMOTE_RUST_TOOLCHAIN}"
 rustup component add rust-src
 rustup target add wasm32-unknown-unknown
+if [[ "${ENABLE_REMOTE_SCCACHE}" == "1" ]] && ! command -v sccache >/dev/null 2>&1; then
+	cargo install --locked sccache
+fi
 rustc --version
 cargo --version
+if command -v sccache >/dev/null 2>&1; then
+	sccache --version
+fi
 EOF
 
 log "alpha bootstrap complete"

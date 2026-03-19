@@ -80,6 +80,21 @@ The `deploy/macmini2010/` toolkit treats this MacBook as the source of truth and
 4. Run `deploy/macmini2010/deploy-media.sh` to `rsync` the sibling `eterra-ipfs-media-service` repo to `/opt/eterra/media/current` and rebuild the remote Docker Compose stack.
 5. Use `deploy/macmini2010/deploy-all.sh`, `status.sh`, `logs.sh`, `reset-node.sh --yes`, and `reset-media.sh --yes` for the everyday loop.
 
+## Alpha Deployment Notes
+
+The `deploy/alpha/macmini2010/` toolkit keeps alpha chain state by default.
+
+- `deploy/alpha/macmini2010/deploy-node.sh` preserves `/var/lib/eterra-alpha-node` unless you pass `--purge-state`
+- `deploy/alpha/macmini2010/deploy-all.sh` preserves chain state unless you pass `--purge-state`
+- `deploy/alpha/macmini2010/reset-node.sh --yes` and `deploy/alpha/macmini2010/purge-node-state.sh` are the explicit destructive paths
+- alpha spec/genesis changes are intentionally deferred on normal deploys and only apply when you run `deploy-node.sh --purge-state` or `deploy-all.sh --purge-state`
+
+The alpha node deploy also keeps build caches on the 2010 mini:
+
+- shared Cargo target dir: `/opt/eterra-alpha/cache/cargo-target`
+- optional `sccache` dir: `/opt/eterra-alpha/cache/sccache`
+- no-change deploys now skip the Rust rebuild and only restart when runtime config actually changed
+
 `scripts/run-node.sh` defaults to exposed RPC on `dev`/`testnet` (so dockerized services can connect; validator uses `--unsafe-rpc-external` per Substrate CLI rules) and local-only RPC on `production` unless explicitly overridden.
 
 `scripts/reset-local-dev-stack.sh` is intentionally destructive and requires `--yes`. By default it removes the local node base-path for `MODE=default CHAIN=dev ROLE=validator` and runs `docker compose down --volumes` for the sibling `eterra-ipfs-media-service` repo. Use `--media-only`, `--chain-only`, or `--restart-media` to narrow or streamline the reset flow.
