@@ -163,6 +163,7 @@ load_env() {
 	AURA_SURI="$(read_secret_value "${AURA_SURI}")"
 	GRAN_SURI="$(read_secret_value "${GRAN_SURI}")"
 	MEDIA_SIGNER_SEED="$(read_secret_value "${MEDIA_SIGNER_SEED}")"
+	MEDIA_ADMIN_API_KEY="$(read_secret_value "${MEDIA_ADMIN_API_KEY}")"
 	validate_secret "MEDIA_ADMIN_API_KEY" "${MEDIA_ADMIN_API_KEY}"
 	ensure_not_dev_seed "AURA_SURI" "${AURA_SURI}"
 	ensure_not_dev_seed "GRAN_SURI" "${GRAN_SURI}"
