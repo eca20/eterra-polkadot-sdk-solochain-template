@@ -30,6 +30,10 @@ echo
 curl -fsS "http://127.0.0.1:${MEDIA_PORT}/health/ready" || true
 echo
 echo
+echo "== alpha media upload should stay blocked =="
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST "http://127.0.0.1:${MEDIA_PORT}/media/upload" || true
+echo
+echo
 echo "== alpha ipfs gateway =="
 curl -sSI "http://127.0.0.1:${IPFS_GATEWAY_PORT}" | head -n 5 || true
 EOF

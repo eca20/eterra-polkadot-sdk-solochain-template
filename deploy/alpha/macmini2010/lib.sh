@@ -68,6 +68,13 @@ validate_secret() {
 	esac
 }
 
+is_truthy() {
+	case "${1,,}" in
+		1|true|yes|on) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
 ensure_not_dev_seed() {
 	local name="$1"
 	local value="$2"
@@ -118,6 +125,9 @@ load_env() {
 	MEDIA_ADMIN_API_KEY="${MEDIA_ADMIN_API_KEY:-}"
 	KUBO_IMAGE="${KUBO_IMAGE:-ipfs/kubo:latest}"
 	MAX_UPLOAD_BYTES="${MAX_UPLOAD_BYTES:-10485760}"
+	PUBLIC_MEDIA_UPLOAD_ENABLED="${PUBLIC_MEDIA_UPLOAD_ENABLED:-false}"
+	CHAIN_REQUEST_TIMEOUT_MS="${CHAIN_REQUEST_TIMEOUT_MS:-8000}"
+	IPFS_REQUEST_TIMEOUT_MS="${IPFS_REQUEST_TIMEOUT_MS:-8000}"
 	RENDER_TIMEOUT_MS="${RENDER_TIMEOUT_MS:-15000}"
 	RENDER_CONCURRENCY="${RENDER_CONCURRENCY:-4}"
 	PUBLIC_RATE_LIMIT_MAX="${PUBLIC_RATE_LIMIT_MAX:-120}"
@@ -153,6 +163,8 @@ load_env() {
 	[[ -n "${LAN_CIDR}" ]] || die "LAN_CIDR must be set in ${env_file}"
 	[[ -n "${SITE_PUBLIC_ORIGIN}" ]] || die "SITE_PUBLIC_ORIGIN must be set in ${env_file}"
 	[[ "${SITE_PUBLIC_ORIGIN}" == https://* ]] || die "SITE_PUBLIC_ORIGIN must use https:// for alpha"
+	[[ "${ALPHA_RPC_CORS}" != "all" ]] || die "ALPHA_RPC_CORS must not be 'all' for alpha"
+	[[ "${ALPHA_RPC_CORS}" == "${SITE_PUBLIC_ORIGIN}" ]] || die "ALPHA_RPC_CORS must exactly match SITE_PUBLIC_ORIGIN for alpha"
 	[[ -n "${AURA_SURI}" ]] || die "AURA_SURI must be set in ${env_file}"
 	[[ -n "${GRAN_SURI}" ]] || die "GRAN_SURI must be set in ${env_file}"
 	[[ -n "${MEDIA_SIGNER_SEED}" ]] || die "MEDIA_SIGNER_SEED must be set in ${env_file}"
@@ -168,6 +180,12 @@ load_env() {
 	ensure_not_dev_seed "AURA_SURI" "${AURA_SURI}"
 	ensure_not_dev_seed "GRAN_SURI" "${GRAN_SURI}"
 	ensure_not_dev_seed "MEDIA_SIGNER_SEED" "${MEDIA_SIGNER_SEED}"
+	if is_truthy "${ALLOW_DEV_ADMIN_RESET}"; then
+		die "ALLOW_DEV_ADMIN_RESET must remain disabled for alpha"
+	fi
+	if is_truthy "${PUBLIC_MEDIA_UPLOAD_ENABLED}"; then
+		die "PUBLIC_MEDIA_UPLOAD_ENABLED must remain disabled for alpha"
+	fi
 
 	SSH_TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
 	REMOTE_NODE_DIR="${DEPLOY_ROOT}/node/current"
@@ -180,6 +198,8 @@ load_env() {
 	REMOTE_NODE_PLAIN_SPEC="${REMOTE_NODE_DIR}/alpha-plain.json"
 	REMOTE_START_SCRIPT="${REMOTE_NODE_DIR}/start-alpha-node.sh"
 	REMOTE_MEDIA_PROJECT_NAME="${REMOTE_MEDIA_PROJECT_NAME:-eterra-alpha-media}"
+	REMOTE_IPFS_DATA_VOLUME="${REMOTE_MEDIA_PROJECT_NAME}_ipfs_data"
+	REMOTE_IPFS_STAGING_VOLUME="${REMOTE_MEDIA_PROJECT_NAME}_ipfs_staging"
 	REMOTE_MEDIA_COMPOSE_BASE="${REMOTE_MEDIA_DIR}/docker-compose.yaml"
 	REMOTE_MEDIA_COMPOSE_OVERRIDE="${REMOTE_MEDIA_DIR}/docker-compose.macmini2010.yaml"
 	REMOTE_DOCKER_COMPOSE_CMD="docker compose --project-name '${REMOTE_MEDIA_PROJECT_NAME}' -f '${REMOTE_MEDIA_COMPOSE_BASE}' -f '${REMOTE_MEDIA_COMPOSE_OVERRIDE}' --env-file '${REMOTE_MEDIA_ENV_FILE}'"
@@ -451,7 +471,10 @@ PUBLIC_BASE_URL=${SITE_PUBLIC_ORIGIN}/media-api
 ADMIN_API_KEY=${MEDIA_ADMIN_API_KEY}
 PORT=${MEDIA_PORT}
 MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES}
+PUBLIC_MEDIA_UPLOAD_ENABLED=${PUBLIC_MEDIA_UPLOAD_ENABLED}
 CORS_ALLOWED_ORIGINS=${SITE_PUBLIC_ORIGIN}
+CHAIN_REQUEST_TIMEOUT_MS=${CHAIN_REQUEST_TIMEOUT_MS}
+IPFS_REQUEST_TIMEOUT_MS=${IPFS_REQUEST_TIMEOUT_MS}
 RENDER_TIMEOUT_MS=${RENDER_TIMEOUT_MS}
 RENDER_CONCURRENCY=${RENDER_CONCURRENCY}
 PUBLIC_RATE_LIMIT_MAX=${PUBLIC_RATE_LIMIT_MAX}

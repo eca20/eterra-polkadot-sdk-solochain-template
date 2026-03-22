@@ -101,6 +101,9 @@ rsync_with_remote \
 	--exclude 'deploy/alpha/macmini2010.env' \
 	--exclude 'chain-specs/alpha-keys.json' \
 	--exclude 'chain-specs/alpha-overrides.json' \
+	--exclude 'solochain-eterra-node' \
+	--exclude 'alpha-raw.json' \
+	--exclude 'alpha-plain.json' \
 	"${REPO_ROOT}/" \
 	"${SSH_TARGET}:${REMOTE_NODE_DIR}/"
 
