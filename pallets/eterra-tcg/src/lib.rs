@@ -16,9 +16,7 @@ mod tests;
 use frame_support::{
     pallet_prelude::*,
     traits::{Currency, ExistenceRequirement, Get},
-    BoundedBTreeSet,
-    BoundedVec,
-    PalletId,
+    BoundedBTreeSet, BoundedVec, PalletId,
 };
 use frame_system::{ensure_signed, pallet_prelude::OriginFor};
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
@@ -29,6 +27,16 @@ use sp_std::prelude::*;
 pub type MediaId = pallet_eterra_media::MediaId;
 pub type SeasonId = pallet_eterra_seasons::SeasonId;
 pub type SeasonCollectionId = u32;
+pub type CardGenomeHash = [u8; 32];
+pub type SubjectId = u32;
+pub type VaultVariantId = u32;
+pub type GearId = u32;
+pub type SpellId = u32;
+pub type TeamId = u32;
+pub type MatchId = u32;
+pub type TrialId = u32;
+pub type BoardId = u32;
+pub type NexusConfigVersion = u32;
 
 /// Provides a runtime-defined view of whether a given `card_id` is currently included
 /// in `owner`'s configured "current hand".
@@ -185,6 +193,333 @@ pub struct SeasonCollectionInfo<BName, BlockNumber> {
     pub published_at: Option<BlockNumber>,
 }
 
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum StarterPath {
+    Fire,
+    Earth,
+    Water,
+    Wind,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum NexusCardKind {
+    Echo,
+    Monster,
+    Boss,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum NexusCardOrigin {
+    StarterGrant,
+    Claim,
+    Pull,
+    Event,
+    Trial,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum NexusStorageLocation {
+    Collection,
+    Vault,
+    Overflow,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum OverflowReason {
+    SubjectCopyCapExceeded,
+    VaultCapacityUnavailable,
+    CollectionCapacityUnavailable,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum OverflowResolutionAction {
+    MoveToCollection,
+    SealToVault,
+    Salvage,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Encode,
+    Decode,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    TypeInfo,
+    MaxEncodedLen,
+    RuntimeDebug,
+)]
+pub enum ResourceKind {
+    EonCoins,
+    GearParts,
+    ElementShards,
+    EchoCoreFragments,
+    EchoCores,
+    ForgeStars,
+    MakeUpStamps,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum Element {
+    Fire,
+    Earth,
+    Water,
+    Wind,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum RankValue {
+    Number(u8),
+    Apex,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum ApexSide {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum RankStyleLabel {
+    Balanced,
+    Sharp,
+    Guarded,
+    Apex,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum GearSlotType {
+    Weapon,
+    Armor,
+    Accessory,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum GearTier {
+    Basic,
+    Improved,
+    Refined,
+    Common,
+    Rare,
+    Epic,
+    Legendary,
+    Mythical,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum SpellSlotKind {
+    Open,
+    Element(Element),
+    Locked,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum ForgeBranch {
+    Sword,
+    Staff,
+    Claw,
+    Crossbow,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum MatchMode {
+    Tutorial,
+    Quick,
+    Ranked,
+    DailyPuzzle,
+    Trial,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum MatchStatus {
+    Pending,
+    Active,
+    Complete,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum TrialType {
+    Weapon,
+    Element,
+    Mana,
+    Boss,
+    Season,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum TrialStatus {
+    Started,
+    Completed,
+    Failed,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum SystemKey {
+    Claims,
+    Pulls,
+    Seal,
+    Salvage,
+    Forge,
+    RankedRewards,
+    VaultExpansion,
+    Trading,
+}
+
+#[derive(
+    Clone, Copy, Encode, Decode, Default, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug,
+)]
+pub struct GeneProfile {
+    pub strength: u8,
+    pub agility: u8,
+    pub vitality: u8,
+    pub defense: u8,
+    pub magic: u8,
+    pub resist: u8,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct ElementProfile {
+    pub main: Element,
+    pub minor: Option<Element>,
+    pub resistance: Option<Element>,
+    pub weakness: Option<Element>,
+}
+
+#[derive(
+    Clone, Copy, Encode, Decode, Default, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug,
+)]
+pub struct ResourceBundle {
+    pub eon_coins: u32,
+    pub gear_parts: u32,
+    pub element_shards: u32,
+    pub echo_core_fragments: u32,
+    pub echo_cores: u32,
+    pub forge_stars: u32,
+    pub make_up_stamps: u32,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusAccountState<BlockNumber> {
+    pub starter_claimed: bool,
+    pub starter_path: Option<StarterPath>,
+    pub vault_capacity: u32,
+    pub created_at: BlockNumber,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct StarterGrantState<BlockNumber> {
+    pub path: StarterPath,
+    pub grant_id: u32,
+    pub claimed_at: BlockNumber,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct CollectionCard<AccountId, BlockNumber> {
+    pub owner: AccountId,
+    pub subject_id: SubjectId,
+    pub kind: NexusCardKind,
+    pub origin: NexusCardOrigin,
+    pub base_ranks: [RankValue; 4],
+    pub apex_side: Option<ApexSide>,
+    pub genes: GeneProfile,
+    pub element_profile: ElementProfile,
+    pub card_power: u16,
+    pub location: NexusStorageLocation,
+    pub account_bound: bool,
+    pub acquired_at: BlockNumber,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct VaultVariant<BlockNumber, BMetadataUri> {
+    pub variant_id: VaultVariantId,
+    pub card_record_id: u32,
+    pub subject_id: SubjectId,
+    pub sealed_at: BlockNumber,
+    pub metadata_uri: BMetadataUri,
+    pub trade_eligible: bool,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct SpellSlotEntry {
+    pub slot_kind: SpellSlotKind,
+    pub spell_id: Option<SpellId>,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct GearItem<AccountId, BSpellSlots> {
+    pub owner: AccountId,
+    pub gear_id: GearId,
+    pub slot_type: GearSlotType,
+    pub tier: GearTier,
+    pub power: u16,
+    pub spell_slots: BSpellSlots,
+    pub equipped_card_id: Option<u32>,
+    pub season_id: SeasonId,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct SpellEntry<AccountId> {
+    pub owner: AccountId,
+    pub spell_id: SpellId,
+    pub element: Element,
+    pub power: u16,
+    pub slotted_to: Option<(GearId, u8)>,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct Team<AccountId, BCardIds> {
+    pub owner: AccountId,
+    pub team_id: TeamId,
+    pub card_ids: BCardIds,
+    pub team_power: u16,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct MatchState<AccountId, BPlayers> {
+    pub match_id: MatchId,
+    pub mode: MatchMode,
+    pub board_id: BoardId,
+    pub players: BPlayers,
+    pub first_player: Option<AccountId>,
+    pub status: MatchStatus,
+    pub turn_index: u8,
+    pub winner: Option<AccountId>,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct TrialState<AccountId> {
+    pub account_id: AccountId,
+    pub trial_id: TrialId,
+    pub trial_type: TrialType,
+    pub board_id: BoardId,
+    pub status: TrialStatus,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Encode, Decode, Default, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusConfigState<BlockNumber> {
+    pub config_version: NexusConfigVersion,
+    pub subject_copy_cap: u32,
+    pub overflow_total_capacity: u32,
+    pub overflow_per_subject_capacity: u32,
+    pub base_vault_capacity: u32,
+    pub team_size: u32,
+    pub updated_at: BlockNumber,
+}
+
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
@@ -192,17 +527,19 @@ pub mod pallet {
     use frame_support::traits::ConstU32;
     use frame_support::transactional;
     use frame_system::pallet_prelude::BlockNumberFor;
+    use pallet_alpha_access::AccessControl;
     use sp_runtime::traits::StaticLookup;
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(10);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(12);
     const ESCROW_PALLET_ID: PalletId = PalletId(*b"et/tcgsc");
     const WEIGHT_TOTAL_PERCENT: u32 = 100;
     const DEFAULT_WEIGHT_MULTIPLIER: WeightMultiplier = 100;
     const NORMALIZED_WEIGHT_POINTS: u32 = 10_000;
 
     /// Balance type bound to the runtime currency.
-    pub type BalanceOf<T> =
-        <<T as Config>::PaymentCurrency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+    pub type BalanceOf<T> = <<T as Config>::PaymentCurrency as Currency<
+        <T as frame_system::Config>::AccountId,
+    >>::Balance;
 
     type BoundedBorders<T> = BoundedVec<MediaId, <T as Config>::MaxBorders>;
     type BoundedBackgrounds<T> = BoundedVec<MediaId, <T as Config>::MaxBackgrounds>;
@@ -230,10 +567,17 @@ pub mod pallet {
         BoundedVec<WeightPercentage, <T as Config>::MaxPackagingFronts>,
         BoundedVec<WeightMultiplier, <T as Config>::MaxPackagingFronts>,
     >;
-    type BoundedSeasonCollectionName<T> =
-        BoundedVec<u8, <T as Config>::MaxSeasonCollectionNameLen>;
+    type BoundedSeasonCollectionName<T> = BoundedVec<u8, <T as Config>::MaxSeasonCollectionNameLen>;
     type BoundedSeasonCollectionIds<T> =
         BoundedVec<SeasonCollectionId, <T as Config>::MaxSeasonCollections>;
+    pub type BoundedNexusMetadataUri<T> = BoundedVec<u8, <T as Config>::MaxNexusMetadataUriLen>;
+    pub type BoundedNexusReason<T> = BoundedVec<u8, <T as Config>::MaxNexusReasonLen>;
+    type BoundedNexusTeamCardIds<T> = BoundedVec<u32, <T as Config>::NexusTeamSize>;
+    type BoundedNexusOverflowCards<T> = BoundedVec<u32, <T as Config>::NexusOverflowTotalCapacity>;
+    type BoundedNexusSpellSlots<T> =
+        BoundedVec<SpellSlotEntry, <T as Config>::MaxNexusSpellSlotsPerCard>;
+    type BoundedNexusMatchPlayers<T> =
+        BoundedVec<<T as frame_system::Config>::AccountId, <T as Config>::MaxNexusMatchPlayers>;
     type SeasonAssetsInfoOf<T> = SeasonAssetsInfo<
         BoundedBorders<T>,
         BoundedBackgrounds<T>,
@@ -249,6 +593,19 @@ pub mod pallet {
     >;
     type SeasonCollectionInfoOf<T> =
         SeasonCollectionInfo<BoundedSeasonCollectionName<T>, BlockNumberFor<T>>;
+    type NexusAccountStateOf<T> = NexusAccountState<BlockNumberFor<T>>;
+    type StarterGrantStateOf<T> = StarterGrantState<BlockNumberFor<T>>;
+    type CollectionCardOf<T> =
+        CollectionCard<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>;
+    type VaultVariantOf<T> = VaultVariant<BlockNumberFor<T>, BoundedNexusMetadataUri<T>>;
+    type GearItemOf<T> =
+        GearItem<<T as frame_system::Config>::AccountId, BoundedNexusSpellSlots<T>>;
+    type SpellEntryOf<T> = SpellEntry<<T as frame_system::Config>::AccountId>;
+    type TeamOf<T> = Team<<T as frame_system::Config>::AccountId, BoundedNexusTeamCardIds<T>>;
+    type MatchStateOf<T> =
+        MatchState<<T as frame_system::Config>::AccountId, BoundedNexusMatchPlayers<T>>;
+    type TrialStateOf<T> = TrialState<<T as frame_system::Config>::AccountId>;
+    type NexusConfigStateOf<T> = NexusConfigState<BlockNumberFor<T>>;
 
     #[derive(Clone, Copy)]
     struct SelectedSeasonAsset {
@@ -295,6 +652,9 @@ pub mod pallet {
 
         /// Currency used to charge for minting packs.
         type PaymentCurrency: Currency<Self::AccountId>;
+
+        /// Canonical Alpha access gate for player-facing calls.
+        type AccessControl: pallet_alpha_access::AccessControl<Self::AccountId>;
 
         /// A runtime-provided hook for checking whether a card is currently part of the owner's
         /// gameplay "current hand".
@@ -389,6 +749,42 @@ pub mod pallet {
         /// Maximum byte length of a season art collection name.
         #[pallet::constant]
         type MaxSeasonCollectionNameLen: Get<u32>;
+
+        /// Number of cards in a legal Nexus Season 1 team.
+        #[pallet::constant]
+        type NexusTeamSize: Get<u32>;
+
+        /// Maximum Collection + Vault copies of the same subject.
+        #[pallet::constant]
+        type NexusSubjectCopyCap: Get<u32>;
+
+        /// Maximum total cards waiting in Overflow.
+        #[pallet::constant]
+        type NexusOverflowTotalCapacity: Get<u32>;
+
+        /// Maximum Overflow copies for one subject.
+        #[pallet::constant]
+        type NexusOverflowPerSubjectCapacity: Get<u32>;
+
+        /// Base capacity for sealed Vault Variants.
+        #[pallet::constant]
+        type NexusBaseVaultCapacity: Get<u32>;
+
+        /// Maximum metadata URI length for sealed Vault Variant display metadata.
+        #[pallet::constant]
+        type MaxNexusMetadataUriLen: Get<u32>;
+
+        /// Maximum byte length of runtime-facing reasons in Nexus events.
+        #[pallet::constant]
+        type MaxNexusReasonLen: Get<u32>;
+
+        /// Maximum number of spell slots a card build can use in Season 1.
+        #[pallet::constant]
+        type MaxNexusSpellSlotsPerCard: Get<u32>;
+
+        /// Maximum players tracked by a Nexus match state.
+        #[pallet::constant]
+        type MaxNexusMatchPlayers: Get<u32>;
 
         /// Weight information for this pallet's extrinsics.
         type WeightInfo: WeightInfo;
@@ -525,6 +921,12 @@ pub mod pallet {
         OptionQuery,
     >;
 
+    /// Deterministic card genome used by escrow-driven enemy spawning.
+    #[pallet::storage]
+    #[pallet::getter(fn card_genome)]
+    pub type CardGenome<T: Config> =
+        StorageMap<_, Blake2_128Concat, u32, CardGenomeHash, OptionQuery>;
+
     /// The NFT collection ID used for converted cards (single collection).
     #[pallet::storage]
     #[pallet::getter(fn card_nft_collection_id)]
@@ -544,8 +946,13 @@ pub mod pallet {
     /// A map from account => list of currently in-progress packs.
     #[pallet::storage]
     #[pallet::getter(fn player_packs)]
-    pub type PlayerPacks<T: Config> =
-        StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<Pack, T::MaxOwnedCards>, ValueQuery>;
+    pub type PlayerPacks<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedVec<Pack, T::MaxOwnedCards>,
+        ValueQuery,
+    >;
 
     /// A map from account => set of owned card IDs.
     ///
@@ -581,8 +988,7 @@ pub mod pallet {
     /// Tracks whether an account has ever minted at least one card or pack.
     #[pallet::storage]
     #[pallet::getter(fn has_minted)]
-    pub type HasMinted<T: Config> =
-        StorageMap<_, Blake2_128Concat, T::AccountId, (), OptionQuery>;
+    pub type HasMinted<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, (), OptionQuery>;
 
     /// Total number of distinct accounts that have minted at least one card or pack.
     #[pallet::storage]
@@ -620,6 +1026,134 @@ pub mod pallet {
     #[pallet::getter(fn pro_in_progress)]
     pub type ProInProgress<T: Config> =
         StorageMap<_, Blake2_128Concat, T::AccountId, u32, OptionQuery>;
+
+    /// Account-level Nexus Season 1 state.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_account_state)]
+    pub type NexusAccountStates<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, NexusAccountStateOf<T>, OptionQuery>;
+
+    /// Starter Grant state by account.
+    #[pallet::storage]
+    #[pallet::getter(fn starter_grant)]
+    pub type StarterGrants<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, StarterGrantStateOf<T>, OptionQuery>;
+
+    /// Next Starter Grant id used by the Nexus state skeleton.
+    #[pallet::storage]
+    #[pallet::getter(fn next_starter_grant_id)]
+    pub type NextStarterGrantId<T: Config> = StorageValue<_, u32, ValueQuery>;
+
+    /// Nexus Collection card records keyed by runtime card id.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_collection_card)]
+    pub type NexusCollectionCards<T: Config> =
+        StorageMap<_, Blake2_128Concat, u32, CollectionCardOf<T>, OptionQuery>;
+
+    /// Sealed Vault Variant records keyed by variant id.
+    #[pallet::storage]
+    #[pallet::getter(fn vault_variant)]
+    pub type VaultVariants<T: Config> =
+        StorageMap<_, Blake2_128Concat, VaultVariantId, VaultVariantOf<T>, OptionQuery>;
+
+    /// Next sealed Vault Variant id.
+    #[pallet::storage]
+    #[pallet::getter(fn next_vault_variant_id)]
+    pub type NextVaultVariantId<T: Config> = StorageValue<_, VaultVariantId, ValueQuery>;
+
+    /// Collection + Vault subject copy counts. Overflow is tracked separately.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_subject_copy_count)]
+    pub type NexusSubjectCopyCounts<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        Blake2_128Concat,
+        SubjectId,
+        u32,
+        ValueQuery,
+    >;
+
+    /// Cards waiting in Overflow for an account.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_overflow_cards)]
+    pub type NexusOverflowCards<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, BoundedNexusOverflowCards<T>, ValueQuery>;
+
+    /// Per-subject Overflow counts by account.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_overflow_subject_count)]
+    pub type NexusOverflowSubjectCounts<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        Blake2_128Concat,
+        SubjectId,
+        u32,
+        ValueQuery,
+    >;
+
+    /// Account resource balances for Nexus-only non-tradable resources.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_resource_balance)]
+    pub type NexusResources<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        Blake2_128Concat,
+        ResourceKind,
+        u32,
+        ValueQuery,
+    >;
+
+    /// Nexus gear inventory records.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_gear_item)]
+    pub type NexusGearItems<T: Config> =
+        StorageMap<_, Blake2_128Concat, GearId, GearItemOf<T>, OptionQuery>;
+
+    /// Nexus spellbook records.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_spell_entry)]
+    pub type NexusSpellbook<T: Config> =
+        StorageMap<_, Blake2_128Concat, SpellId, SpellEntryOf<T>, OptionQuery>;
+
+    /// Saved Nexus teams by owner and team id.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_team)]
+    pub type NexusTeams<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        Blake2_128Concat,
+        TeamId,
+        TeamOf<T>,
+        OptionQuery,
+    >;
+
+    /// Nexus match state records.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_match)]
+    pub type NexusMatches<T: Config> =
+        StorageMap<_, Blake2_128Concat, MatchId, MatchStateOf<T>, OptionQuery>;
+
+    /// Nexus trial state by account and trial id.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_trial)]
+    pub type NexusTrials<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        Blake2_128Concat,
+        TrialId,
+        TrialStateOf<T>,
+        OptionQuery,
+    >;
+
+    /// Optional persisted Nexus config snapshot. When absent, runtime constants are canonical.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_config)]
+    pub type NexusConfig<T: Config> = StorageValue<_, NexusConfigStateOf<T>, OptionQuery>;
 
     // ------------------
     // Events
@@ -726,6 +1260,283 @@ pub mod pallet {
             new_capacity: u32,
             price_paid: BalanceOf<T>,
         },
+        /// Nexus Starter Grant state was claimed for an account.
+        StarterGrantClaimed {
+            account_id: T::AccountId,
+            path: StarterPath,
+            grant_id: u32,
+            config_version: NexusConfigVersion,
+        },
+        /// Nexus Starter path was swapped before grant finalization.
+        StarterPathSwapped {
+            account_id: T::AccountId,
+            old_path: StarterPath,
+            new_path: StarterPath,
+        },
+        /// A Nexus Collection card was claimed into runtime state.
+        NexusCardClaimed {
+            account_id: T::AccountId,
+            card_record_id: u32,
+            subject_id: SubjectId,
+            source: NexusCardOrigin,
+            config_version: NexusConfigVersion,
+        },
+        /// A Nexus card was pulled into runtime state.
+        NexusCardPulled {
+            account_id: T::AccountId,
+            pull_id: u32,
+            card_record_id: u32,
+            subject_id: SubjectId,
+            pack_pool_version: NexusConfigVersion,
+        },
+        /// A Nexus card rank slot result was resolved.
+        RankSlotResolved {
+            card_record_id: u32,
+            base_ranks: [RankValue; 4],
+            apex_side: Option<ApexSide>,
+            style_label: RankStyleLabel,
+            card_power: u16,
+            config_version: NexusConfigVersion,
+        },
+        /// Nexus card Genes and Element Profile were resolved.
+        GenesResolved {
+            card_record_id: u32,
+            genes: GeneProfile,
+            element_profile: ElementProfile,
+            config_version: NexusConfigVersion,
+        },
+        /// A 6th or later subject copy entered Overflow.
+        CardEnteredOverflow {
+            account_id: T::AccountId,
+            card_record_id: u32,
+            subject_id: SubjectId,
+            reason: OverflowReason,
+        },
+        /// A Nexus Overflow card was resolved.
+        OverflowResolved {
+            account_id: T::AccountId,
+            card_record_id: u32,
+            action: OverflowResolutionAction,
+        },
+        /// A Nexus Collection card was salvaged.
+        CardSalvaged {
+            account_id: T::AccountId,
+            card_record_id: u32,
+            outputs: ResourceBundle,
+            salvage_table_version: NexusConfigVersion,
+        },
+        /// A Nexus Collection card was sealed into a Vault Variant.
+        CardSealed {
+            account_id: T::AccountId,
+            card_record_id: u32,
+            variant_id: VaultVariantId,
+            metadata_uri: BoundedNexusMetadataUri<T>,
+        },
+        /// A Nexus Vault expansion was applied.
+        VaultExpanded {
+            account_id: T::AccountId,
+            old_capacity: u32,
+            new_capacity: u32,
+            payment_ref: Option<u32>,
+        },
+        /// Nexus gear was crafted.
+        GearCrafted {
+            account_id: T::AccountId,
+            gear_id: GearId,
+            recipe_id: u32,
+            cost: ResourceBundle,
+            config_version: NexusConfigVersion,
+        },
+        /// Nexus gear was equipped.
+        GearEquipped {
+            account_id: T::AccountId,
+            card_id: u32,
+            gear_id: GearId,
+            slot_type: GearSlotType,
+        },
+        /// Nexus gear was unequipped.
+        GearUnequipped {
+            account_id: T::AccountId,
+            card_id: u32,
+            gear_id: GearId,
+            slot_type: GearSlotType,
+        },
+        /// A Nexus weapon advanced through a Forge path.
+        WeaponForged {
+            account_id: T::AccountId,
+            gear_id: GearId,
+            old_tier: GearTier,
+            new_tier: GearTier,
+            branch: ForgeBranch,
+            cost: ResourceBundle,
+            forge_table_version: NexusConfigVersion,
+        },
+        /// A Nexus seasonal weapon was reforged into a later season path.
+        WeaponReforged {
+            account_id: T::AccountId,
+            old_gear_id: GearId,
+            new_gear_id: GearId,
+            season_from: SeasonId,
+            season_to: SeasonId,
+        },
+        /// Legacy gear was attuned to a sealed Vault Variant.
+        LegacyGearAttuned {
+            account_id: T::AccountId,
+            variant_id: VaultVariantId,
+            gear_id: GearId,
+        },
+        /// A Nexus spell was crafted.
+        SpellCrafted {
+            account_id: T::AccountId,
+            spell_id: SpellId,
+            cost: ResourceBundle,
+        },
+        /// A Nexus spell was slotted into gear.
+        SpellSlotted {
+            account_id: T::AccountId,
+            card_id: u32,
+            gear_id: GearId,
+            slot_index: u8,
+            spell_id: SpellId,
+        },
+        /// A Nexus spell was removed from a gear slot.
+        SpellUnslotted {
+            account_id: T::AccountId,
+            card_id: u32,
+            gear_id: GearId,
+            slot_index: u8,
+            spell_id: SpellId,
+        },
+        /// A Nexus team was saved.
+        TeamSaved {
+            account_id: T::AccountId,
+            team_id: TeamId,
+            card_ids: BoundedNexusTeamCardIds<T>,
+            team_power: u16,
+            config_version: NexusConfigVersion,
+        },
+        /// A Nexus team was validated for a mode.
+        TeamValidated {
+            account_id: T::AccountId,
+            team_id: TeamId,
+            mode: MatchMode,
+            team_power: u16,
+            valid: bool,
+        },
+        /// A Nexus match was started.
+        MatchStarted {
+            match_id: MatchId,
+            mode: MatchMode,
+            board_id: BoardId,
+            players: BoundedNexusMatchPlayers<T>,
+            first_player: T::AccountId,
+            config_version: NexusConfigVersion,
+        },
+        /// A card was placed in a Nexus match.
+        CardPlaced {
+            match_id: MatchId,
+            turn_index: u8,
+            account_id: T::AccountId,
+            card_id: u32,
+            cell: u8,
+        },
+        /// A Rune Cell was created from a Mana Well.
+        RuneCreated {
+            match_id: MatchId,
+            turn_index: u8,
+            caster_card_id: u32,
+            well_cell: u8,
+            element: Element,
+        },
+        /// A Rune Cell triggered when a card was placed on it.
+        RuneTriggered {
+            match_id: MatchId,
+            turn_index: u8,
+            card_id: u32,
+            well_cell: u8,
+            element: Element,
+            effect: i8,
+        },
+        /// A Nexus card captured another card.
+        CardCaptured {
+            match_id: MatchId,
+            turn_index: u8,
+            attacker_card_id: u32,
+            captured_card_id: u32,
+            side: ApexSide,
+        },
+        /// A Nexus match ended.
+        MatchEnded {
+            match_id: MatchId,
+            winner: Option<T::AccountId>,
+            score: [u8; 2],
+            duration: u32,
+            reward_status: bool,
+        },
+        /// A Nexus reward was granted.
+        RewardGranted {
+            account_id: T::AccountId,
+            reward_id: u32,
+            reason: BoundedNexusReason<T>,
+            amounts: ResourceBundle,
+            config_version: NexusConfigVersion,
+        },
+        /// A Nexus Trial was started.
+        TrialStarted {
+            account_id: T::AccountId,
+            trial_id: TrialId,
+            board_id: BoardId,
+        },
+        /// A Nexus Trial was completed.
+        TrialCompleted {
+            account_id: T::AccountId,
+            trial_id: TrialId,
+            result: TrialStatus,
+            rewards: ResourceBundle,
+        },
+        /// Forge Stars were granted.
+        ForgeStarsGranted {
+            account_id: T::AccountId,
+            amount: u32,
+            reason: BoundedNexusReason<T>,
+            season: SeasonId,
+        },
+        /// A Nexus system was paused.
+        SystemPaused {
+            system_key: SystemKey,
+            reason: BoundedNexusReason<T>,
+            actor: T::AccountId,
+            timestamp: BlockNumberFor<T>,
+        },
+        /// A Nexus system was unpaused.
+        SystemUnpaused {
+            system_key: SystemKey,
+            actor: T::AccountId,
+            timestamp: BlockNumberFor<T>,
+        },
+        /// A Nexus asset was locked.
+        AssetLocked {
+            asset_type: SystemKey,
+            asset_id: u32,
+            reason: BoundedNexusReason<T>,
+            actor: T::AccountId,
+            timestamp: BlockNumberFor<T>,
+        },
+        /// A Nexus asset was unlocked.
+        AssetUnlocked {
+            asset_type: SystemKey,
+            asset_id: u32,
+            actor: T::AccountId,
+            timestamp: BlockNumberFor<T>,
+        },
+        /// A Nexus config version changed.
+        ConfigUpdated {
+            config_key: BoundedNexusReason<T>,
+            old_version: NexusConfigVersion,
+            new_version: NexusConfigVersion,
+            actor: T::AccountId,
+            timestamp: BlockNumberFor<T>,
+        },
 
         /// A new "pro" card was started for `player` with global `card_id`.
         ProMintStarted { player: T::AccountId, card_id: u32 },
@@ -778,6 +1589,16 @@ pub mod pallet {
         CardIdExhausted,
         /// This action would exceed the account's configured card capacity.
         CardCapacityExceeded,
+        /// Starter Grant state already exists for this account.
+        NexusStarterGrantAlreadyClaimed,
+        /// Nexus team must contain exactly the configured Season 1 team size.
+        NexusTeamSizeInvalid,
+        /// Nexus subject copy cap has been reached for Collection + Vault.
+        NexusSubjectCopyCapReached,
+        /// Nexus Overflow has reached its total capacity.
+        NexusOverflowCapacityExceeded,
+        /// Nexus Overflow has reached its per-subject capacity.
+        NexusOverflowSubjectCapacityExceeded,
         /// No more card capacity can be purchased because the hard storage ceiling was reached.
         CardCapacityMaxReached,
         /// The caller's owned-card limit is reached.
@@ -864,6 +1685,7 @@ pub mod pallet {
         #[transactional]
         pub fn mint_pack(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
             Self::note_minter(&player);
 
             let mut packs = PlayerPacks::<T>::get(&player);
@@ -927,6 +1749,7 @@ pub mod pallet {
         #[transactional]
         pub fn mint_card(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
             Self::note_minter(&player);
             Self::ensure_can_receive_cards(&player, 1)?;
 
@@ -945,12 +1768,64 @@ pub mod pallet {
             Ok(())
         }
 
+        /// Record Nexus Starter Grant state for the caller.
+        ///
+        /// PI-01 only initializes the account/grant state skeleton. Starter card, gear,
+        /// spell, and badge issuance must be implemented by later acquisition/workshop PIs
+        /// once starter subject IDs and loadouts are locked in config.
+        #[pallet::call_index(26)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn claim_starter_grant(origin: OriginFor<T>, path: StarterPath) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+            ensure!(
+                !StarterGrants::<T>::contains_key(&player),
+                Error::<T>::NexusStarterGrantAlreadyClaimed
+            );
+
+            let grant_id = NextStarterGrantId::<T>::get();
+            let next_grant_id = grant_id.checked_add(1).ok_or(Error::<T>::CardIdExhausted)?;
+            let now = <frame_system::Pallet<T>>::block_number();
+            let config = Self::current_nexus_config();
+
+            NexusAccountStates::<T>::insert(
+                &player,
+                NexusAccountState {
+                    starter_claimed: true,
+                    starter_path: Some(path),
+                    vault_capacity: config.base_vault_capacity,
+                    created_at: now,
+                    config_version: config.config_version,
+                },
+            );
+            StarterGrants::<T>::insert(
+                &player,
+                StarterGrantState {
+                    path,
+                    grant_id,
+                    claimed_at: now,
+                    config_version: config.config_version,
+                },
+            );
+            NextStarterGrantId::<T>::put(next_grant_id);
+
+            Self::deposit_event(Event::StarterGrantClaimed {
+                account_id: player,
+                path,
+                grant_id,
+                config_version: config.config_version,
+            });
+            Ok(())
+        }
+
         /// Generate new slot values for the user’s current (active) card, up to `MaxAttempts`.
         #[pallet::call_index(1)]
         #[pallet::weight(<T as Config>::WeightInfo::generate_slot())]
         #[transactional]
         pub fn generate_slot(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
 
             // 1) Find the user’s last minted pack
             PlayerPacks::<T>::mutate(&player, |packs| -> DispatchResult {
@@ -1015,6 +1890,7 @@ pub mod pallet {
         #[transactional]
         pub fn accept_slot(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
 
             PlayerPacks::<T>::mutate(&player, |packs| -> DispatchResult {
                 let pack = packs.last_mut().ok_or(Error::<T>::NoPackFound)?;
@@ -1061,6 +1937,7 @@ pub mod pallet {
             to: T::AccountId,
         ) -> DispatchResult {
             let from = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&from)?;
 
             // Ensure card exists, is owned, and is finalized before allowing transfer.
             let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
@@ -1089,6 +1966,7 @@ pub mod pallet {
         #[transactional]
         pub fn mint_pro(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
             Self::note_minter(&player);
             ensure!(
                 !ProInProgress::<T>::contains_key(&player),
@@ -1124,6 +2002,7 @@ pub mod pallet {
         #[transactional]
         pub fn spin_pro(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
             let card_id =
                 ProInProgress::<T>::get(&player).ok_or(Error::<T>::NoProMintInProgress)?;
 
@@ -1152,6 +2031,7 @@ pub mod pallet {
         #[transactional]
         pub fn accept_pro(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
             let card_id =
                 ProInProgress::<T>::get(&player).ok_or(Error::<T>::NoProMintInProgress)?;
 
@@ -1181,6 +2061,7 @@ pub mod pallet {
             price: BalanceOf<T>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
             let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
             ensure!(card_info.owner == who, Error::<T>::NotCardOwner);
             ensure!(card_info.finalized, Error::<T>::CardNotFinalized);
@@ -1210,10 +2091,14 @@ pub mod pallet {
         #[transactional]
         pub fn remove_price(origin: OriginFor<T>, card_id: u32) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
             let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
             ensure!(card_info.owner == who, Error::<T>::NotCardOwner);
 
-            ensure!(CardPrices::<T>::contains_key(card_id), Error::<T>::NotForSale);
+            ensure!(
+                CardPrices::<T>::contains_key(card_id),
+                Error::<T>::NotForSale
+            );
             Self::unlist(card_id, &who);
             Ok(())
         }
@@ -1224,6 +2109,7 @@ pub mod pallet {
         #[transactional]
         pub fn buy_card(origin: OriginFor<T>, card_id: u32) -> DispatchResult {
             let buyer = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&buyer)?;
 
             let price = CardPrices::<T>::get(card_id).ok_or(Error::<T>::NotForSale)?;
             let seller = Cards::<T>::get(card_id)
@@ -1237,12 +2123,7 @@ pub mod pallet {
             );
 
             // Transfer funds buyer -> seller.
-            T::PaymentCurrency::transfer(
-                &buyer,
-                &seller,
-                price,
-                ExistenceRequirement::AllowDeath,
-            )?;
+            T::PaymentCurrency::transfer(&buyer, &seller, price, ExistenceRequirement::AllowDeath)?;
 
             // Unlist before transfer (so indices are consistent).
             Self::unlist(card_id, &seller);
@@ -1499,7 +2380,8 @@ pub mod pallet {
                 |assets| -> DispatchResult {
                     let removed = match kind {
                         AssetKind::Border => {
-                            let removed = Self::remove_asset_from_list(&mut assets.borders, media_id);
+                            let removed =
+                                Self::remove_asset_from_list(&mut assets.borders, media_id);
                             if removed {
                                 Self::clear_asset_weight_config(&mut assets.border_weights);
                             }
@@ -1514,7 +2396,8 @@ pub mod pallet {
                             removed
                         }
                         AssetKind::Subject => {
-                            let removed = Self::remove_asset_from_list(&mut assets.subjects, media_id);
+                            let removed =
+                                Self::remove_asset_from_list(&mut assets.subjects, media_id);
                             if removed {
                                 Self::clear_asset_weight_config(&mut assets.subject_weights);
                             }
@@ -1528,8 +2411,10 @@ pub mod pallet {
                             removed
                         }
                         AssetKind::PackagingFront => {
-                            let removed =
-                                Self::remove_asset_from_list(&mut assets.packaging_fronts, media_id);
+                            let removed = Self::remove_asset_from_list(
+                                &mut assets.packaging_fronts,
+                                media_id,
+                            );
                             if removed {
                                 Self::clear_asset_weight_config(&mut assets.packaging_weights);
                             }
@@ -1580,8 +2465,11 @@ pub mod pallet {
                 |assets| -> Result<(u32, u32), DispatchError> {
                     let (old_index, bounded_new_index) = match kind {
                         AssetKind::Border => {
-                            let moved =
-                                Self::move_asset_within_list(&mut assets.borders, media_id, new_index)?;
+                            let moved = Self::move_asset_within_list(
+                                &mut assets.borders,
+                                media_id,
+                                new_index,
+                            )?;
                             Self::move_asset_weight_config_entry(
                                 &mut assets.border_weights,
                                 moved.0 as usize,
@@ -1603,8 +2491,11 @@ pub mod pallet {
                             moved
                         }
                         AssetKind::Subject => {
-                            let moved =
-                                Self::move_asset_within_list(&mut assets.subjects, media_id, new_index)?;
+                            let moved = Self::move_asset_within_list(
+                                &mut assets.subjects,
+                                media_id,
+                                new_index,
+                            )?;
                             Self::move_asset_weight_config_entry(
                                 &mut assets.subject_weights,
                                 moved.0 as usize,
@@ -1613,8 +2504,11 @@ pub mod pallet {
                             moved
                         }
                         AssetKind::Back => {
-                            let moved =
-                                Self::move_asset_within_list(&mut assets.backs, media_id, new_index)?;
+                            let moved = Self::move_asset_within_list(
+                                &mut assets.backs,
+                                media_id,
+                                new_index,
+                            )?;
                             Self::move_asset_weight_config_entry(
                                 &mut assets.back_weights,
                                 moved.0 as usize,
@@ -1695,6 +2589,7 @@ pub mod pallet {
         #[transactional]
         pub fn buy_card_capacity(origin: OriginFor<T>) -> DispatchResult {
             let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
 
             let added_slots = T::CardCapacityUpgradeAmount::get();
             let current_bonus = CardCapacityBonus::<T>::get(&player);
@@ -1772,9 +2667,9 @@ pub mod pallet {
         #[pallet::call_index(16)]
         #[pallet::weight(<T as Config>::WeightInfo::convert_to_nft())]
         #[transactional]
-        pub fn convert_to_nft(origin: OriginFor<T>, card_id: u32) -> DispatchResult
-        {
+        pub fn convert_to_nft(origin: OriginFor<T>, card_id: u32) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
 
             let collection_id =
                 CardNftCollectionId::<T>::get().ok_or(Error::<T>::NftCollectionNotInitialized)?;
@@ -1828,9 +2723,9 @@ pub mod pallet {
         #[pallet::call_index(17)]
         #[pallet::weight(<T as Config>::WeightInfo::unwrap_from_nft())]
         #[transactional]
-        pub fn unwrap_from_nft(origin: OriginFor<T>, card_id: u32) -> DispatchResult
-        {
+        pub fn unwrap_from_nft(origin: OriginFor<T>, card_id: u32) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
 
             let collection_id =
                 CardNftCollectionId::<T>::get().ok_or(Error::<T>::NftCollectionNotInitialized)?;
@@ -1843,8 +2738,8 @@ pub mod pallet {
             let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
             ensure!(card_info.owner == escrow, Error::<T>::CardNotEscrowed);
 
-            let nft_owner =
-                pallet_nfts::Pallet::<T>::owner(collection_id, card_id).ok_or(Error::<T>::NotNftOwner)?;
+            let nft_owner = pallet_nfts::Pallet::<T>::owner(collection_id, card_id)
+                .ok_or(Error::<T>::NotNftOwner)?;
             ensure!(nft_owner == who, Error::<T>::NotNftOwner);
 
             pallet_nfts::Pallet::<T>::do_burn(collection_id, card_id, |_| Ok(()))?;
@@ -1862,8 +2757,80 @@ pub mod pallet {
     // ------------------
 
     impl<T: Config> Pallet<T> {
+        pub fn current_nexus_config() -> NexusConfigStateOf<T> {
+            NexusConfig::<T>::get().unwrap_or_else(|| NexusConfigState {
+                config_version: 1,
+                subject_copy_cap: T::NexusSubjectCopyCap::get(),
+                overflow_total_capacity: T::NexusOverflowTotalCapacity::get(),
+                overflow_per_subject_capacity: T::NexusOverflowPerSubjectCapacity::get(),
+                base_vault_capacity: T::NexusBaseVaultCapacity::get(),
+                team_size: T::NexusTeamSize::get(),
+                updated_at: <frame_system::Pallet<T>>::block_number(),
+            })
+        }
+
+        pub fn validate_nexus_team_size(card_count: u32) -> DispatchResult {
+            ensure!(
+                card_count == T::NexusTeamSize::get(),
+                Error::<T>::NexusTeamSizeInvalid
+            );
+            Ok(())
+        }
+
+        pub fn classify_nexus_card_location(
+            owner: &T::AccountId,
+            subject_id: SubjectId,
+        ) -> Result<NexusStorageLocation, Error<T>> {
+            let config = Self::current_nexus_config();
+            let collection_and_vault_count = NexusSubjectCopyCounts::<T>::get(owner, subject_id);
+            if collection_and_vault_count < config.subject_copy_cap {
+                return Ok(NexusStorageLocation::Collection);
+            }
+
+            let overflow_cards = NexusOverflowCards::<T>::get(owner);
+            if overflow_cards.len() as u32 >= config.overflow_total_capacity {
+                return Err(Error::<T>::NexusOverflowCapacityExceeded);
+            }
+
+            let overflow_subject_count = NexusOverflowSubjectCounts::<T>::get(owner, subject_id);
+            if overflow_subject_count >= config.overflow_per_subject_capacity {
+                return Err(Error::<T>::NexusOverflowSubjectCapacityExceeded);
+            }
+
+            Ok(NexusStorageLocation::Overflow)
+        }
+
         fn escrow_account_id() -> T::AccountId {
             ESCROW_PALLET_ID.into_account_truncating()
+        }
+
+        fn build_card_genome(card_id: u32) -> Result<CardGenomeHash, DispatchError> {
+            let mint_info = CardMintInfoByCard::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
+            let artwork = CardArtwork::<T>::get(card_id).ok_or(Error::<T>::CardArtworkMissing)?;
+            let collection_id = CardArtworkCollectionId::<T>::get(card_id).unwrap_or_default();
+            let subject = (
+                b"eterra-tcg/genome/v1",
+                card_id,
+                mint_info.minter,
+                mint_info.minted_at,
+                artwork,
+                collection_id,
+            )
+                .encode();
+            let hash = T::Hashing::hash(&subject);
+            let mut genome = [0u8; 32];
+            genome.copy_from_slice(&hash.as_ref()[..32]);
+            Ok(genome)
+        }
+
+        pub fn ensure_card_genome(card_id: u32) -> Result<CardGenomeHash, DispatchError> {
+            if let Some(genome) = CardGenome::<T>::get(card_id) {
+                return Ok(genome);
+            }
+
+            let genome = Self::build_card_genome(card_id)?;
+            CardGenome::<T>::insert(card_id, genome);
+            Ok(genome)
         }
 
         fn owned_card_count(owner: &T::AccountId) -> u32 {
@@ -1925,8 +2892,8 @@ pub mod pallet {
         }
 
         fn ensure_season_manageable(season_id: SeasonId) -> DispatchResult {
-            let season =
-                pallet_eterra_seasons::Seasons::<T>::get(season_id).ok_or(Error::<T>::UnknownSeason)?;
+            let season = pallet_eterra_seasons::Seasons::<T>::get(season_id)
+                .ok_or(Error::<T>::UnknownSeason)?;
             ensure!(
                 season.status != pallet_eterra_seasons::SeasonStatus::Closed,
                 Error::<T>::SeasonClosed
@@ -2002,7 +2969,10 @@ pub mod pallet {
 
         fn ensure_required_season_pools(pools: &PublishedSeasonAssetPools) -> DispatchResult {
             Self::ensure_required_card_art_pools(pools)?;
-            ensure!(!pools.packagings.is_empty(), Error::<T>::NoPublishedSeasonCollection);
+            ensure!(
+                !pools.packagings.is_empty(),
+                Error::<T>::NoPublishedSeasonCollection
+            );
             Ok(())
         }
 
@@ -2038,7 +3008,10 @@ pub mod pallet {
                 .weights
                 .iter()
                 .fold(0u32, |sum, weight| sum.saturating_add(*weight as u32));
-            ensure!(total == WEIGHT_TOTAL_PERCENT, Error::<T>::AssetWeightTotalInvalid);
+            ensure!(
+                total == WEIGHT_TOTAL_PERCENT,
+                Error::<T>::AssetWeightTotalInvalid
+            );
 
             let has_positive_effective_weight = config
                 .weights
@@ -2061,7 +3034,10 @@ pub mod pallet {
             Self::ensure_valid_asset_weight_config(assets.subjects.len(), &assets.subject_weights)?;
             Self::ensure_valid_asset_weight_config(assets.backs.len(), &assets.back_weights)?;
             Self::ensure_valid_asset_weight_config(
-                assets.packaging_fronts.len().min(assets.packaging_backs.len()),
+                assets
+                    .packaging_fronts
+                    .len()
+                    .min(assets.packaging_backs.len()),
                 &assets.packaging_weights,
             )?;
             Ok(())
@@ -2099,14 +3075,12 @@ pub mod pallet {
             multipliers: Vec<WeightMultiplier>,
         ) -> Result<bool, DispatchError> {
             match kind {
-                AssetWeightKind::Border => {
-                    Self::set_asset_weight_config(
-                        assets.borders.len(),
-                        &mut assets.border_weights,
-                        weights,
-                        multipliers,
-                    )
-                }
+                AssetWeightKind::Border => Self::set_asset_weight_config(
+                    assets.borders.len(),
+                    &mut assets.border_weights,
+                    weights,
+                    multipliers,
+                ),
                 AssetWeightKind::Background => Self::set_asset_weight_config(
                     assets.backgrounds.len(),
                     &mut assets.background_weights,
@@ -2241,7 +3215,10 @@ pub mod pallet {
             let mut reordered: Vec<MediaId> = list.iter().copied().collect();
             let value = reordered.remove(old_index as usize);
             let insert_at = new_index as usize;
-            ensure!(insert_at <= reordered.len(), Error::<T>::AssetIndexOutOfBounds);
+            ensure!(
+                insert_at <= reordered.len(),
+                Error::<T>::AssetIndexOutOfBounds
+            );
             reordered.insert(insert_at, value);
             *list = reordered
                 .try_into()
@@ -2274,7 +3251,10 @@ pub mod pallet {
             collection_id: SeasonCollectionId,
             assets: &SeasonAssetsInfoOf<T>,
         ) {
-            let asset_count = assets.packaging_fronts.len().min(assets.packaging_backs.len());
+            let asset_count = assets
+                .packaging_fronts
+                .len()
+                .min(assets.packaging_backs.len());
             for (index, (front_media_id, back_media_id)) in assets
                 .packaging_fronts
                 .iter()
@@ -2336,7 +3316,11 @@ pub mod pallet {
                     &assets.backs,
                     &assets.back_weights,
                 );
-                Self::append_packaging_pool_with_weights(&mut pools.packagings, collection_id, &assets);
+                Self::append_packaging_pool_with_weights(
+                    &mut pools.packagings,
+                    collection_id,
+                    &assets,
+                );
             }
 
             Ok(pools)
@@ -2363,9 +3347,9 @@ pub mod pallet {
         where
             F: FnMut(&Item) -> u32,
         {
-            let total_weight = items.iter().fold(0u64, |sum, item| {
-                sum.saturating_add(weight_of(item) as u64)
-            });
+            let total_weight = items
+                .iter()
+                .fold(0u64, |sum, item| sum.saturating_add(weight_of(item) as u64));
             ensure!(total_weight > 0, Error::<T>::AssetWeightMultiplierInvalid);
 
             let mut remaining = (random as u64) % total_weight;
@@ -2409,26 +3393,23 @@ pub mod pallet {
             let pools = Self::published_season_asset_pools(season_id)?;
             Self::ensure_required_card_art_pools(&pools)?;
 
-            let border_selection = *Self::select_weighted_item(
-                &pools.borders,
-                Self::random_u32(bytes, 0),
-                |item| item.selection_weight,
-            )?;
+            let border_selection =
+                *Self::select_weighted_item(&pools.borders, Self::random_u32(bytes, 0), |item| {
+                    item.selection_weight
+                })?;
             let background_selection = *Self::select_weighted_item(
                 &pools.backgrounds,
                 Self::random_u32(bytes, 4),
                 |item| item.selection_weight,
             )?;
-            let subject_selection = *Self::select_weighted_item(
-                &pools.subjects,
-                Self::random_u32(bytes, 8),
-                |item| item.selection_weight,
-            )?;
-            let back_selection = *Self::select_weighted_item(
-                &pools.backs,
-                Self::random_u32(bytes, 12),
-                |item| item.selection_weight,
-            )?;
+            let subject_selection =
+                *Self::select_weighted_item(&pools.subjects, Self::random_u32(bytes, 8), |item| {
+                    item.selection_weight
+                })?;
+            let back_selection =
+                *Self::select_weighted_item(&pools.backs, Self::random_u32(bytes, 12), |item| {
+                    item.selection_weight
+                })?;
 
             CardArtwork::<T>::insert(
                 card_id,
@@ -2465,6 +3446,7 @@ pub mod pallet {
             NextCardId::<T>::put(next_card_id);
 
             Self::assign_artwork_from_active_season(card_id)?;
+            let _ = Self::ensure_card_genome(card_id)?;
             Ok(card_id)
         }
 
@@ -2491,6 +3473,7 @@ pub mod pallet {
             NextCardId::<T>::put(next_card_id);
 
             Self::assign_artwork_from_active_season(card_id)?;
+            let _ = Self::ensure_card_genome(card_id)?;
             Ok(card_id)
         }
 
@@ -2508,12 +3491,22 @@ pub mod pallet {
 
         /// Internal: transfer ownership from `from` to `to` and ensure indices are updated.
         fn do_transfer(from: &T::AccountId, to: &T::AccountId, card_id: u32) -> DispatchResult {
+            let ignore_receiver_capacity = from != to && *to == Self::escrow_account_id();
+            Self::do_transfer_with_options(from, to, card_id, ignore_receiver_capacity)
+        }
+
+        fn do_transfer_with_options(
+            from: &T::AccountId,
+            to: &T::AccountId,
+            card_id: u32,
+            ignore_receiver_capacity: bool,
+        ) -> DispatchResult {
             ensure!(
                 !T::HandChecker::is_card_in_current_hand(from, card_id),
                 Error::<T>::CardInCurrentHand
             );
 
-            if from != to && *to != Self::escrow_account_id() {
+            if from != to && !ignore_receiver_capacity {
                 Self::ensure_can_receive_cards(to, 1)?;
             }
 
@@ -2537,6 +3530,46 @@ pub mod pallet {
             })?;
 
             Ok(())
+        }
+
+        pub fn move_card_to_external_escrow(
+            owner: &T::AccountId,
+            escrow_account: &T::AccountId,
+            card_id: u32,
+        ) -> Result<CardGenomeHash, DispatchError> {
+            ensure!(
+                !Converted::<T>::contains_key(card_id),
+                Error::<T>::CardAlreadyConverted
+            );
+
+            let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
+            ensure!(card_info.owner == *owner, Error::<T>::NotCardOwner);
+            ensure!(card_info.finalized, Error::<T>::CardNotFinalized);
+            ensure!(
+                !T::HandChecker::is_card_in_current_hand(owner, card_id),
+                Error::<T>::CardInCurrentHand
+            );
+
+            if CardPrices::<T>::contains_key(card_id) {
+                Self::unlist(card_id, owner);
+            }
+
+            let genome = Self::ensure_card_genome(card_id)?;
+            Self::do_transfer_with_options(owner, escrow_account, card_id, true)?;
+            Ok(genome)
+        }
+
+        pub fn move_card_from_external_escrow(
+            escrow_account: &T::AccountId,
+            owner: &T::AccountId,
+            card_id: u32,
+        ) -> DispatchResult {
+            let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
+            ensure!(
+                card_info.owner == *escrow_account,
+                Error::<T>::CardNotEscrowed
+            );
+            Self::do_transfer_with_options(escrow_account, owner, card_id, false)
         }
 
         /// Generate new ranks for a card based on on-chain entropy + (player, card_id, attempts).

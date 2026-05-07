@@ -50,6 +50,15 @@ parameter_types! {
     pub const MaxPackagingBacks: u32 = 16;
     pub const MaxSeasonCollections: u32 = 32;
     pub const MaxSeasonCollectionNameLen: u32 = 64;
+    pub const NexusTeamSize: u32 = 5;
+    pub const NexusSubjectCopyCap: u32 = 5;
+    pub const NexusOverflowTotalCapacity: u32 = 30;
+    pub const NexusOverflowPerSubjectCapacity: u32 = 2;
+    pub const NexusBaseVaultCapacity: u32 = 20;
+    pub const MaxNexusMetadataUriLen: u32 = 256;
+    pub const MaxNexusReasonLen: u32 = 128;
+    pub const MaxNexusSpellSlotsPerCard: u32 = 3;
+    pub const MaxNexusMatchPlayers: u32 = 2;
 
     pub const MaxMediaUriLen: u32 = 256;
     pub const MaxMediaContentTypeLen: u32 = 64;
@@ -186,6 +195,7 @@ impl pallet_eterra_media::Config for Test {
 impl pallet_eterra_slots::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type PaymentCurrency = Balances;
+    type AccessControl = ();
     type HandChecker = ();
     type PackPrice = PackPrice;
     type PackPriceReceiver = PackPriceReceiver;
@@ -209,6 +219,15 @@ impl pallet_eterra_slots::Config for Test {
     type MaxPackagingBacks = MaxPackagingBacks;
     type MaxSeasonCollections = MaxSeasonCollections;
     type MaxSeasonCollectionNameLen = MaxSeasonCollectionNameLen;
+    type NexusTeamSize = NexusTeamSize;
+    type NexusSubjectCopyCap = NexusSubjectCopyCap;
+    type NexusOverflowTotalCapacity = NexusOverflowTotalCapacity;
+    type NexusOverflowPerSubjectCapacity = NexusOverflowPerSubjectCapacity;
+    type NexusBaseVaultCapacity = NexusBaseVaultCapacity;
+    type MaxNexusMetadataUriLen = MaxNexusMetadataUriLen;
+    type MaxNexusReasonLen = MaxNexusReasonLen;
+    type MaxNexusSpellSlotsPerCard = MaxNexusSpellSlotsPerCard;
+    type MaxNexusMatchPlayers = MaxNexusMatchPlayers;
 
     type WeightInfo = ();
 }

@@ -26,6 +26,7 @@
 // Substrate and Polkadot dependencies
 use frame_support::PalletId;
 use frame_support::{
+    dispatch::DispatchResult,
     derive_impl, parameter_types,
     traits::{ConstBool, ConstU128, ConstU16, ConstU32, ConstU64, ConstU8, VariantCountOf},
     weights::{
@@ -48,9 +49,9 @@ use super::{HandProviderAdapter, UNIT};
 
 // Bring in the pallets re-exported in lib.rs
 use super::{
-    pallet_eterra, pallet_eterra_daily_slots, pallet_eterra_faucet, pallet_eterra_game_authority,
-    pallet_eterra_gamer, pallet_eterra_media, pallet_eterra_seasons, pallet_eterra_simple_matchmaker,
-    pallet_eterra_tcg, pallet_nfts,
+    pallet_alpha_access, pallet_eterra, pallet_eterra_card_escrow, pallet_eterra_daily_slots,
+    pallet_eterra_faucet, pallet_eterra_game_authority, pallet_eterra_gamer, pallet_eterra_media,
+    pallet_eterra_seasons, pallet_eterra_simple_matchmaker, pallet_eterra_tcg, pallet_nfts,
 };
 // Monte Carlo AI pallet lives at the crate root; bring it in explicitly.
 
@@ -58,8 +59,8 @@ use super::{
 use super::{
     AccountId, Assets, Aura, Balance, Balances, Block, BlockNumber, Council, EterraGamer, Hash,
     Nonce, PalletInfo, Runtime, RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason,
-    RuntimeOrigin, RuntimeTask, Signature, System, DAYS, EXISTENTIAL_DEPOSIT, HOURS, SLOT_DURATION,
-    VERSION,
+    RuntimeOrigin, RuntimeTask, Signature, System, Timestamp, DAYS, EXISTENTIAL_DEPOSIT, HOURS,
+    SLOT_DURATION, VERSION,
 };
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
@@ -84,6 +85,70 @@ pub struct TcgSeasonActivationValidator;
 impl pallet_eterra_seasons::SeasonActivationValidator<u32> for TcgSeasonActivationValidator {
     fn ensure_can_activate(season_id: u32) -> frame_support::dispatch::DispatchResult {
         pallet_eterra_tcg::Pallet::<Runtime>::ensure_season_ready_for_activation(season_id)
+    }
+}
+
+pub struct EscrowCardCustodian;
+
+impl pallet_eterra_card_escrow::CardCustodian<AccountId> for EscrowCardCustodian {
+    fn move_card_to_escrow(
+        owner: &AccountId,
+        escrow_account: &AccountId,
+        card_id: u32,
+    ) -> Result<pallet_eterra_card_escrow::CardGenomeHash, sp_runtime::DispatchError> {
+        pallet_eterra_tcg::Pallet::<Runtime>::move_card_to_external_escrow(
+            owner,
+            escrow_account,
+            card_id,
+        )
+    }
+
+    fn move_card_from_escrow(
+        escrow_account: &AccountId,
+        owner: &AccountId,
+        card_id: u32,
+    ) -> DispatchResult {
+        pallet_eterra_tcg::Pallet::<Runtime>::move_card_from_external_escrow(
+            escrow_account,
+            owner,
+            card_id,
+        )
+    }
+}
+
+pub struct EscrowGameAuthorityAdapter;
+
+impl pallet_eterra_card_escrow::GameAuthority<AccountId> for EscrowGameAuthorityAdapter {
+    fn ensure_game_owned_by(game_id: u64, caller: &AccountId) -> DispatchResult {
+        pallet_eterra_game_authority::Pallet::<Runtime>::ensure_game_owned_by(game_id, caller)
+    }
+
+    fn ensure_active_game_owned_by(game_id: u64, caller: &AccountId) -> DispatchResult {
+        pallet_eterra_game_authority::Pallet::<Runtime>::ensure_active_game_owned_by(game_id, caller)
+    }
+
+    fn ensure_player_in_game(game_id: u64, player: &AccountId) -> DispatchResult {
+        pallet_eterra_game_authority::Pallet::<Runtime>::ensure_player_in_game(game_id, player)
+    }
+}
+
+pub struct EscrowGameLifecycleHooks;
+
+impl pallet_eterra_game_authority::GameLifecycleHooks<AccountId> for EscrowGameLifecycleHooks {
+    fn on_game_created(
+        game_id: pallet_eterra_game_authority::GameId,
+        _server: &AccountId,
+        _players: &[AccountId],
+    ) -> DispatchResult {
+        pallet_eterra_card_escrow::Pallet::<Runtime>::handle_game_created(game_id)
+    }
+
+    fn on_game_ended(
+        game_id: pallet_eterra_game_authority::GameId,
+        _server: &AccountId,
+        _players: &[AccountId],
+    ) {
+        pallet_eterra_card_escrow::Pallet::<Runtime>::handle_game_ended(game_id);
     }
 }
 
@@ -537,6 +602,7 @@ parameter_types! {
 impl pallet_eterra_gamer::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Currency = Balances;
+    type AccessControl = super::AlphaAccess;
     type ExpIssuerOrigin = PrivilegedControlOrigin;
     type FaucetAccount = TreasuryAccount;
     type ChangeFee = GamerChangeFee;
@@ -576,6 +642,7 @@ impl pallet_eterra_monte_carlo_ai::pallet::Config for Runtime {
 
 impl pallet_eterra_game_authority::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
+    type AccessControl = super::AlphaAccess;
     type MaxPlayersPerGame = MaxPlayersPerGameConst;
     type MaxRequestIdLen = frame_support::traits::ConstU32<128>;
     type MaxOutcomeLen = frame_support::traits::ConstU32<128>;
@@ -588,7 +655,33 @@ impl pallet_eterra_game_authority::Config for Runtime {
 
     // Max players that can be added in a single batch to a game
     type MaxBatchAdd = frame_support::traits::ConstU32<32>;
+    type GameLifecycleHooks = EscrowGameLifecycleHooks;
     type WeightInfo = pallet_eterra_game_authority::weights::SubstrateWeight<Runtime>;
+}
+
+impl pallet_eterra_card_escrow::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type AccessControl = super::AlphaAccess;
+    type Currency = Balances;
+    type RewardAmount = ConstU128<{ 100 * UNIT }>;
+    type MaxEscrowedPerOwner = ConstU32<5>;
+    type MaxReservedPerGame = ConstU32<5>;
+    type MaxEventIdLen = ConstU32<128>;
+    type CardCustodian = EscrowCardCustodian;
+    type GameAuthority = EscrowGameAuthorityAdapter;
+    type WeightInfo = pallet_eterra_card_escrow::weights::SubstrateWeight<Runtime>;
+}
+
+parameter_types! {
+    pub const AlphaAccessMaxRevokeReasonLen: u32 = 128;
+}
+
+impl pallet_alpha_access::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type AdminOrigin = PrivilegedControlOrigin;
+    type TimeProvider = Timestamp;
+    type MaxRevokeReasonLen = AlphaAccessMaxRevokeReasonLen;
+    type WeightInfo = ();
 }
 
 impl pallet_eterra_daily_slots::Config for Runtime {
@@ -607,6 +700,7 @@ impl pallet_eterra_daily_slots::Config for Runtime {
 
 impl pallet_eterra_simple_matchmaker::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
+    type AccessControl = super::AlphaAccess;
     type PlayersPerMatch = PlayersPerMatchConst;
     type QueueCapacity = QueueCapacityConst;
     type HandProvider = MatchmakerHandProvider;
@@ -640,6 +734,7 @@ type MatchmakerHandProvider = HandProviderAdapter;
 
 impl pallet_eterra_tcg::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
+    type AccessControl = super::AlphaAccess;
 
     type PaymentCurrency = Balances;
     type HandChecker = TcgHandChecker;
@@ -652,7 +747,7 @@ impl pallet_eterra_tcg::Config for Runtime {
     type MaxProSpins = ConstU8<5>;
     type MaxAttempts = ConstU8<3>; // Set maximum attempts per card to 3
     type CardsPerPack = ConstU8<6>; // Set number of cards per pack to 6
-    type MaxOwnedCards = ConstU32<5000>;
+    type MaxOwnedCards = ConstU32<100000>;
     type BaseCardCapacity = ConstU32<500>;
     type CardCapacityUpgradeAmount = ConstU32<100>;
     type CardCapacityUpgradePrice = ConstU128<{ 100 * UNIT }>;
@@ -665,11 +760,21 @@ impl pallet_eterra_tcg::Config for Runtime {
     type MaxPackagingBacks = ConstU32<16>;
     type MaxSeasonCollections = ConstU32<32>;
     type MaxSeasonCollectionNameLen = ConstU32<64>;
+    type NexusTeamSize = ConstU32<5>;
+    type NexusSubjectCopyCap = ConstU32<5>;
+    type NexusOverflowTotalCapacity = ConstU32<30>;
+    type NexusOverflowPerSubjectCapacity = ConstU32<2>;
+    type NexusBaseVaultCapacity = ConstU32<20>;
+    type MaxNexusMetadataUriLen = ConstU32<256>;
+    type MaxNexusReasonLen = ConstU32<128>;
+    type MaxNexusSpellSlotsPerCard = ConstU32<3>;
+    type MaxNexusMatchPlayers = ConstU32<2>;
     type WeightInfo = pallet_eterra_tcg::weights::SubstrateWeight<Runtime>;
 }
 
 impl pallet_eterra::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
+    type AccessControl = super::AlphaAccess;
     type NumPlayers = EterraNumPlayers;
     type MaxRounds = EterraMaxRounds;
     type BlocksToPlayLimit = EterraBlocksToPlayLimit;

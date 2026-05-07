@@ -1,9 +1,10 @@
 use crate::pallet::Config as EterraSlotsConfig;
 use crate::{
-    mock::*, ActiveCard, CardArtworkCollectionId,
-    CardCapacityBonus, CardPrices, Cards, CardsByOwner, Error, Event, ListedByOwner, NextCardId,
-    PackCardInProgress, PackInProgress, PlayerPacks, SeasonCollectionIds, SeasonCollections,
-    SeasonCollectionStatus,
+    mock::*, ActiveCard, CardArtworkCollectionId, CardCapacityBonus, CardPrices, Cards,
+    CardsByOwner, Error, Event, ListedByOwner, NextCardId, NextStarterGrantId, NexusAccountStates,
+    NexusOverflowCards, NexusOverflowSubjectCounts, NexusStorageLocation, NexusSubjectCopyCounts,
+    PackCardInProgress, PackInProgress, PlayerPacks, SeasonCollectionIds, SeasonCollectionStatus,
+    SeasonCollections, StarterGrants, StarterPath,
 };
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok, BoundedBTreeSet, BoundedVec};
@@ -80,6 +81,142 @@ fn seed_owned_card_index(owner: u64, count: u32, id_offset: u32) {
         assert!(ids.try_insert(id).is_ok());
     }
     CardsByOwner::<Test>::insert(owner, ids);
+}
+
+#[test]
+fn nexus_config_defaults_use_season_1_constants() {
+    new_test_ext().execute_with(|| {
+        let config = EterraSlots::current_nexus_config();
+
+        assert_eq!(config.config_version, 1);
+        assert_eq!(config.subject_copy_cap, 5);
+        assert_eq!(config.overflow_total_capacity, 30);
+        assert_eq!(config.overflow_per_subject_capacity, 2);
+        assert_eq!(config.base_vault_capacity, 20);
+        assert_eq!(config.team_size, 5);
+        assert_eq!(config.updated_at, System::block_number());
+    });
+}
+
+#[test]
+fn claim_starter_grant_initializes_nexus_account_state() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+
+        assert_ok!(EterraSlots::claim_starter_grant(
+            RuntimeOrigin::signed(player),
+            StarterPath::Fire
+        ));
+
+        let account_state =
+            NexusAccountStates::<Test>::get(player).expect("account state should exist");
+        assert!(account_state.starter_claimed);
+        assert_eq!(account_state.starter_path, Some(StarterPath::Fire));
+        assert_eq!(account_state.vault_capacity, 20);
+        assert_eq!(account_state.config_version, 1);
+
+        let grant = StarterGrants::<Test>::get(player).expect("starter grant should exist");
+        assert_eq!(grant.path, StarterPath::Fire);
+        assert_eq!(grant.grant_id, 0);
+        assert_eq!(NextStarterGrantId::<Test>::get(), 1);
+
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::StarterGrantClaimed {
+                        account_id,
+                        path,
+                        grant_id,
+                        config_version
+                    }) if *account_id == player
+                        && *path == StarterPath::Fire
+                        && *grant_id == 0
+                        && *config_version == 1
+                )
+            },
+            "StarterGrantClaimed",
+        );
+    });
+}
+
+#[test]
+fn claim_starter_grant_rejects_duplicates() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+
+        assert_ok!(EterraSlots::claim_starter_grant(
+            RuntimeOrigin::signed(player),
+            StarterPath::Water
+        ));
+        assert_noop!(
+            EterraSlots::claim_starter_grant(RuntimeOrigin::signed(player), StarterPath::Wind),
+            Error::<Test>::NexusStarterGrantAlreadyClaimed
+        );
+
+        let grant = StarterGrants::<Test>::get(player).expect("starter grant should remain");
+        assert_eq!(grant.path, StarterPath::Water);
+        assert_eq!(NextStarterGrantId::<Test>::get(), 1);
+    });
+}
+
+#[test]
+fn nexus_copy_cap_routes_sixth_subject_copy_to_overflow() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let subject_id = 42u32;
+
+        let initial_location =
+            EterraSlots::classify_nexus_card_location(&player, subject_id).unwrap();
+        assert_eq!(initial_location, NexusStorageLocation::Collection);
+
+        NexusSubjectCopyCounts::<Test>::insert(player, subject_id, 5);
+
+        let capped_location =
+            EterraSlots::classify_nexus_card_location(&player, subject_id).unwrap();
+        assert_eq!(capped_location, NexusStorageLocation::Overflow);
+    });
+}
+
+#[test]
+fn nexus_overflow_enforces_per_subject_and_total_caps() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let subject_id = 42u32;
+
+        NexusSubjectCopyCounts::<Test>::insert(player, subject_id, 5);
+        NexusOverflowSubjectCounts::<Test>::insert(player, subject_id, 2);
+
+        assert!(matches!(
+            EterraSlots::classify_nexus_card_location(&player, subject_id),
+            Err(Error::<Test>::NexusOverflowSubjectCapacityExceeded)
+        ));
+
+        NexusOverflowSubjectCounts::<Test>::insert(player, subject_id, 0);
+        let overflow: BoundedVec<u32, NexusOverflowTotalCapacity> =
+            (0u32..30u32).collect::<Vec<_>>().try_into().unwrap();
+        NexusOverflowCards::<Test>::insert(player, overflow);
+
+        assert!(matches!(
+            EterraSlots::classify_nexus_card_location(&player, subject_id),
+            Err(Error::<Test>::NexusOverflowCapacityExceeded)
+        ));
+    });
+}
+
+#[test]
+fn nexus_team_validation_requires_exactly_five_cards() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraSlots::validate_nexus_team_size(5));
+        assert_noop!(
+            EterraSlots::validate_nexus_team_size(4),
+            Error::<Test>::NexusTeamSizeInvalid
+        );
+        assert_noop!(
+            EterraSlots::validate_nexus_team_size(6),
+            Error::<Test>::NexusTeamSizeInvalid
+        );
+    });
 }
 
 #[test]
@@ -410,7 +547,11 @@ fn set_season_collection_asset_weights_clear_when_assets_change() {
             desc
         ));
 
-        for suffix in [b"border-a".as_slice(), b"border-b".as_slice(), b"border-c".as_slice()] {
+        for suffix in [
+            b"border-a".as_slice(),
+            b"border-b".as_slice(),
+            b"border-c".as_slice(),
+        ] {
             let mut uri_bytes = b"ipfs://season2-".to_vec();
             uri_bytes.extend_from_slice(suffix);
             let uri: BoundedVec<u8, MaxMediaUriLen> = uri_bytes.try_into().unwrap();
@@ -451,7 +592,10 @@ fn set_season_collection_asset_weights_clear_when_assets_change() {
 
         let before_add = EterraSlots::season_collection_assets(2, 0);
         assert_eq!(before_add.border_weights.weights.to_vec(), vec![70, 30]);
-        assert_eq!(before_add.border_weights.multipliers.to_vec(), vec![100, 250]);
+        assert_eq!(
+            before_add.border_weights.multipliers.to_vec(),
+            vec![100, 250]
+        );
 
         assert_ok!(EterraSlots::add_season_collection_asset(
             RuntimeOrigin::signed(1),
@@ -1745,7 +1889,9 @@ fn transfer_card_fails_when_recipient_card_capacity_is_full() {
         let original_owner = 1u64;
         let new_owner = 2u64;
 
-        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(original_owner)));
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(
+            original_owner
+        )));
         let card_id = NextCardId::<Test>::get().saturating_sub(1);
 
         seed_owned_card_index(new_owner, BaseCardCapacity::get(), 30_000);
@@ -1785,7 +1931,10 @@ fn mint_card_charges_price_and_mints() {
         assert_eq!(Balances::free_balance(player), player_before - price);
         assert_eq!(Balances::free_balance(receiver), receiver_before + price);
 
-        System::assert_has_event(RuntimeEvent::EterraSlots(Event::CardMinted { player, card_id }));
+        System::assert_has_event(RuntimeEvent::EterraSlots(Event::CardMinted {
+            player,
+            card_id,
+        }));
     });
 }
 
@@ -1819,7 +1968,9 @@ fn buy_card_capacity_increases_capacity_and_charges_price() {
         let player_before = Balances::free_balance(player);
         let receiver_before = Balances::free_balance(receiver);
 
-        assert_ok!(EterraSlots::buy_card_capacity(RuntimeOrigin::signed(player)));
+        assert_ok!(EterraSlots::buy_card_capacity(RuntimeOrigin::signed(
+            player
+        )));
 
         assert_eq!(
             CardCapacityBonus::<Test>::get(player),
@@ -1863,10 +2014,16 @@ fn set_and_remove_price_updates_storage_and_events() {
 
         // Unlist
         System::reset_events();
-        assert_ok!(EterraSlots::remove_price(RuntimeOrigin::signed(owner), card_id));
+        assert_ok!(EterraSlots::remove_price(
+            RuntimeOrigin::signed(owner),
+            card_id
+        ));
         assert_eq!(CardPrices::<Test>::get(card_id), None);
         assert!(!ListedByOwner::<Test>::get(&owner).contains(&card_id));
-        System::assert_has_event(RuntimeEvent::EterraSlots(Event::CardUnlisted { owner, card_id }));
+        System::assert_has_event(RuntimeEvent::EterraSlots(Event::CardUnlisted {
+            owner,
+            card_id,
+        }));
     });
 }
 
