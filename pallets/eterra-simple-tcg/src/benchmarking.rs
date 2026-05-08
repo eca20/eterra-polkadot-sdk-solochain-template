@@ -4,8 +4,8 @@ use super::*;
 use frame_benchmarking::{account, benchmarks, whitelisted_caller};
 use frame_support::traits::Currency;
 use frame_system::RawOrigin;
-use sp_runtime::DispatchError;
 use sp_runtime::traits::Saturating;
+use sp_runtime::DispatchError;
 
 fn fund<T: Config>(who: &T::AccountId, amount: BalanceOf<T>) {
     let _ = T::Currency::deposit_creating(who, amount);
@@ -29,7 +29,8 @@ fn seed_card<T: Config>(owner: &T::AccountId, card_id: CardId) {
     };
     Cards::<T>::insert(card_id, info);
     OwnedCards::<T>::try_mutate(owner, |list| -> Result<(), DispatchError> {
-        list.try_push(card_id).map_err(|_| Error::<T>::OwnedListFull)?;
+        list.try_push(card_id)
+            .map_err(|_| Error::<T>::OwnedListFull)?;
         Ok(())
     })
     .expect("owned list not full; qed");
@@ -39,7 +40,8 @@ fn list_card<T: Config>(owner: &T::AccountId, card_id: CardId, price: BalanceOf<
     CardPrices::<T>::insert(card_id, price);
     ListedByOwner::<T>::try_mutate(owner, |list| -> Result<(), DispatchError> {
         if !list.iter().any(|id| *id == card_id) {
-            list.try_push(card_id).map_err(|_| Error::<T>::OwnedListFull)?;
+            list.try_push(card_id)
+                .map_err(|_| Error::<T>::OwnedListFull)?;
         }
         Ok(())
     })
@@ -110,9 +112,5 @@ mod tests {
     use super::*;
     use frame_benchmarking::impl_benchmark_test_suite;
 
-    impl_benchmark_test_suite!(
-        Pallet,
-        crate::mock::new_test_ext(),
-        crate::mock::Test
-    );
+    impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);
 }

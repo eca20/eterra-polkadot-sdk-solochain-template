@@ -2,8 +2,8 @@
 
 use super::*;
 use frame_benchmarking::{account, benchmarks, whitelisted_caller};
-use frame_support::{BoundedBTreeSet, BoundedVec};
 use frame_support::traits::Get;
+use frame_support::{BoundedBTreeSet, BoundedVec};
 use frame_system::RawOrigin;
 use sp_std::vec::Vec;
 

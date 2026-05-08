@@ -168,8 +168,7 @@ pub mod pallet {
 
     #[pallet::storage]
     #[pallet::getter(fn admins)]
-    pub type Admins<T: Config> =
-        StorageMap<_, Blake2_128Concat, T::AccountId, (), OptionQuery>;
+    pub type Admins<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, (), OptionQuery>;
 
     #[pallet::storage]
     #[pallet::getter(fn next_season_id)]

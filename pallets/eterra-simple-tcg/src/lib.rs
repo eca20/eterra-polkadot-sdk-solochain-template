@@ -415,8 +415,15 @@ pub mod pallet {
             let parent_hash = <frame_system::Pallet<T>>::parent_hash();
             let ext_index = <frame_system::Pallet<T>>::extrinsic_index().unwrap_or(0);
             let now = <frame_system::Pallet<T>>::block_number();
-            let subject =
-                (b"eterra-simple-tcg/mint", now, parent_hash, ext_index, owner, card_id).encode();
+            let subject = (
+                b"eterra-simple-tcg/mint",
+                now,
+                parent_hash,
+                ext_index,
+                owner,
+                card_id,
+            )
+                .encode();
             let hash = T::Hashing::hash(&subject);
 
             // Use the first 4 bytes for the four directions (1..=9)

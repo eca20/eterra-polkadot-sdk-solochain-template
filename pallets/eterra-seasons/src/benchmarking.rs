@@ -23,4 +23,3 @@ benchmarks! {
         assert!(Seasons::<T>::get(NextSeasonId::<T>::get().saturating_sub(1)).is_some());
     }
 }
-
