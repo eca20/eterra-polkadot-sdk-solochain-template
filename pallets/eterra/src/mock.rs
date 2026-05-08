@@ -4,21 +4,21 @@ use frame_support::{
     traits::{ConstU128, ConstU16, ConstU32, ConstU64, Get},
 };
 use frame_system as system;
-use pallet_eterra_media;
 use pallet_assets;
 use pallet_balances;
 use pallet_eterra_gamer;
+use pallet_eterra_media;
 use pallet_eterra_monte_carlo_ai as mc_ai;
 use pallet_eterra_seasons;
 use pallet_eterra_tcg;
 use pallet_nfts;
-use parity_scale_codec::{Decode, Encode}; 
+use parity_scale_codec::{Decode, Encode};
 use scale_info::TypeInfo;
-use sp_core::H256; 
+use sp_core::H256;
 use sp_runtime::{
     traits::{BlakeTwo256, IdentityLookup},
     BuildStorage,
-}; 
+};
 
 type Block = frame_system::mocking::MockBlock<Test>;
 
@@ -347,6 +347,7 @@ impl pallet_eterra::Config for Test {
     type AiAccount = FaucetAccountId;
     type AiDifficulty = AiDifficultyConst;
     type AdminOrigin = frame_system::EnsureRoot<u64>;
+    type AccessControl = ();
     type BlocksPerHour = BlocksPerHourConst;
     type BlocksPerDay = BlocksPerDayConst;
     type BlocksPerWeek = BlocksPerWeekConst;
@@ -421,13 +422,17 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
             1u128,
         );
 
-        let name: frame_support::BoundedVec<u8, MaxSeasonNameLen> = b"S1".to_vec().try_into().unwrap();
-        let desc: frame_support::BoundedVec<u8, MaxSeasonDescLen> = b"D1".to_vec().try_into().unwrap();
+        let name: frame_support::BoundedVec<u8, MaxSeasonNameLen> =
+            b"S1".to_vec().try_into().unwrap();
+        let desc: frame_support::BoundedVec<u8, MaxSeasonDescLen> =
+            b"D1".to_vec().try_into().unwrap();
         pallet_eterra_seasons::Pallet::<Test>::create_season(RuntimeOrigin::signed(1), name, desc)
             .expect("create season");
 
-        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> = b"ipfs://b".to_vec().try_into().unwrap();
-        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> =
+            b"ipfs://b".to_vec().try_into().unwrap();
+        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> =
+            b"image/png".to_vec().try_into().unwrap();
         pallet_eterra_media::Pallet::<Test>::register_media(
             RuntimeOrigin::signed(1),
             None,
@@ -458,8 +463,10 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
             None,
         )
         .expect("register subject");
-        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> = b"ipfs://back".to_vec().try_into().unwrap();
-        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> =
+            b"ipfs://back".to_vec().try_into().unwrap();
+        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> =
+            b"image/png".to_vec().try_into().unwrap();
         pallet_eterra_media::Pallet::<Test>::register_media(
             RuntimeOrigin::signed(1),
             None,
@@ -470,8 +477,10 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
             None,
         )
         .expect("register back");
-        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> = b"ipfs://pack-front".to_vec().try_into().unwrap();
-        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> =
+            b"ipfs://pack-front".to_vec().try_into().unwrap();
+        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> =
+            b"image/png".to_vec().try_into().unwrap();
         pallet_eterra_media::Pallet::<Test>::register_media(
             RuntimeOrigin::signed(1),
             None,

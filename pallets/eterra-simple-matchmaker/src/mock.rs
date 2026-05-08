@@ -104,10 +104,7 @@ pub fn clear_all_hands() {
 
 // --- Test-only GameCreator implementation for () ---
 impl pallet_matchmaker::GameCreator<AccountId> for () {
-    fn create_from_matchmaking(
-        a: &AccountId,
-        b: &AccountId,
-    ) -> Result<(), DispatchError> {
+    fn create_from_matchmaking(a: &AccountId, b: &AccountId) -> Result<(), DispatchError> {
         // Record the created game pair for assertions.
         CREATED_GAMES.with(|v| v.borrow_mut().push((*a, *b)));
         // Bump a simple counter for the returned GameId.
@@ -126,6 +123,7 @@ impl pallet_matchmaker::Config for Test {
     type PlayersPerMatch = PlayersPerMatchConst;
     type QueueCapacity = QueueCapacityConst;
     type HandProvider = MockHandProvider;
+    type AccessControl = ();
     type GameCreator = ();
     type WeightInfo = ();
 }

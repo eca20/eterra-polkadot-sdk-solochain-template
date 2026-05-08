@@ -23,7 +23,10 @@ use frame_support::traits::Get;
 use frame_support::BoundedVec;
 use frame_system::pallet_prelude::BlockNumberFor;
 use parity_scale_codec::{Decode, Encode};
-use sp_runtime::{traits::{Hash, Zero}, Saturating};
+use sp_runtime::{
+    traits::{Hash, Zero},
+    Saturating,
+};
 pub use types::board::Board;
 pub use types::card::Card;
 pub use types::card::Possession as Player; // PlayerOne / PlayerTwo
@@ -60,19 +63,18 @@ pub mod pallet {
     use frame_support::pallet_prelude::ConstU32;
     use frame_support::traits::BuildGenesisConfig;
     use frame_support::traits::StorageVersion;
-    use frame_support::traits::{Currency, fungibles};
+    use frame_support::traits::{fungibles, Currency};
     use frame_support::BoundedVec;
     use frame_support::{dispatch::DispatchResult, pallet_prelude::*};
     use frame_system::pallet_prelude::*;
     use sp_runtime::traits::Hash;
-    use sp_runtime::Saturating;
     use sp_runtime::traits::Zero;
+    use sp_runtime::Saturating;
 
     pub type AccountIdOf<T> = <T as frame_system::Config>::AccountId;
-    pub type BalanceOf<T> =
-        <<T as cards::pallet::Config>::PaymentCurrency as Currency<
-            <T as frame_system::Config>::AccountId,
-        >>::Balance;
+    pub type BalanceOf<T> = <<T as cards::pallet::Config>::PaymentCurrency as Currency<
+        <T as frame_system::Config>::AccountId,
+    >>::Balance;
 
     use crate::types::board::Board;
     use crate::types::card::Card;
@@ -82,6 +84,7 @@ pub mod pallet {
     use crate::types::GameId;
     // Alias the simple TCG pallet so we can read card ownership & stats
 
+    use pallet_alpha_access::AccessControl;
     use pallet_eterra_monte_carlo_ai as mc_ai;
     use pallet_eterra_tcg as cards;
 
@@ -142,6 +145,9 @@ pub mod pallet {
 
         /// Origin permitted to change AI difficulty/controller settings.
         type AdminOrigin: EnsureOrigin<Self::RuntimeOrigin>;
+
+        /// Canonical Alpha access gate for player-facing calls.
+        type AccessControl: pallet_alpha_access::AccessControl<Self::AccountId>;
 
         /// Block counts for controller window options (hour/day/week/month).
         #[pallet::constant]
@@ -294,14 +300,12 @@ pub mod pallet {
     /// Optional controller configuration. When `None`, difficulty remains whatever was set manually.
     #[pallet::storage]
     #[pallet::getter(fn ai_difficulty_controller)]
-    pub type AiDifficultyController<T: Config> = StorageValue<
-        _,
-        AiDifficultyControllerConfig<BlockNumberFor<T>, BalanceOf<T>>,
-        OptionQuery,
-    >;
+    pub type AiDifficultyController<T: Config> =
+        StorageValue<_, AiDifficultyControllerConfig<BlockNumberFor<T>, BalanceOf<T>>, OptionQuery>;
 
     #[pallet::type_value]
-    pub fn DefaultPayoutWindowState<T: Config>() -> PayoutWindowState<BlockNumberFor<T>, BalanceOf<T>> {
+    pub fn DefaultPayoutWindowState<T: Config>(
+    ) -> PayoutWindowState<BlockNumberFor<T>, BalanceOf<T>> {
         PayoutWindowState {
             window_start: Zero::zero(),
             last_adjust: Zero::zero(),
@@ -322,7 +326,8 @@ pub mod pallet {
     >;
 
     #[pallet::type_value]
-    pub fn DefaultAiDifficultyUiStatus<T: Config>() -> AiDifficultyUiStatus<BlockNumberFor<T>, BalanceOf<T>> {
+    pub fn DefaultAiDifficultyUiStatus<T: Config>(
+    ) -> AiDifficultyUiStatus<BlockNumberFor<T>, BalanceOf<T>> {
         AiDifficultyUiStatus {
             current_difficulty: T::AiDifficulty::get(),
             controller_enabled: false,
@@ -582,6 +587,7 @@ pub mod pallet {
             game_mode: GameMode,
         ) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
+            <T as Config>::AccessControl::ensure_whitelisted(&who)?;
 
             // Require the creator to have a current hand before starting a game
             ensure!(
@@ -770,6 +776,7 @@ pub mod pallet {
         #[pallet::weight(<T as Config>::WeightInfo::play())]
         pub fn play(origin: OriginFor<T>, game_id: GameId<T>, player_move: Move) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            <T as Config>::AccessControl::ensure_whitelisted(&who)?;
 
             log::debug!(
                 "Player {:?} is attempting to play on game_id {:?} at {:?}",
@@ -865,6 +872,7 @@ pub mod pallet {
             _card_ids: BoundedVec<u32, HandLimit>,
         ) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
+            <T as Config>::AccessControl::ensure_whitelisted(&who)?;
 
             // Ensure the game exists and the caller is a player in it
             let game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
@@ -950,6 +958,7 @@ pub mod pallet {
             y: u8,
         ) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
+            <T as Config>::AccessControl::ensure_whitelisted(&who)?;
 
             // Load game
             let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
@@ -1036,6 +1045,7 @@ pub mod pallet {
         #[pallet::weight(<T as Config>::WeightInfo::force_finish_turn())]
         pub fn force_finish_turn(origin: OriginFor<T>, game_id: GameId<T>) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
+            <T as Config>::AccessControl::ensure_whitelisted(&who)?;
 
             // Retrieve the game from storage
             let mut game = GameStorage::<T>::get(&game_id).ok_or(Error::<T>::GameNotFound)?;
@@ -1107,6 +1117,7 @@ pub mod pallet {
             card_ids: BoundedVec<u32, HandLimit>,
         ) -> DispatchResult {
             let who: AccountIdOf<T> = ensure_signed(origin)?;
+            <T as Config>::AccessControl::ensure_whitelisted(&who)?;
 
             // Enforce exact hand size and uniqueness
             ensure!(
@@ -1180,8 +1191,14 @@ pub mod pallet {
             <T as Config>::AdminOrigin::ensure_origin(origin)?;
 
             // Basic sanity checks.
-            ensure!(!adjust_period.is_zero(), Error::<T>::InvalidControllerConfig);
-            ensure!(min_difficulty <= max_difficulty, Error::<T>::InvalidControllerConfig);
+            ensure!(
+                !adjust_period.is_zero(),
+                Error::<T>::InvalidControllerConfig
+            );
+            ensure!(
+                min_difficulty <= max_difficulty,
+                Error::<T>::InvalidControllerConfig
+            );
             ensure!(max_difficulty <= 100, Error::<T>::InvalidControllerConfig);
 
             // Validate that the selected window has a non-zero length.
@@ -1460,29 +1477,30 @@ impl<T: Config> Pallet<T> {
         // Count keys once for rough weight accounting.
         let n: u64 = GameStorage::<T>::iter_keys().count() as u64;
 
-        GameStorage::<T>::translate_values::<GameV2<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>, _>(
-            |old| {
-                Some(Game::<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> {
-                    state: old.state,
-                    last_played_block: old.last_played_block,
-                    players: old.players,
-                    player_turn: old.player_turn,
-                    round: old.round,
-                    max_rounds: old.max_rounds,
-                    board: old.board.map(|column| {
-                        column.map(|cell| {
-                            cell.map(|card| {
-                                let mut next = Card::new(card.top, card.right, card.bottom, card.left);
-                                next.possession = card.possession;
-                                next
-                            })
+        GameStorage::<T>::translate_values::<
+            GameV2<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
+            _,
+        >(|old| {
+            Some(Game::<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> {
+                state: old.state,
+                last_played_block: old.last_played_block,
+                players: old.players,
+                player_turn: old.player_turn,
+                round: old.round,
+                max_rounds: old.max_rounds,
+                board: old.board.map(|column| {
+                    column.map(|cell| {
+                        cell.map(|card| {
+                            let mut next = Card::new(card.top, card.right, card.bottom, card.left);
+                            next.possession = card.possession;
+                            next
                         })
-                    }),
-                    locked_mask: 0,
-                    scores: old.scores,
-                })
-            },
-        );
+                    })
+                }),
+                locked_mask: 0,
+                scores: old.scores,
+            })
+        });
 
         // We iterated keys once and translated (read+write) each value.
         T::DbWeight::get()
@@ -1520,29 +1538,30 @@ impl<T: Config> Pallet<T> {
 
         let n: u64 = GameStorage::<T>::iter_keys().count() as u64;
 
-        GameStorage::<T>::translate_values::<GameV3<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>, _>(
-            |old| {
-                Some(Game::<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> {
-                    state: old.state,
-                    last_played_block: old.last_played_block,
-                    players: old.players,
-                    player_turn: old.player_turn,
-                    round: old.round,
-                    max_rounds: old.max_rounds,
-                    board: old.board.map(|column| {
-                        column.map(|cell| {
-                            cell.map(|card| {
-                                let mut next = Card::new(card.top, card.right, card.bottom, card.left);
-                                next.possession = card.possession;
-                                next
-                            })
+        GameStorage::<T>::translate_values::<
+            GameV3<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers>,
+            _,
+        >(|old| {
+            Some(Game::<AccountIdOf<T>, BlockNumberFor<T>, T::NumPlayers> {
+                state: old.state,
+                last_played_block: old.last_played_block,
+                players: old.players,
+                player_turn: old.player_turn,
+                round: old.round,
+                max_rounds: old.max_rounds,
+                board: old.board.map(|column| {
+                    column.map(|cell| {
+                        cell.map(|card| {
+                            let mut next = Card::new(card.top, card.right, card.bottom, card.left);
+                            next.possession = card.possession;
+                            next
                         })
-                    }),
-                    locked_mask: old.locked_mask,
-                    scores: old.scores,
-                })
-            },
-        );
+                    })
+                }),
+                locked_mask: old.locked_mask,
+                scores: old.scores,
+            })
+        });
 
         T::DbWeight::get()
             .reads(n.saturating_mul(2))
@@ -1648,7 +1667,8 @@ impl<T: Config> Pallet<T> {
         let shortfall_to_avoid_decrease = end_decrease_threshold.saturating_sub(paid_tracked);
 
         // Use the clamped difficulty as the base for the projection (matches controller behavior).
-        let current_difficulty = current_difficulty_raw.clamp(cfg.min_difficulty, cfg.max_difficulty);
+        let current_difficulty =
+            current_difficulty_raw.clamp(cfg.min_difficulty, cfg.max_difficulty);
 
         let would_end_now_increase = cfg.step != 0 && paid_tracked > end_increase_threshold;
         let would_end_now_decrease = cfg.step != 0 && paid_tracked < end_decrease_threshold;
@@ -1897,8 +1917,8 @@ impl<T: Config> Pallet<T> {
                             if let Some(cell) = col.get(yi) {
                                 if cell.is_none() {
                                     let h = slot.clone();
-                                    let placed =
-                                        Card::new(h.north, h.east, h.south, h.west).with_card_id(h.card_id);
+                                    let placed = Card::new(h.north, h.east, h.south, h.west)
+                                        .with_card_id(h.card_id);
                                     let mv = Move {
                                         place_card: placed,
                                         place_index_x: x,
@@ -2315,7 +2335,11 @@ impl<T: Config> Pallet<T> {
                         paid_coin = coin;
                     }
                     if !sp_runtime::traits::Zero::is_zero(&dev) {
-                        if let Err(e) = <T::Assets as frame_support::traits::fungibles::Mutate<AccountIdOf<T>>>::mint_into(T::DevCoinAssetId::get(), winner_acc, dev) {
+                        if let Err(e) = <T::Assets as frame_support::traits::fungibles::Mutate<
+                            AccountIdOf<T>,
+                        >>::mint_into(
+                            T::DevCoinAssetId::get(), winner_acc, dev
+                        ) {
                             log::warn!(
                                 target: "runtime::eterra",
                                 "failed to mint devCOIN reward for {:?}: {:?}",
@@ -2327,7 +2351,11 @@ impl<T: Config> Pallet<T> {
                         }
                     }
                     if !sp_runtime::traits::Zero::is_zero(&beta) {
-                        if let Err(e) = <T::Assets as frame_support::traits::fungibles::Mutate<AccountIdOf<T>>>::mint_into(T::BetaCoinAssetId::get(), winner_acc, beta) {
+                        if let Err(e) = <T::Assets as frame_support::traits::fungibles::Mutate<
+                            AccountIdOf<T>,
+                        >>::mint_into(
+                            T::BetaCoinAssetId::get(), winner_acc, beta
+                        ) {
                             log::warn!(
                                 target: "runtime::eterra",
                                 "failed to mint betaCOIN reward for {:?}: {:?}",

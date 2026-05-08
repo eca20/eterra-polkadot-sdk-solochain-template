@@ -2,9 +2,7 @@
 #![cfg(test)]
 
 use crate as pallet_eterra_gamer;
-use frame_support::{
-    construct_runtime, parameter_types,
-};
+use frame_support::{construct_runtime, parameter_types};
 use frame_system as system;
 use sp_core::H256;
 use sp_runtime::traits::{BlakeTwo256, IdentityLookup};
@@ -79,6 +77,7 @@ impl pallet_balances::Config for Test {
 impl pallet_eterra_gamer::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type Currency = Balances;
+    type AccessControl = ();
     type ExpIssuerOrigin = frame_system::EnsureRoot<AccountId>;
     type FaucetAccount = FaucetAccountParam;
     type ChangeFee = ChangeFee;
@@ -99,7 +98,9 @@ construct_runtime!(
 );
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
-    let mut t = frame_system::GenesisConfig::<Test>::default().build_storage().unwrap();
+    let mut t = frame_system::GenesisConfig::<Test>::default()
+        .build_storage()
+        .unwrap();
     pallet_balances::GenesisConfig::<Test> {
         balances: vec![(ALICE, 1_000_000), (BOB, 1_000), (FAUCET, 1)],
     }

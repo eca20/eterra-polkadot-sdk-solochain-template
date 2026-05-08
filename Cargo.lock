@@ -5173,6 +5173,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "pallet-alpha-access"
+version = "0.1.0"
+dependencies = [
+ "frame-support",
+ "frame-system",
+ "pallet-balances",
+ "pallet-timestamp",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
 name = "pallet-assets"
 version = "40.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5264,6 +5280,7 @@ dependencies = [
  "frame-system-benchmarking",
  "hex",
  "log",
+ "pallet-alpha-access",
  "pallet-assets",
  "pallet-balances",
  "pallet-eterra-gamer",
@@ -5279,6 +5296,21 @@ dependencies = [
  "sp-io",
  "sp-runtime",
  "sp-std 8.0.0",
+]
+
+[[package]]
+name = "pallet-eterra-card-escrow"
+version = "0.1.0"
+dependencies = [
+ "frame-support",
+ "frame-system",
+ "pallet-alpha-access",
+ "pallet-balances",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
 ]
 
 [[package]]
@@ -5332,6 +5364,7 @@ dependencies = [
  "frame-support",
  "frame-system",
  "frame-system-benchmarking",
+ "pallet-alpha-access",
  "parity-scale-codec",
  "scale-info",
  "sp-core",
@@ -5348,6 +5381,7 @@ dependencies = [
  "frame-support",
  "frame-system",
  "frame-system-benchmarking",
+ "pallet-alpha-access",
  "pallet-balances",
  "parity-scale-codec",
  "scale-info",
@@ -5415,6 +5449,7 @@ dependencies = [
  "frame-support",
  "frame-system",
  "frame-system-benchmarking",
+ "pallet-alpha-access",
  "parity-scale-codec",
  "scale-info",
  "sp-core",
@@ -5453,6 +5488,7 @@ dependencies = [
  "frame-system-benchmarking",
  "hex",
  "log",
+ "pallet-alpha-access",
  "pallet-balances",
  "pallet-eterra-media",
  "pallet-eterra-seasons",
@@ -8650,11 +8686,13 @@ dependencies = [
  "frame-system-benchmarking",
  "frame-system-rpc-runtime-api",
  "frame-try-runtime",
+ "pallet-alpha-access",
  "pallet-assets",
  "pallet-aura",
  "pallet-balances",
  "pallet-collective",
  "pallet-eterra",
+ "pallet-eterra-card-escrow",
  "pallet-eterra-daily-slots",
  "pallet-eterra-faucet",
  "pallet-eterra-game-authority",

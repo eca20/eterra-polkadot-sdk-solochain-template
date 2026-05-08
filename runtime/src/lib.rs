@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![recursion_limit = "512"]
 
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
@@ -20,20 +21,21 @@ use sp_runtime::{
 use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
 
-
 pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 use pallet_node_authorization;
 
+pub use pallet_alpha_access;
 pub use pallet_eterra;
+pub use pallet_eterra_card_escrow;
 pub use pallet_eterra_daily_slots;
 pub use pallet_eterra_faucet;
-pub use pallet_eterra_tcg;
-pub use pallet_eterra_simple_matchmaker;
-pub use pallet_eterra_gamer;
 pub use pallet_eterra_game_authority;
+pub use pallet_eterra_gamer;
 pub use pallet_eterra_media;
 pub use pallet_eterra_seasons;
+pub use pallet_eterra_simple_matchmaker;
+pub use pallet_eterra_tcg;
 pub use pallet_nfts;
 
 pub struct HandProviderAdapter;
@@ -272,7 +274,7 @@ mod runtime {
     pub type EterraGameAuthority = pallet_eterra_game_authority;
 
     #[runtime::pallet_index(18)]
-    pub type EterraMedia= pallet_eterra_media;
+    pub type EterraMedia = pallet_eterra_media;
 
     #[runtime::pallet_index(19)]
     pub type CouncilMembership = pallet_membership<Instance1>;
@@ -288,6 +290,12 @@ mod runtime {
 
     #[runtime::pallet_index(23)]
     pub type Nfts = pallet_nfts;
+
+    #[runtime::pallet_index(24)]
+    pub type EterraCardEscrow = pallet_eterra_card_escrow;
+
+    #[runtime::pallet_index(25)]
+    pub type AlphaAccess = pallet_alpha_access;
 }
 
 #[cfg(test)]
