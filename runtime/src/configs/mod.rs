@@ -26,8 +26,9 @@
 // Substrate and Polkadot dependencies
 use frame_support::PalletId;
 use frame_support::{
+    derive_impl,
     dispatch::DispatchResult,
-    derive_impl, parameter_types,
+    parameter_types,
     traits::{ConstBool, ConstU128, ConstU16, ConstU32, ConstU64, ConstU8, VariantCountOf},
     weights::{
         constants::{RocksDbWeight, WEIGHT_REF_TIME_PER_SECOND},
@@ -124,7 +125,9 @@ impl pallet_eterra_card_escrow::GameAuthority<AccountId> for EscrowGameAuthority
     }
 
     fn ensure_active_game_owned_by(game_id: u64, caller: &AccountId) -> DispatchResult {
-        pallet_eterra_game_authority::Pallet::<Runtime>::ensure_active_game_owned_by(game_id, caller)
+        pallet_eterra_game_authority::Pallet::<Runtime>::ensure_active_game_owned_by(
+            game_id, caller,
+        )
     }
 
     fn ensure_player_in_game(game_id: u64, player: &AccountId) -> DispatchResult {
@@ -874,7 +877,8 @@ impl pallet_nfts::Config for Runtime {
 
     type Currency = Balances;
     type ForceOrigin = PrivilegedControlOrigin;
-    type CreateOrigin = frame_support::traits::AsEnsureOriginWithArg<frame_system::EnsureSigned<AccountId>>;
+    type CreateOrigin =
+        frame_support::traits::AsEnsureOriginWithArg<frame_system::EnsureSigned<AccountId>>;
     type Locker = ();
 
     type CollectionDeposit = ConstU128<0>;

@@ -15,7 +15,9 @@ fn outcome(value: &str) -> OutcomeOf<Test> {
     BoundedVec::try_from(value.as_bytes().to_vec()).expect("outcome within bounds")
 }
 
-fn players(values: Vec<AccountId>) -> BoundedVec<AccountId, <Test as pallet_eterra_game_authority::Config>::MaxBatchAdd> {
+fn players(
+    values: Vec<AccountId>,
+) -> BoundedVec<AccountId, <Test as pallet_eterra_game_authority::Config>::MaxBatchAdd> {
     BoundedVec::try_from(values).expect("players within bounds")
 }
 
@@ -40,13 +42,22 @@ fn duplicate_create_game_with_round_id_creates_one_game_only() {
             ));
 
             assert_eq!(pallet_eterra_game_authority::NextGameId::<Test>::get(), 1);
-            assert_eq!(pallet_eterra_game_authority::GameIdByRoundId::<Test>::get(&round_id), Some(0));
+            assert_eq!(
+                pallet_eterra_game_authority::GameIdByRoundId::<Test>::get(&round_id),
+                Some(0)
+            );
 
             let game = pallet_eterra_game_authority::Games::<Test>::get(0).expect("game exists");
             assert!(game.players.contains(&BOB));
             assert!(game.players.contains(&CHARLIE));
-            assert_eq!(pallet_eterra_game_authority::ActiveGameByPlayer::<Test>::get(BOB), Some(0));
-            assert_eq!(pallet_eterra_game_authority::ActiveGameByPlayer::<Test>::get(CHARLIE), Some(0));
+            assert_eq!(
+                pallet_eterra_game_authority::ActiveGameByPlayer::<Test>::get(BOB),
+                Some(0)
+            );
+            assert_eq!(
+                pallet_eterra_game_authority::ActiveGameByPlayer::<Test>::get(CHARLIE),
+                Some(0)
+            );
         });
 }
 
@@ -91,7 +102,10 @@ fn game_id_by_round_id_resolves_after_successful_create() {
                 players(vec![BOB]),
             ));
 
-            assert_eq!(pallet_eterra_game_authority::GameIdByRoundId::<Test>::get(&round_id), Some(0));
+            assert_eq!(
+                pallet_eterra_game_authority::GameIdByRoundId::<Test>::get(&round_id),
+                Some(0)
+            );
         });
 }
 
@@ -116,8 +130,14 @@ fn different_round_ids_apply_independently() {
             ));
 
             assert_eq!(pallet_eterra_game_authority::NextGameId::<Test>::get(), 2);
-            assert_eq!(pallet_eterra_game_authority::GameIdByRoundId::<Test>::get(&round_a), Some(0));
-            assert_eq!(pallet_eterra_game_authority::GameIdByRoundId::<Test>::get(&round_b), Some(1));
+            assert_eq!(
+                pallet_eterra_game_authority::GameIdByRoundId::<Test>::get(&round_a),
+                Some(0)
+            );
+            assert_eq!(
+                pallet_eterra_game_authority::GameIdByRoundId::<Test>::get(&round_b),
+                Some(1)
+            );
         });
 }
 
@@ -145,7 +165,10 @@ fn failed_create_does_not_poison_round_id() {
                 ),
                 Error::<Test>::TooManyExpirations
             );
-            assert_eq!(pallet_eterra_game_authority::GameIdByRoundId::<Test>::get(&failed_round), None);
+            assert_eq!(
+                pallet_eterra_game_authority::GameIdByRoundId::<Test>::get(&failed_round),
+                None
+            );
         });
 }
 
@@ -178,8 +201,15 @@ fn duplicate_end_game_with_command_id_ends_once_only() {
 
             let game = pallet_eterra_game_authority::Games::<Test>::get(0).expect("game exists");
             assert!(game.ended);
-            assert_eq!(pallet_eterra_game_authority::ActiveGameByPlayer::<Test>::get(BOB), None);
-            assert!(pallet_eterra_game_authority::ProcessedEndCommands::<Test>::contains_key(&command_id));
+            assert_eq!(
+                pallet_eterra_game_authority::ActiveGameByPlayer::<Test>::get(BOB),
+                None
+            );
+            assert!(
+                pallet_eterra_game_authority::ProcessedEndCommands::<Test>::contains_key(
+                    &command_id
+                )
+            );
         });
 }
 
@@ -205,10 +235,16 @@ fn processed_end_command_flips_only_after_successful_end() {
                 ),
                 Error::<Test>::GameNotFound
             );
-            assert!(pallet_eterra_game_authority::ProcessedEndCommands::<Test>::get(&failed_command).is_none());
+            assert!(
+                pallet_eterra_game_authority::ProcessedEndCommands::<Test>::get(&failed_command)
+                    .is_none()
+            );
 
             let command_id = request_id("end:round-end-flip");
-            assert!(pallet_eterra_game_authority::ProcessedEndCommands::<Test>::get(&command_id).is_none());
+            assert!(
+                pallet_eterra_game_authority::ProcessedEndCommands::<Test>::get(&command_id)
+                    .is_none()
+            );
             assert_ok!(GamePallet::<Test>::end_game_with_command_id(
                 RuntimeOrigin::signed(ALICE),
                 0,
@@ -216,8 +252,9 @@ fn processed_end_command_flips_only_after_successful_end() {
                 outcome("round_complete"),
             ));
 
-            let processed = pallet_eterra_game_authority::ProcessedEndCommands::<Test>::get(&command_id)
-                .expect("processed end command exists");
+            let processed =
+                pallet_eterra_game_authority::ProcessedEndCommands::<Test>::get(&command_id)
+                    .expect("processed end command exists");
             assert_eq!(processed.game_id, 0);
         });
 }
@@ -281,8 +318,15 @@ fn end_command_after_auto_end_records_once_and_returns_success() {
 
             let game = pallet_eterra_game_authority::Games::<Test>::get(0).expect("game exists");
             assert!(game.ended);
-            assert_eq!(pallet_eterra_game_authority::ActiveGameByPlayer::<Test>::get(BOB), None);
-            assert!(pallet_eterra_game_authority::ProcessedEndCommands::<Test>::contains_key(&command_id));
+            assert_eq!(
+                pallet_eterra_game_authority::ActiveGameByPlayer::<Test>::get(BOB),
+                None
+            );
+            assert!(
+                pallet_eterra_game_authority::ProcessedEndCommands::<Test>::contains_key(
+                    &command_id
+                )
+            );
         });
 }
 
@@ -314,8 +358,13 @@ fn duplicate_record_eliminations_with_event_id_increments_once_only() {
                 2,
             ));
 
-            assert_eq!(pallet_eterra_game_authority::Eliminations::<Test>::get(0, BOB), 2);
-            assert!(pallet_eterra_game_authority::ProcessedEliminationEvents::<Test>::contains_key(&event_id));
+            assert_eq!(
+                pallet_eterra_game_authority::Eliminations::<Test>::get(0, BOB),
+                2
+            );
+            assert!(pallet_eterra_game_authority::ProcessedEliminationEvents::<
+                Test,
+            >::contains_key(&event_id));
         });
 }
 
@@ -346,7 +395,10 @@ fn different_event_ids_apply_independently() {
                 1,
             ));
 
-            assert_eq!(pallet_eterra_game_authority::Eliminations::<Test>::get(0, BOB), 3);
+            assert_eq!(
+                pallet_eterra_game_authority::Eliminations::<Test>::get(0, BOB),
+                3
+            );
         });
 }
 
@@ -373,10 +425,18 @@ fn processed_elimination_event_flips_only_after_successful_record() {
                 ),
                 Error::<Test>::PlayerNotInGame
             );
-            assert!(pallet_eterra_game_authority::ProcessedEliminationEvents::<Test>::get(&failed_event).is_none());
+            assert!(
+                pallet_eterra_game_authority::ProcessedEliminationEvents::<Test>::get(
+                    &failed_event
+                )
+                .is_none()
+            );
 
             let event_id = request_id("elim:round-elim-flip");
-            assert!(pallet_eterra_game_authority::ProcessedEliminationEvents::<Test>::get(&event_id).is_none());
+            assert!(
+                pallet_eterra_game_authority::ProcessedEliminationEvents::<Test>::get(&event_id)
+                    .is_none()
+            );
             assert_ok!(GamePallet::<Test>::record_eliminations_with_event_id(
                 RuntimeOrigin::signed(ALICE),
                 0,
@@ -385,8 +445,9 @@ fn processed_elimination_event_flips_only_after_successful_record() {
                 3,
             ));
 
-            let processed = pallet_eterra_game_authority::ProcessedEliminationEvents::<Test>::get(&event_id)
-                .expect("processed elimination exists");
+            let processed =
+                pallet_eterra_game_authority::ProcessedEliminationEvents::<Test>::get(&event_id)
+                    .expect("processed elimination exists");
             assert_eq!(processed.game_id, 0);
             assert_eq!(processed.player, BOB);
             assert_eq!(processed.delta, 3);

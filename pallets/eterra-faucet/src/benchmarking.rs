@@ -1,7 +1,7 @@
 #![cfg(feature = "runtime-benchmarks")]
 
 use super::*;
-use frame_benchmarking::{benchmarks, whitelisted_caller, account};
+use frame_benchmarking::{account, benchmarks, whitelisted_caller};
 use frame_support::traits::Currency;
 use frame_system::RawOrigin;
 use sp_runtime::traits::Saturating;

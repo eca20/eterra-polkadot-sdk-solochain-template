@@ -40,8 +40,7 @@ impl SubstrateCli for Cli {
         // named specs like `dev`, `local`, `testnet`, and `eterra_testnet`
         // always use the current runtime WASM, and arbitrary paths are
         // still treated as JSON files.
-        chain_spec::load_spec(id)
-            .map(|spec| Box::new(spec) as Box<dyn sc_service::ChainSpec>)
+        chain_spec::load_spec(id).map(|spec| Box::new(spec) as Box<dyn sc_service::ChainSpec>)
     }
 }
 

@@ -96,8 +96,9 @@ fn faucet_claim_from_zero_balance_is_valid_transaction() {
         // Sanity: this account truly has no funds in our genesis.
         assert_eq!(Balances::free_balance(&claimant), 0);
 
-        let call =
-            RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { dest: claimant.clone() });
+        let call = RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim {
+            dest: claimant.clone(),
+        });
         let xt = signed_extrinsic(call, &claimant_pair, 0, genesis_hash, genesis_hash);
 
         // This mirrors what the node does when a transaction is submitted to the pool.
@@ -158,7 +159,9 @@ fn non_faucet_call_from_zero_balance_is_rejected_for_payment() {
 
         assert_eq!(
             validity,
-            Err(TransactionValidityError::Invalid(InvalidTransaction::Payment)),
+            Err(TransactionValidityError::Invalid(
+                InvalidTransaction::Payment
+            )),
             "expected zero-balance account to be rejected for non-faucet call, got: {validity:?}"
         );
     });

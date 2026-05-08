@@ -49,7 +49,11 @@ fn join_queue_emits_event_and_persists() {
                 RuntimeEvent::Matchmaker(Event::<Test>::Joined { who }) if *who == 1
             )
         });
-        assert!(joined_seen, "expected Joined event for who=1, got: {:?}", evs);
+        assert!(
+            joined_seen,
+            "expected Joined event for who=1, got: {:?}",
+            evs
+        );
 
         // Also assert the state persisted: live size should be 1.
         assert_eq!(LiveSize::<Test>::get(), 1);

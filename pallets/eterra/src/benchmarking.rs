@@ -32,7 +32,12 @@ fn seed_cards<T: Config>(owner: &T::AccountId, _start_id: u32, count: u32) -> Ve
 
     let packs = cards::PlayerPacks::<T>::get(owner);
     let pack = packs.last().expect("pack exists");
-    let ids: Vec<u32> = pack.get_card_ids().iter().copied().take(count as usize).collect();
+    let ids: Vec<u32> = pack
+        .get_card_ids()
+        .iter()
+        .copied()
+        .take(count as usize)
+        .collect();
 
     for _ in 0..count {
         cards::Pallet::<T>::generate_slot(RawOrigin::Signed(owner.clone()).into())
