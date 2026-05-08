@@ -18,6 +18,7 @@ pub mod pallet {
     use frame_support::pallet_prelude::*;
     use frame_support::traits::StorageVersion;
     use frame_system::pallet_prelude::*;
+    use pallet_alpha_access::AccessControl;
 
     #[pallet::config]
     pub trait Config: frame_system::Config {
@@ -31,6 +32,8 @@ pub mod pallet {
         /// A runtime hook used to check whether a player has a preset hand.
         /// Implement this in the runtime by delegating to your game/cards pallet.
         type HandProvider: super::CurrentHandProvider<Self::AccountId>;
+        /// Canonical Alpha access gate for player-facing calls.
+        type AccessControl: AccessControl<Self::AccountId>;
         /// Hook to the game pallet that actually creates a game once two players are matched.
         type GameCreator: super::GameCreator<Self::AccountId>;
         /// Weight information for the pallet's extrinsics.
@@ -143,6 +146,7 @@ pub mod pallet {
         #[pallet::weight(T::WeightInfo::join_queue())]
         pub fn join_queue(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
             let cap = T::QueueCapacity::get();
             ensure!(cap > 1, Error::<T>::BadCapacity);
             ensure!(
@@ -187,6 +191,7 @@ pub mod pallet {
         #[pallet::weight(T::WeightInfo::leave_queue())]
         pub fn leave_queue(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
             ensure!(InQueue::<T>::contains_key(&who), Error::<T>::NotQueued);
 
             InQueue::<T>::remove(&who);
@@ -198,7 +203,8 @@ pub mod pallet {
         #[pallet::call_index(2)]
         #[pallet::weight(T::WeightInfo::process_queue())]
         pub fn process_queue(origin: OriginFor<T>) -> DispatchResult {
-            let _ = ensure_signed(origin)?;
+            let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
             let cap = T::QueueCapacity::get();
             ensure!(cap > 1, Error::<T>::BadCapacity);
             Self::deposit_event(Event::ProcessingStarted {

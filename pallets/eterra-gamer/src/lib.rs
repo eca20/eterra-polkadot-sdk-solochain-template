@@ -17,6 +17,7 @@ use frame_support::{
     traits::{Currency, ExistenceRequirement},
 };
 use frame_system::pallet_prelude::*;
+use pallet_alpha_access::AccessControl;
 use sp_std::vec::Vec;
 
 /// Minimal interface for other pallets to grant experience to an account.
@@ -40,6 +41,9 @@ pub mod pallet {
     pub trait Config: frame_system::Config {
         /// Runtime currency (native token).
         type Currency: Currency<Self::AccountId>;
+
+        /// Canonical Alpha access gate for player-facing calls.
+        type AccessControl: AccessControl<Self::AccountId>;
 
         /// Origin allowed to mint/grant XP (e.g., Root or a custom EnsureOrigin).
         type ExpIssuerOrigin: EnsureOrigin<Self::RuntimeOrigin>;
@@ -223,6 +227,7 @@ pub mod pallet {
             tag: BoundedVec<u8, T::MaxTagLen>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
             ensure!(tag.len() >= 1, Error::<T>::TagTooShort);
             let tag_raw = tag.to_vec();
 
@@ -247,6 +252,7 @@ pub mod pallet {
             cid: BoundedVec<u8, T::MaxAvatarCidLen>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
             ensure!(
                 Self::validate_ascii_cid(&cid),
                 Error::<T>::AvatarCidInvalidAscii
@@ -284,6 +290,7 @@ pub mod pallet {
         #[pallet::weight(T::WeightInfo::redeem_levels())]
         pub fn redeem_levels(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
             let current = Level::<T>::get(&who);
             ensure!(current <= 99, Error::<T>::InvalidLevelRequest);
             ensure!(current < 99, Error::<T>::AlreadyMaxLevel);

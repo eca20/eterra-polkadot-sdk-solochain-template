@@ -67,6 +67,8 @@ pallet-eterra-simple-matchmaker = { workspace = true }
 pallet-eterra-faucet = { workspace = true }
 pallet-eterra-monte-carlo-ai = { workspace = true }
 pallet-eterra-game-authority = { workspace = true }
+pallet-eterra-card-escrow = { workspace = true }
+pallet-alpha-access = { workspace = true }
 eterra-card-ai-adapter = { path = "../crates/eterra-card-ai-adapter", default-features = false }
 
 
@@ -108,8 +110,11 @@ std = [
     "pallet-eterra-faucet/std",
    "pallet-eterra-simple-matchmaker/std",
   "pallet-eterra-game-authority/std",
+  "pallet-eterra-card-escrow/std",
+  "pallet-alpha-access/std",
   "pallet-eterra-media/std",
   "pallet-eterra-seasons/std",
+  "pallet-eterra-tcg/std",
   "pallet-eterra-monte-carlo-ai/std",
   "pallet-nfts/std",
 
@@ -153,6 +158,8 @@ runtime-benchmarks = [
 	"pallet-eterra-monte-carlo-ai/runtime-benchmarks",
 	"pallet-eterra-tcg/runtime-benchmarks",
 	"pallet-eterra-game-authority/runtime-benchmarks",
+	"pallet-eterra-card-escrow/runtime-benchmarks",
+	"pallet-alpha-access/runtime-benchmarks",
 	"pallet-nfts/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",
 ]
@@ -173,6 +180,7 @@ try-runtime = [
 	"pallet-transaction-payment/try-runtime",
 	"pallet-treasury/try-runtime",
 	"pallet-nfts/try-runtime",
+	"pallet-alpha-access/try-runtime",
 	"sp-runtime/try-runtime",
 ]
 
