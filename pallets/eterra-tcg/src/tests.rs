@@ -1,10 +1,12 @@
 use crate::pallet::Config as EterraSlotsConfig;
 use crate::{
-    mock::*, ActiveCard, CardArtworkCollectionId, CardCapacityBonus, CardPrices, Cards,
-    CardsByOwner, Error, Event, ListedByOwner, NextCardId, NextStarterGrantId, NexusAccountStates,
-    NexusOverflowCards, NexusOverflowSubjectCounts, NexusStorageLocation, NexusSubjectCopyCounts,
-    PackCardInProgress, PackInProgress, PlayerPacks, SeasonCollectionIds, SeasonCollectionStatus,
-    SeasonCollections, StarterGrants, StarterPath,
+    mock::*, ActiveCard, ApexSide, CardArtworkCollectionId, CardCapacityBonus, CardPrices, Cards,
+    CardsByOwner, CollectionCard, Element, ElementProfile, Error, Event, GeneProfile,
+    ListedByOwner, MatchMode, MatchStatus, NextCardId, NextNexusMatchId, NextStarterGrantId,
+    NexusAccountStates, NexusCardKind, NexusCardOrigin, NexusCollectionCards, NexusMatchBoards,
+    NexusMatches, NexusOverflowCards, NexusOverflowSubjectCounts, NexusStorageLocation,
+    NexusSubjectCopyCounts, NexusTeams, PackCardInProgress, PackInProgress, PlayerPacks, RankValue,
+    SeasonCollectionIds, SeasonCollectionStatus, SeasonCollections, StarterGrants, StarterPath,
 };
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok, BoundedBTreeSet, BoundedVec};
@@ -81,6 +83,115 @@ fn seed_owned_card_index(owner: u64, count: u32, id_offset: u32) {
         assert!(ids.try_insert(id).is_ok());
     }
     CardsByOwner::<Test>::insert(owner, ids);
+}
+
+fn ranks(top: RankValue, right: RankValue, bottom: RankValue, left: RankValue) -> [RankValue; 4] {
+    [top, right, bottom, left]
+}
+
+fn all_number(value: u8) -> [RankValue; 4] {
+    [RankValue::Number(value); 4]
+}
+
+fn profile(main: Element, weakness: Option<Element>) -> ElementProfile {
+    ElementProfile {
+        main,
+        minor: None,
+        resistance: None,
+        weakness,
+    }
+}
+
+fn seed_nexus_card(
+    owner: u64,
+    card_id: u32,
+    subject_id: u32,
+    base_ranks: [RankValue; 4],
+    card_power: u16,
+    location: NexusStorageLocation,
+    element_profile: ElementProfile,
+) {
+    NexusCollectionCards::<Test>::insert(
+        card_id,
+        CollectionCard {
+            owner,
+            subject_id,
+            kind: NexusCardKind::Echo,
+            origin: NexusCardOrigin::Claim,
+            base_ranks,
+            apex_side: base_ranks
+                .iter()
+                .position(|rank| *rank == RankValue::Apex)
+                .map(|index| match index {
+                    0 => ApexSide::Top,
+                    1 => ApexSide::Right,
+                    2 => ApexSide::Bottom,
+                    _ => ApexSide::Left,
+                }),
+            genes: GeneProfile::default(),
+            element_profile,
+            card_power,
+            location,
+            account_bound: false,
+            acquired_at: System::block_number(),
+            config_version: 1,
+        },
+    );
+}
+
+fn seed_nexus_team(owner: u64, first_card_id: u32) -> Vec<u32> {
+    let mut ids = Vec::new();
+    for offset in 0..5u32 {
+        let card_id = first_card_id + offset;
+        seed_nexus_card(
+            owner,
+            card_id,
+            card_id,
+            all_number(1),
+            1,
+            NexusStorageLocation::Collection,
+            profile(Element::Fire, Some(Element::Water)),
+        );
+        ids.push(card_id);
+    }
+    ids
+}
+
+fn save_seeded_team(owner: u64, team_id: u32, card_ids: Vec<u32>) {
+    assert_ok!(EterraSlots::save_nexus_team(
+        RuntimeOrigin::signed(owner),
+        team_id,
+        card_ids
+    ));
+}
+
+fn start_seeded_match(
+    player: u64,
+    opponent: u64,
+    board_id: u32,
+    mode: MatchMode,
+) -> (u32, u64, u64) {
+    assert_ok!(EterraSlots::start_nexus_match(
+        RuntimeOrigin::signed(player),
+        opponent,
+        mode,
+        board_id,
+        1,
+        1
+    ));
+    let match_id = NextNexusMatchId::<Test>::get() - 1;
+    let state = NexusMatches::<Test>::get(match_id).expect("match state exists");
+    let first = state.first_player.expect("first player set");
+    let second = if first == player { opponent } else { player };
+    (match_id, first, second)
+}
+
+fn card_for(player: u64, player_one: u64, first_base: u32, second_base: u32, offset: u32) -> u32 {
+    if player == player_one {
+        first_base + offset
+    } else {
+        second_base + offset
+    }
 }
 
 #[test]
@@ -215,6 +326,519 @@ fn nexus_team_validation_requires_exactly_five_cards() {
         assert_noop!(
             EterraSlots::validate_nexus_team_size(6),
             Error::<Test>::NexusTeamSizeInvalid
+        );
+    });
+}
+
+#[test]
+fn save_nexus_team_validates_ownership_duplicates_and_overflow() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let cards = seed_nexus_team(player, 100);
+
+        assert_ok!(EterraSlots::save_nexus_team(
+            RuntimeOrigin::signed(player),
+            1,
+            cards.clone()
+        ));
+        let team = NexusTeams::<Test>::get(player, 1).expect("team should be stored");
+        assert_eq!(team.card_ids.to_vec(), cards);
+        assert_eq!(team.team_power, 5);
+
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::TeamSaved {
+                        account_id,
+                        team_id,
+                        team_power,
+                        ..
+                    }) if *account_id == player && *team_id == 1 && *team_power == 5
+                )
+            },
+            "TeamSaved",
+        );
+
+        assert_noop!(
+            EterraSlots::save_nexus_team(
+                RuntimeOrigin::signed(player),
+                2,
+                vec![100, 101, 102, 103]
+            ),
+            Error::<Test>::NexusTeamSizeInvalid
+        );
+        assert_noop!(
+            EterraSlots::save_nexus_team(
+                RuntimeOrigin::signed(player),
+                2,
+                vec![100, 100, 101, 102, 103]
+            ),
+            Error::<Test>::NexusTeamDuplicateCard
+        );
+
+        seed_nexus_card(
+            3,
+            200,
+            200,
+            all_number(1),
+            1,
+            NexusStorageLocation::Collection,
+            profile(Element::Earth, None),
+        );
+        assert_noop!(
+            EterraSlots::save_nexus_team(
+                RuntimeOrigin::signed(player),
+                2,
+                vec![100, 101, 102, 103, 200]
+            ),
+            Error::<Test>::NotCardOwner
+        );
+
+        seed_nexus_card(
+            player,
+            201,
+            201,
+            all_number(1),
+            1,
+            NexusStorageLocation::Overflow,
+            profile(Element::Earth, None),
+        );
+        assert_noop!(
+            EterraSlots::save_nexus_team(
+                RuntimeOrigin::signed(player),
+                2,
+                vec![100, 101, 102, 103, 201]
+            ),
+            Error::<Test>::NexusCardNotPlayable
+        );
+    });
+}
+
+#[test]
+fn start_nexus_match_stores_board_hands_and_events() {
+    new_test_ext().execute_with(|| {
+        let p1_cards = seed_nexus_team(2, 100);
+        let p2_cards = seed_nexus_team(3, 200);
+        save_seeded_team(2, 1, p1_cards.clone());
+        save_seeded_team(3, 1, p2_cards.clone());
+
+        assert_ok!(EterraSlots::start_nexus_match(
+            RuntimeOrigin::signed(2),
+            3,
+            MatchMode::Quick,
+            2,
+            1,
+            1
+        ));
+
+        let state = NexusMatches::<Test>::get(0).expect("match state should exist");
+        assert_eq!(state.match_id, 0);
+        assert_eq!(state.mode, MatchMode::Quick);
+        assert_eq!(state.board_id, 2);
+        assert_eq!(state.status, MatchStatus::Active);
+        assert_eq!(state.turn_index, 0);
+        assert!(state.first_player == Some(2) || state.first_player == Some(3));
+        assert_eq!(state.players.to_vec(), vec![2, 3]);
+
+        let board = NexusMatchBoards::<Test>::get(0).expect("board should exist");
+        assert_eq!(board.locked_cells, (1u16 << 3) | (1u16 << 12));
+        assert_eq!(board.mana_wells, (1u16 << 5) | (1u16 << 10));
+        assert_eq!(board.cells.len(), 16);
+
+        assert_eq!(EterraSlots::nexus_match_hand(0, 2).to_vec(), p1_cards);
+        assert_eq!(EterraSlots::nexus_match_hand(0, 3).to_vec(), p2_cards);
+
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::MatchStarted {
+                        match_id,
+                        mode,
+                        board_id,
+                        ..
+                    }) if *match_id == 0 && *mode == MatchMode::Quick && *board_id == 2
+                )
+            },
+            "MatchStarted",
+        );
+    });
+}
+
+#[test]
+fn play_nexus_match_card_rejects_illegal_moves() {
+    new_test_ext().execute_with(|| {
+        let p1_cards = seed_nexus_team(2, 100);
+        let p2_cards = seed_nexus_team(3, 200);
+        save_seeded_team(2, 1, p1_cards);
+        save_seeded_team(3, 1, p2_cards);
+        let (match_id, first, second) = start_seeded_match(2, 3, 2, MatchMode::Quick);
+        let first_card = card_for(first, 2, 100, 200, 0);
+        let second_card = card_for(second, 2, 100, 200, 0);
+
+        assert_noop!(
+            EterraSlots::play_nexus_match_card(
+                RuntimeOrigin::signed(second),
+                match_id,
+                second_card,
+                4,
+                None
+            ),
+            Error::<Test>::NexusNotPlayerTurn
+        );
+        assert_noop!(
+            EterraSlots::play_nexus_match_card(
+                RuntimeOrigin::signed(first),
+                match_id,
+                first_card,
+                3,
+                None
+            ),
+            Error::<Test>::NexusCellLocked
+        );
+        assert_noop!(
+            EterraSlots::play_nexus_match_card(
+                RuntimeOrigin::signed(first),
+                match_id,
+                first_card,
+                16,
+                None
+            ),
+            Error::<Test>::NexusCellOutOfBounds
+        );
+
+        assert_ok!(EterraSlots::play_nexus_match_card(
+            RuntimeOrigin::signed(first),
+            match_id,
+            first_card,
+            4,
+            None
+        ));
+        assert_noop!(
+            EterraSlots::play_nexus_match_card(
+                RuntimeOrigin::signed(second),
+                match_id,
+                second_card,
+                4,
+                None
+            ),
+            Error::<Test>::NexusCellOccupied
+        );
+        assert_noop!(
+            EterraSlots::play_nexus_match_card(
+                RuntimeOrigin::signed(second),
+                match_id,
+                first_card,
+                5,
+                None
+            ),
+            Error::<Test>::NexusCardNotInHand
+        );
+    });
+}
+
+#[test]
+fn apex_capture_flips_adjacent_cards_without_chains() {
+    new_test_ext().execute_with(|| {
+        let first_base = 100;
+        let second_base = 200;
+        seed_nexus_team(2, first_base);
+        seed_nexus_team(3, second_base);
+        save_seeded_team(2, 1, (first_base..first_base + 5).collect());
+        save_seeded_team(3, 1, (second_base..second_base + 5).collect());
+        let (match_id, first, second) = start_seeded_match(2, 3, 0, MatchMode::Quick);
+
+        let first_a = card_for(first, 2, first_base, second_base, 0);
+        let first_c = card_for(first, 2, first_base, second_base, 1);
+        let second_filler = card_for(second, 2, first_base, second_base, 0);
+        let second_attacker = card_for(second, 2, first_base, second_base, 1);
+
+        seed_nexus_card(
+            first,
+            first_a,
+            first_a,
+            ranks(
+                RankValue::Number(1),
+                RankValue::Number(9),
+                RankValue::Number(1),
+                RankValue::Number(1),
+            ),
+            1,
+            NexusStorageLocation::Collection,
+            profile(Element::Fire, Some(Element::Water)),
+        );
+        seed_nexus_card(
+            second,
+            second_attacker,
+            second_attacker,
+            ranks(
+                RankValue::Number(1),
+                RankValue::Apex,
+                RankValue::Number(1),
+                RankValue::Number(1),
+            ),
+            1,
+            NexusStorageLocation::Collection,
+            profile(Element::Earth, None),
+        );
+
+        assert_ok!(EterraSlots::play_nexus_match_card(
+            RuntimeOrigin::signed(first),
+            match_id,
+            first_a,
+            5,
+            None
+        ));
+        assert_ok!(EterraSlots::play_nexus_match_card(
+            RuntimeOrigin::signed(second),
+            match_id,
+            second_filler,
+            15,
+            None
+        ));
+        assert_ok!(EterraSlots::play_nexus_match_card(
+            RuntimeOrigin::signed(first),
+            match_id,
+            first_c,
+            6,
+            None
+        ));
+        assert_ok!(EterraSlots::play_nexus_match_card(
+            RuntimeOrigin::signed(second),
+            match_id,
+            second_attacker,
+            4,
+            None
+        ));
+
+        let board = NexusMatchBoards::<Test>::get(match_id).expect("board exists");
+        assert_eq!(board.cells[5].card.as_ref().unwrap().controller, second);
+        assert_eq!(
+            board.cells[6].card.as_ref().unwrap().controller,
+            first,
+            "direct capture must not chain into the next adjacent card"
+        );
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::CardCaptured {
+                        match_id: seen_match_id,
+                        attacker_card_id,
+                        captured_card_id,
+                        side,
+                        ..
+                    }) if *seen_match_id == match_id
+                        && *attacker_card_id == second_attacker
+                        && *captured_card_id == first_a
+                        && *side == ApexSide::Right
+                )
+            },
+            "CardCaptured",
+        );
+    });
+}
+
+#[test]
+fn apex_ties_and_equal_numeric_ranks_do_not_capture() {
+    new_test_ext().execute_with(|| {
+        let first_base = 300;
+        let second_base = 400;
+        seed_nexus_team(2, first_base);
+        seed_nexus_team(3, second_base);
+        save_seeded_team(2, 1, (first_base..first_base + 5).collect());
+        save_seeded_team(3, 1, (second_base..second_base + 5).collect());
+        let (match_id, first, second) = start_seeded_match(2, 3, 0, MatchMode::Quick);
+
+        let defender = card_for(first, 2, first_base, second_base, 0);
+        let attacker = card_for(second, 2, first_base, second_base, 0);
+        seed_nexus_card(
+            first,
+            defender,
+            defender,
+            ranks(
+                RankValue::Number(1),
+                RankValue::Number(1),
+                RankValue::Number(1),
+                RankValue::Apex,
+            ),
+            1,
+            NexusStorageLocation::Collection,
+            profile(Element::Fire, None),
+        );
+        seed_nexus_card(
+            second,
+            attacker,
+            attacker,
+            ranks(
+                RankValue::Number(1),
+                RankValue::Apex,
+                RankValue::Number(1),
+                RankValue::Number(1),
+            ),
+            1,
+            NexusStorageLocation::Collection,
+            profile(Element::Earth, None),
+        );
+
+        assert_ok!(EterraSlots::play_nexus_match_card(
+            RuntimeOrigin::signed(first),
+            match_id,
+            defender,
+            5,
+            None
+        ));
+        assert_ok!(EterraSlots::play_nexus_match_card(
+            RuntimeOrigin::signed(second),
+            match_id,
+            attacker,
+            4,
+            None
+        ));
+
+        let board = NexusMatchBoards::<Test>::get(match_id).expect("board exists");
+        assert_eq!(board.cells[5].card.as_ref().unwrap().controller, first);
+    });
+}
+
+#[test]
+fn rune_cell_triggers_before_capture_and_respects_mana_well_rules() {
+    new_test_ext().execute_with(|| {
+        let first_base = 500;
+        let second_base = 600;
+        seed_nexus_team(2, first_base);
+        seed_nexus_team(3, second_base);
+        save_seeded_team(2, 1, (first_base..first_base + 5).collect());
+        save_seeded_team(3, 1, (second_base..second_base + 5).collect());
+        let (match_id, first, second) = start_seeded_match(2, 3, 2, MatchMode::Quick);
+
+        let caster = card_for(first, 2, first_base, second_base, 0);
+        let trigger_card = card_for(second, 2, first_base, second_base, 0);
+        seed_nexus_card(
+            first,
+            caster,
+            caster,
+            ranks(
+                RankValue::Number(1),
+                RankValue::Number(5),
+                RankValue::Number(1),
+                RankValue::Number(1),
+            ),
+            1,
+            NexusStorageLocation::Collection,
+            profile(Element::Earth, None),
+        );
+        seed_nexus_card(
+            second,
+            trigger_card,
+            trigger_card,
+            ranks(
+                RankValue::Number(1),
+                RankValue::Number(1),
+                RankValue::Number(1),
+                RankValue::Number(5),
+            ),
+            1,
+            NexusStorageLocation::Collection,
+            profile(Element::Fire, Some(Element::Water)),
+        );
+
+        assert_ok!(EterraSlots::play_nexus_match_card(
+            RuntimeOrigin::signed(first),
+            match_id,
+            caster,
+            4,
+            Some((5, Element::Fire))
+        ));
+        assert_ok!(EterraSlots::play_nexus_match_card(
+            RuntimeOrigin::signed(second),
+            match_id,
+            trigger_card,
+            5,
+            None
+        ));
+
+        let board = NexusMatchBoards::<Test>::get(match_id).expect("board exists");
+        assert!(board.rune_cells.is_empty());
+        let triggered = board.cells[5].card.as_ref().expect("trigger card placed");
+        assert_eq!(triggered.ranks[3], RankValue::Number(6));
+        assert_eq!(
+            board.cells[4].card.as_ref().unwrap().controller,
+            second,
+            "Rune bonus must apply before directional capture"
+        );
+
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::RuneTriggered {
+                        match_id: seen_match_id,
+                        card_id,
+                        well_cell,
+                        element,
+                        effect,
+                        ..
+                    }) if *seen_match_id == match_id
+                        && *card_id == trigger_card
+                        && *well_cell == 5
+                        && *element == Element::Fire
+                        && *effect == 1
+                )
+            },
+            "RuneTriggered",
+        );
+    });
+}
+
+#[test]
+fn nexus_match_ends_after_both_five_card_hands_are_played() {
+    new_test_ext().execute_with(|| {
+        let first_base = 700;
+        let second_base = 800;
+        seed_nexus_team(2, first_base);
+        seed_nexus_team(3, second_base);
+        save_seeded_team(2, 1, (first_base..first_base + 5).collect());
+        save_seeded_team(3, 1, (second_base..second_base + 5).collect());
+        let (match_id, first, second) = start_seeded_match(2, 3, 0, MatchMode::Quick);
+
+        let cells = [0u8, 15, 1, 14, 2, 13, 3, 12, 4, 11];
+        for turn in 0..10u32 {
+            let player = if turn % 2 == 0 { first } else { second };
+            let offset = turn / 2;
+            let card_id = card_for(player, 2, first_base, second_base, offset);
+            assert_ok!(EterraSlots::play_nexus_match_card(
+                RuntimeOrigin::signed(player),
+                match_id,
+                card_id,
+                cells[turn as usize],
+                None
+            ));
+        }
+
+        let state = NexusMatches::<Test>::get(match_id).expect("match exists");
+        assert_eq!(state.status, MatchStatus::Complete);
+        assert_eq!(state.turn_index, 10);
+        assert_eq!(state.winner, None);
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::MatchEnded {
+                        match_id: seen_match_id,
+                        winner,
+                        score,
+                        duration,
+                        reward_status
+                    }) if *seen_match_id == match_id
+                        && winner.is_none()
+                        && *score == [5, 5]
+                        && *duration == 10
+                        && !*reward_status
+                )
+            },
+            "MatchEnded",
         );
     });
 }

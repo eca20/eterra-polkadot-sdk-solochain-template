@@ -38,6 +38,9 @@ pub type TrialId = u32;
 pub type BoardId = u32;
 pub type NexusConfigVersion = u32;
 
+const NEXUS_BOARD_CELL_COUNT: u8 = 16;
+const NEXUS_RANKED_TEAM_POWER_LIMIT: u16 = 25;
+
 /// Provides a runtime-defined view of whether a given `card_id` is currently included
 /// in `owner`'s configured "current hand".
 ///
@@ -403,6 +406,43 @@ pub struct ResourceBundle {
     pub make_up_stamps: u32,
 }
 
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusBoardLayout {
+    pub board_id: BoardId,
+    pub locked_cells: u16,
+    pub mana_wells: u16,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusBoardCard<AccountId> {
+    pub card_id: u32,
+    pub original_owner: AccountId,
+    pub controller: AccountId,
+    pub ranks: [RankValue; 4],
+    pub element_profile: ElementProfile,
+}
+
+#[derive(Clone, Encode, Decode, Default, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusBoardCell<AccountId> {
+    pub card: Option<NexusBoardCard<AccountId>>,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusRuneCell {
+    pub cell: u8,
+    pub caster_card_id: u32,
+    pub element: Element,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusMatchBoard<BCells, BRunes> {
+    pub board_id: BoardId,
+    pub locked_cells: u16,
+    pub mana_wells: u16,
+    pub cells: BCells,
+    pub rune_cells: BRunes,
+}
+
 #[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
 pub struct NexusAccountState<BlockNumber> {
     pub starter_claimed: bool,
@@ -574,6 +614,9 @@ pub mod pallet {
     pub type BoundedNexusReason<T> = BoundedVec<u8, <T as Config>::MaxNexusReasonLen>;
     type BoundedNexusTeamCardIds<T> = BoundedVec<u32, <T as Config>::NexusTeamSize>;
     type BoundedNexusOverflowCards<T> = BoundedVec<u32, <T as Config>::NexusOverflowTotalCapacity>;
+    type BoundedNexusBoardCells<T> =
+        BoundedVec<NexusBoardCell<<T as frame_system::Config>::AccountId>, ConstU32<16>>;
+    type BoundedNexusRuneCells = BoundedVec<NexusRuneCell, ConstU32<16>>;
     type BoundedNexusSpellSlots<T> =
         BoundedVec<SpellSlotEntry, <T as Config>::MaxNexusSpellSlotsPerCard>;
     type BoundedNexusMatchPlayers<T> =
@@ -602,6 +645,7 @@ pub mod pallet {
         GearItem<<T as frame_system::Config>::AccountId, BoundedNexusSpellSlots<T>>;
     type SpellEntryOf<T> = SpellEntry<<T as frame_system::Config>::AccountId>;
     type TeamOf<T> = Team<<T as frame_system::Config>::AccountId, BoundedNexusTeamCardIds<T>>;
+    type NexusMatchBoardOf<T> = NexusMatchBoard<BoundedNexusBoardCells<T>, BoundedNexusRuneCells>;
     type MatchStateOf<T> =
         MatchState<<T as frame_system::Config>::AccountId, BoundedNexusMatchPlayers<T>>;
     type TrialStateOf<T> = TrialState<<T as frame_system::Config>::AccountId>;
@@ -1137,6 +1181,43 @@ pub mod pallet {
     pub type NexusMatches<T: Config> =
         StorageMap<_, Blake2_128Concat, MatchId, MatchStateOf<T>, OptionQuery>;
 
+    /// Next Nexus match id.
+    #[pallet::storage]
+    #[pallet::getter(fn next_nexus_match_id)]
+    pub type NextNexusMatchId<T: Config> = StorageValue<_, MatchId, ValueQuery>;
+
+    /// Runtime-authoritative 4x4 board state for each Nexus match.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_match_board)]
+    pub type NexusMatchBoards<T: Config> =
+        StorageMap<_, Blake2_128Concat, MatchId, NexusMatchBoardOf<T>, OptionQuery>;
+
+    /// Starting five-card hand for each Nexus match player.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_match_hand)]
+    pub type NexusMatchHands<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        MatchId,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedNexusTeamCardIds<T>,
+        ValueQuery,
+    >;
+
+    /// Cards already played by each Nexus match player.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_match_played_cards)]
+    pub type NexusMatchPlayedCards<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        MatchId,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedNexusTeamCardIds<T>,
+        ValueQuery,
+    >;
+
     /// Nexus trial state by account and trial id.
     #[pallet::storage]
     #[pallet::getter(fn nexus_trial)]
@@ -1599,6 +1680,52 @@ pub mod pallet {
         NexusOverflowCapacityExceeded,
         /// Nexus Overflow has reached its per-subject capacity.
         NexusOverflowSubjectCapacityExceeded,
+        /// Nexus card record does not exist.
+        UnknownNexusCard,
+        /// Nexus card cannot be played from its current storage location.
+        NexusCardNotPlayable,
+        /// Nexus team contains the same card more than once.
+        NexusTeamDuplicateCard,
+        /// Nexus team does not exist for the requested owner.
+        NexusTeamMissing,
+        /// Nexus team stored state no longer matches its current card records.
+        NexusTeamStale,
+        /// Nexus team power exceeds the mode limit.
+        NexusTeamPowerLimitExceeded,
+        /// Nexus team power could not fit in the runtime team power type.
+        NexusTeamPowerOverflow,
+        /// Nexus board id is not one of the curated Season 1 layouts.
+        UnknownNexusBoard,
+        /// Nexus board layout violates locked-cell or Mana Well constraints.
+        NexusBoardLayoutInvalid,
+        /// No more Nexus match ids are available.
+        NexusMatchIdExhausted,
+        /// Nexus match does not exist.
+        NexusMatchMissing,
+        /// Nexus match board does not exist.
+        NexusMatchBoardMissing,
+        /// Nexus match is not active.
+        NexusMatchNotActive,
+        /// Account is not one of the match players.
+        NexusNotMatchPlayer,
+        /// It is another player's turn.
+        NexusNotPlayerTurn,
+        /// Nexus board cell is outside the 4x4 board.
+        NexusCellOutOfBounds,
+        /// Nexus board cell is locked.
+        NexusCellLocked,
+        /// Nexus board cell is already occupied.
+        NexusCellOccupied,
+        /// Nexus card is not in the player's match hand.
+        NexusCardNotInHand,
+        /// Nexus card has already been played in this match.
+        NexusCardAlreadyPlayed,
+        /// Nexus Rune cast target is invalid.
+        NexusInvalidRuneCast,
+        /// Nexus turn counter overflowed.
+        NexusMatchTurnOverflow,
+        /// Nexus match requires two different players.
+        NexusInvalidMatchPlayers,
         /// No more card capacity can be purchased because the hard storage ceiling was reached.
         CardCapacityMaxReached,
         /// The caller's owned-card limit is reached.
@@ -1816,6 +1943,251 @@ pub mod pallet {
                 grant_id,
                 config_version: config.config_version,
             });
+            Ok(())
+        }
+
+        /// Save a Nexus Season 1 five-card team for the caller.
+        #[pallet::call_index(27)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn save_nexus_team(
+            origin: OriginFor<T>,
+            team_id: TeamId,
+            card_ids: Vec<u32>,
+        ) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+            Self::validate_nexus_team_size(card_ids.len() as u32)?;
+
+            let (bounded_card_ids, team_power) =
+                Self::validate_nexus_team_cards(&player, card_ids)?;
+            let config = Self::current_nexus_config();
+
+            NexusTeams::<T>::insert(
+                &player,
+                team_id,
+                Team {
+                    owner: player.clone(),
+                    team_id,
+                    card_ids: bounded_card_ids.clone(),
+                    team_power,
+                    config_version: config.config_version,
+                },
+            );
+
+            Self::deposit_event(Event::TeamSaved {
+                account_id: player,
+                team_id,
+                card_ids: bounded_card_ids,
+                team_power,
+                config_version: config.config_version,
+            });
+            Ok(())
+        }
+
+        /// Start a deterministic Nexus Season 1 match between two saved teams.
+        #[pallet::call_index(28)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn start_nexus_match(
+            origin: OriginFor<T>,
+            opponent: T::AccountId,
+            mode: MatchMode,
+            board_id: BoardId,
+            team_id: TeamId,
+            opponent_team_id: TeamId,
+        ) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+            T::AccessControl::ensure_whitelisted(&opponent)?;
+            ensure!(player != opponent, Error::<T>::NexusInvalidMatchPlayers);
+
+            let player_team = Self::load_valid_nexus_team(&player, team_id, mode)?;
+            let opponent_team = Self::load_valid_nexus_team(&opponent, opponent_team_id, mode)?;
+            let layout = Self::nexus_board_layout(board_id)?;
+
+            let match_id = NextNexusMatchId::<T>::get();
+            let next_match_id = match_id
+                .checked_add(1)
+                .ok_or(Error::<T>::NexusMatchIdExhausted)?;
+            let players: BoundedNexusMatchPlayers<T> = vec![player.clone(), opponent.clone()]
+                .try_into()
+                .map_err(|_| Error::<T>::NexusInvalidMatchPlayers)?;
+            let first_player = Self::choose_nexus_first_player(match_id, &players)?;
+            let config = Self::current_nexus_config();
+
+            NexusMatches::<T>::insert(
+                match_id,
+                MatchState {
+                    match_id,
+                    mode,
+                    board_id,
+                    players: players.clone(),
+                    first_player: Some(first_player.clone()),
+                    status: MatchStatus::Active,
+                    turn_index: 0,
+                    winner: None,
+                    config_version: config.config_version,
+                },
+            );
+            NexusMatchBoards::<T>::insert(match_id, Self::empty_nexus_match_board(layout)?);
+            NexusMatchHands::<T>::insert(match_id, &player, player_team.card_ids.clone());
+            NexusMatchHands::<T>::insert(match_id, &opponent, opponent_team.card_ids.clone());
+            NexusMatchPlayedCards::<T>::remove(match_id, &player);
+            NexusMatchPlayedCards::<T>::remove(match_id, &opponent);
+            NextNexusMatchId::<T>::put(next_match_id);
+
+            Self::deposit_event(Event::TeamValidated {
+                account_id: player.clone(),
+                team_id,
+                mode,
+                team_power: player_team.team_power,
+                valid: true,
+            });
+            Self::deposit_event(Event::TeamValidated {
+                account_id: opponent.clone(),
+                team_id: opponent_team_id,
+                mode,
+                team_power: opponent_team.team_power,
+                valid: true,
+            });
+            Self::deposit_event(Event::MatchStarted {
+                match_id,
+                mode,
+                board_id,
+                players,
+                first_player,
+                config_version: config.config_version,
+            });
+            Ok(())
+        }
+
+        /// Place one card in a Nexus match and resolve Rune and direct capture validation.
+        #[pallet::call_index(29)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn play_nexus_match_card(
+            origin: OriginFor<T>,
+            match_id: MatchId,
+            card_id: u32,
+            cell: u8,
+            cast_rune: Option<(u8, Element)>,
+        ) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+
+            let mut match_state =
+                NexusMatches::<T>::get(match_id).ok_or(Error::<T>::NexusMatchMissing)?;
+            ensure!(
+                match_state.status == MatchStatus::Active,
+                Error::<T>::NexusMatchNotActive
+            );
+            ensure!(
+                match_state.players.iter().any(|account| account == &player),
+                Error::<T>::NexusNotMatchPlayer
+            );
+            let current_player = Self::current_nexus_match_player(&match_state)?;
+            ensure!(current_player == player, Error::<T>::NexusNotPlayerTurn);
+
+            let hand = NexusMatchHands::<T>::get(match_id, &player);
+            ensure!(
+                hand.iter().any(|id| *id == card_id),
+                Error::<T>::NexusCardNotInHand
+            );
+            let mut played = NexusMatchPlayedCards::<T>::get(match_id, &player);
+            ensure!(
+                !played.iter().any(|id| *id == card_id),
+                Error::<T>::NexusCardAlreadyPlayed
+            );
+
+            let collection_card = Self::ensure_playable_nexus_card(&player, card_id)?;
+            let mut board =
+                NexusMatchBoards::<T>::get(match_id).ok_or(Error::<T>::NexusMatchBoardMissing)?;
+            Self::ensure_nexus_cell_can_receive_card(&board, cell)?;
+
+            let (ranks, triggered_rune) = Self::trigger_nexus_rune_if_present(
+                &mut board,
+                cell,
+                collection_card.base_ranks,
+                collection_card.element_profile,
+            );
+            let board_card = NexusBoardCard {
+                card_id,
+                original_owner: player.clone(),
+                controller: player.clone(),
+                ranks,
+                element_profile: collection_card.element_profile,
+            };
+            board.cells[cell as usize].card = Some(board_card);
+
+            Self::deposit_event(Event::CardPlaced {
+                match_id,
+                turn_index: match_state.turn_index,
+                account_id: player.clone(),
+                card_id,
+                cell,
+            });
+
+            if let Some((rune, effect)) = triggered_rune {
+                Self::deposit_event(Event::RuneTriggered {
+                    match_id,
+                    turn_index: match_state.turn_index,
+                    card_id,
+                    well_cell: cell,
+                    element: rune.element,
+                    effect,
+                });
+            }
+
+            let captures = Self::resolve_nexus_direct_captures(&mut board, cell, &player)?;
+            for (captured_card_id, side) in captures {
+                Self::deposit_event(Event::CardCaptured {
+                    match_id,
+                    turn_index: match_state.turn_index,
+                    attacker_card_id: card_id,
+                    captured_card_id,
+                    side,
+                });
+            }
+
+            if let Some((well_cell, element)) = cast_rune {
+                Self::create_nexus_rune(&mut board, cell, card_id, well_cell, element)?;
+                Self::deposit_event(Event::RuneCreated {
+                    match_id,
+                    turn_index: match_state.turn_index,
+                    caster_card_id: card_id,
+                    well_cell,
+                    element,
+                });
+            }
+
+            played
+                .try_push(card_id)
+                .map_err(|_| Error::<T>::NexusCardAlreadyPlayed)?;
+            NexusMatchPlayedCards::<T>::insert(match_id, &player, played);
+
+            let next_turn = match_state
+                .turn_index
+                .checked_add(1)
+                .ok_or(Error::<T>::NexusMatchTurnOverflow)?;
+            match_state.turn_index = next_turn;
+
+            if Self::nexus_match_should_end(match_id, &match_state, &board) {
+                let score = Self::score_nexus_match(&match_state, &board);
+                let winner = Self::nexus_match_winner(&match_state, score);
+                match_state.status = MatchStatus::Complete;
+                match_state.winner = winner.clone();
+                Self::deposit_event(Event::MatchEnded {
+                    match_id,
+                    winner,
+                    score,
+                    duration: u32::from(next_turn),
+                    reward_status: false,
+                });
+            }
+
+            NexusMatchBoards::<T>::insert(match_id, board);
+            NexusMatches::<T>::insert(match_id, match_state);
             Ok(())
         }
 
@@ -2798,6 +3170,473 @@ pub mod pallet {
             }
 
             Ok(NexusStorageLocation::Overflow)
+        }
+
+        fn cell_mask(cell: u8) -> Result<u16, Error<T>> {
+            ensure!(
+                cell < NEXUS_BOARD_CELL_COUNT,
+                Error::<T>::NexusCellOutOfBounds
+            );
+            Ok(1u16 << cell)
+        }
+
+        fn nexus_board_layout(board_id: BoardId) -> Result<NexusBoardLayout, Error<T>> {
+            let layout = match board_id {
+                0 => NexusBoardLayout {
+                    board_id,
+                    locked_cells: 0,
+                    mana_wells: 0,
+                },
+                1 => NexusBoardLayout {
+                    board_id,
+                    locked_cells: (1u16 << 0) | (1u16 << 15),
+                    mana_wells: 0,
+                },
+                2 => NexusBoardLayout {
+                    board_id,
+                    locked_cells: (1u16 << 3) | (1u16 << 12),
+                    mana_wells: (1u16 << 5) | (1u16 << 10),
+                },
+                3 => NexusBoardLayout {
+                    board_id,
+                    locked_cells: (1u16 << 0) | (1u16 << 7) | (1u16 << 8) | (1u16 << 15),
+                    mana_wells: (1u16 << 5) | (1u16 << 10),
+                },
+                _ => return Err(Error::<T>::UnknownNexusBoard),
+            };
+            Self::ensure_nexus_board_layout_valid(layout)?;
+            Ok(layout)
+        }
+
+        fn ensure_nexus_board_layout_valid(layout: NexusBoardLayout) -> Result<(), Error<T>> {
+            ensure!(
+                layout.locked_cells & layout.mana_wells == 0,
+                Error::<T>::NexusBoardLayoutInvalid
+            );
+
+            for row in 0..4u8 {
+                let row_mask = (0..4u8).fold(0u16, |mask, col| mask | (1u16 << (row * 4 + col)));
+                ensure!(
+                    layout.locked_cells & row_mask != row_mask,
+                    Error::<T>::NexusBoardLayoutInvalid
+                );
+            }
+
+            for col in 0..4u8 {
+                let col_mask = (0..4u8).fold(0u16, |mask, row| mask | (1u16 << (row * 4 + col)));
+                ensure!(
+                    layout.locked_cells & col_mask != col_mask,
+                    Error::<T>::NexusBoardLayoutInvalid
+                );
+            }
+
+            Ok(())
+        }
+
+        fn empty_nexus_match_board(
+            layout: NexusBoardLayout,
+        ) -> Result<NexusMatchBoardOf<T>, Error<T>> {
+            let cells: BoundedNexusBoardCells<T> = (0..NEXUS_BOARD_CELL_COUNT)
+                .map(|_| NexusBoardCell { card: None })
+                .collect::<Vec<_>>()
+                .try_into()
+                .map_err(|_| Error::<T>::NexusBoardLayoutInvalid)?;
+
+            Ok(NexusMatchBoard {
+                board_id: layout.board_id,
+                locked_cells: layout.locked_cells,
+                mana_wells: layout.mana_wells,
+                cells,
+                rune_cells: BoundedNexusRuneCells::default(),
+            })
+        }
+
+        fn ensure_nexus_cell_can_receive_card(
+            board: &NexusMatchBoardOf<T>,
+            cell: u8,
+        ) -> Result<(), Error<T>> {
+            let mask = Self::cell_mask(cell)?;
+            ensure!(board.locked_cells & mask == 0, Error::<T>::NexusCellLocked);
+            ensure!(
+                board
+                    .cells
+                    .get(cell as usize)
+                    .ok_or(Error::<T>::NexusCellOutOfBounds)?
+                    .card
+                    .is_none(),
+                Error::<T>::NexusCellOccupied
+            );
+            Ok(())
+        }
+
+        fn ensure_playable_nexus_card(
+            owner: &T::AccountId,
+            card_id: u32,
+        ) -> Result<CollectionCardOf<T>, Error<T>> {
+            let card =
+                NexusCollectionCards::<T>::get(card_id).ok_or(Error::<T>::UnknownNexusCard)?;
+            ensure!(&card.owner == owner, Error::<T>::NotCardOwner);
+            ensure!(
+                card.location != NexusStorageLocation::Overflow,
+                Error::<T>::NexusCardNotPlayable
+            );
+            Ok(card)
+        }
+
+        fn validate_nexus_team_cards(
+            owner: &T::AccountId,
+            card_ids: Vec<u32>,
+        ) -> Result<(BoundedNexusTeamCardIds<T>, u16), Error<T>> {
+            let mut unique = BoundedBTreeSet::<u32, T::NexusTeamSize>::new();
+            let mut team_power: u16 = 0;
+
+            for card_id in card_ids.iter().copied() {
+                ensure!(
+                    matches!(unique.try_insert(card_id), Ok(true)),
+                    Error::<T>::NexusTeamDuplicateCard
+                );
+                let card = Self::ensure_playable_nexus_card(owner, card_id)?;
+                team_power = team_power
+                    .checked_add(card.card_power)
+                    .ok_or(Error::<T>::NexusTeamPowerOverflow)?;
+            }
+
+            let bounded_card_ids: BoundedNexusTeamCardIds<T> = card_ids
+                .try_into()
+                .map_err(|_| Error::<T>::NexusTeamSizeInvalid)?;
+            Ok((bounded_card_ids, team_power))
+        }
+
+        fn load_valid_nexus_team(
+            owner: &T::AccountId,
+            team_id: TeamId,
+            mode: MatchMode,
+        ) -> Result<TeamOf<T>, Error<T>> {
+            let team = NexusTeams::<T>::get(owner, team_id).ok_or(Error::<T>::NexusTeamMissing)?;
+            Self::validate_nexus_team_size(team.card_ids.len() as u32)
+                .map_err(|_| Error::<T>::NexusTeamSizeInvalid)?;
+
+            let (validated_cards, team_power) =
+                Self::validate_nexus_team_cards(owner, team.card_ids.to_vec())?;
+            ensure!(
+                validated_cards == team.card_ids && team_power == team.team_power,
+                Error::<T>::NexusTeamStale
+            );
+            if mode == MatchMode::Ranked {
+                ensure!(
+                    team_power <= NEXUS_RANKED_TEAM_POWER_LIMIT,
+                    Error::<T>::NexusTeamPowerLimitExceeded
+                );
+            }
+            Ok(team)
+        }
+
+        fn choose_nexus_first_player(
+            match_id: MatchId,
+            players: &BoundedNexusMatchPlayers<T>,
+        ) -> Result<T::AccountId, Error<T>> {
+            ensure!(players.len() == 2, Error::<T>::NexusInvalidMatchPlayers);
+            let now = <frame_system::Pallet<T>>::block_number();
+            let seed =
+                T::Hashing::hash(&(b"nexus/match/first/v1", match_id, players, now).encode());
+            let index = (seed.as_ref()[0] & 1) as usize;
+            players
+                .get(index)
+                .cloned()
+                .ok_or(Error::<T>::NexusInvalidMatchPlayers)
+        }
+
+        fn current_nexus_match_player(
+            match_state: &MatchStateOf<T>,
+        ) -> Result<T::AccountId, Error<T>> {
+            ensure!(
+                match_state.players.len() == 2,
+                Error::<T>::NexusInvalidMatchPlayers
+            );
+            let first_player = match_state
+                .first_player
+                .as_ref()
+                .ok_or(Error::<T>::NexusInvalidMatchPlayers)?;
+            let first_index = match_state
+                .players
+                .iter()
+                .position(|account| account == first_player)
+                .ok_or(Error::<T>::NexusInvalidMatchPlayers)?;
+            let turn_offset = (match_state.turn_index as usize) % match_state.players.len();
+            let player_index = (first_index + turn_offset) % match_state.players.len();
+            match_state
+                .players
+                .get(player_index)
+                .cloned()
+                .ok_or(Error::<T>::NexusInvalidMatchPlayers)
+        }
+
+        fn rank_for_side(ranks: &[RankValue; 4], side: ApexSide) -> RankValue {
+            match side {
+                ApexSide::Top => ranks[0],
+                ApexSide::Right => ranks[1],
+                ApexSide::Bottom => ranks[2],
+                ApexSide::Left => ranks[3],
+            }
+        }
+
+        fn opposite_side(side: ApexSide) -> ApexSide {
+            match side {
+                ApexSide::Top => ApexSide::Bottom,
+                ApexSide::Right => ApexSide::Left,
+                ApexSide::Bottom => ApexSide::Top,
+                ApexSide::Left => ApexSide::Right,
+            }
+        }
+
+        fn neighboring_cell(cell: u8, side: ApexSide) -> Option<u8> {
+            match side {
+                ApexSide::Top if cell >= 4 => Some(cell - 4),
+                ApexSide::Right if cell % 4 < 3 => Some(cell + 1),
+                ApexSide::Bottom if cell < 12 => Some(cell + 4),
+                ApexSide::Left if cell % 4 > 0 => Some(cell - 1),
+                _ => None,
+            }
+        }
+
+        fn cells_are_adjacent(left: u8, right: u8) -> bool {
+            [
+                ApexSide::Top,
+                ApexSide::Right,
+                ApexSide::Bottom,
+                ApexSide::Left,
+            ]
+            .iter()
+            .any(|side| Self::neighboring_cell(left, *side) == Some(right))
+        }
+
+        fn rank_beats(attacker: RankValue, defender: RankValue) -> bool {
+            match (attacker, defender) {
+                (RankValue::Apex, RankValue::Apex) => false,
+                (RankValue::Apex, RankValue::Number(_)) => true,
+                (RankValue::Number(_), RankValue::Apex) => false,
+                (RankValue::Number(attacker), RankValue::Number(defender)) => attacker > defender,
+            }
+        }
+
+        fn rune_delta_for_element(profile: ElementProfile, rune_element: Element) -> i8 {
+            if profile.main == rune_element || profile.minor == Some(rune_element) {
+                1
+            } else if profile.weakness == Some(rune_element) {
+                -1
+            } else {
+                0
+            }
+        }
+
+        fn apply_rune_delta(mut ranks: [RankValue; 4], delta: i8) -> ([RankValue; 4], i8) {
+            if delta == 0 {
+                return (ranks, 0);
+            }
+
+            let mut selected: Option<(usize, u8)> = None;
+            for (index, rank) in ranks.iter().enumerate() {
+                if let RankValue::Number(value) = rank {
+                    if selected
+                        .map(|(_, current)| *value > current)
+                        .unwrap_or(true)
+                    {
+                        selected = Some((index, *value));
+                    }
+                }
+            }
+
+            let Some((index, value)) = selected else {
+                return (ranks, 0);
+            };
+
+            if delta > 0 {
+                if value >= 9 {
+                    return (ranks, 0);
+                }
+                ranks[index] = RankValue::Number(value + 1);
+                (ranks, 1)
+            } else {
+                if value <= 1 {
+                    return (ranks, 0);
+                }
+                ranks[index] = RankValue::Number(value - 1);
+                (ranks, -1)
+            }
+        }
+
+        fn trigger_nexus_rune_if_present(
+            board: &mut NexusMatchBoardOf<T>,
+            cell: u8,
+            ranks: [RankValue; 4],
+            profile: ElementProfile,
+        ) -> ([RankValue; 4], Option<(NexusRuneCell, i8)>) {
+            let Some(index) = board.rune_cells.iter().position(|rune| rune.cell == cell) else {
+                return (ranks, None);
+            };
+            let rune = board.rune_cells.remove(index);
+            let delta = Self::rune_delta_for_element(profile, rune.element);
+            let (ranks, effect) = Self::apply_rune_delta(ranks, delta);
+            let triggered = NexusRuneCell {
+                cell,
+                caster_card_id: rune.caster_card_id,
+                element: rune.element,
+            };
+            (ranks, Some((triggered, effect)))
+        }
+
+        fn resolve_nexus_direct_captures(
+            board: &mut NexusMatchBoardOf<T>,
+            cell: u8,
+            player: &T::AccountId,
+        ) -> Result<Vec<(u32, ApexSide)>, Error<T>> {
+            let attacker = board
+                .cells
+                .get(cell as usize)
+                .and_then(|board_cell| board_cell.card.clone())
+                .ok_or(Error::<T>::NexusCellOutOfBounds)?;
+            let mut captured_cells: Vec<(u8, u32, ApexSide)> = Vec::new();
+
+            for side in [
+                ApexSide::Top,
+                ApexSide::Right,
+                ApexSide::Bottom,
+                ApexSide::Left,
+            ] {
+                let Some(neighbor_cell) = Self::neighboring_cell(cell, side) else {
+                    continue;
+                };
+                let Some(defender) = board
+                    .cells
+                    .get(neighbor_cell as usize)
+                    .and_then(|board_cell| board_cell.card.as_ref())
+                else {
+                    continue;
+                };
+                if defender.controller == attacker.controller {
+                    continue;
+                }
+
+                let attacker_rank = Self::rank_for_side(&attacker.ranks, side);
+                let defender_rank = Self::rank_for_side(&defender.ranks, Self::opposite_side(side));
+                if Self::rank_beats(attacker_rank, defender_rank) {
+                    captured_cells.push((neighbor_cell, defender.card_id, side));
+                }
+            }
+
+            for (captured_cell, _, _) in captured_cells.iter().copied() {
+                if let Some(Some(card)) = board
+                    .cells
+                    .get_mut(captured_cell as usize)
+                    .map(|board_cell| board_cell.card.as_mut())
+                {
+                    card.controller = player.clone();
+                }
+            }
+
+            Ok(captured_cells
+                .into_iter()
+                .map(|(_, card_id, side)| (card_id, side))
+                .collect())
+        }
+
+        fn create_nexus_rune(
+            board: &mut NexusMatchBoardOf<T>,
+            caster_cell: u8,
+            caster_card_id: u32,
+            well_cell: u8,
+            element: Element,
+        ) -> Result<(), Error<T>> {
+            let mask = Self::cell_mask(well_cell)?;
+            ensure!(
+                board.mana_wells & mask != 0,
+                Error::<T>::NexusInvalidRuneCast
+            );
+            ensure!(
+                board.locked_cells & mask == 0,
+                Error::<T>::NexusInvalidRuneCast
+            );
+            ensure!(
+                Self::cells_are_adjacent(caster_cell, well_cell),
+                Error::<T>::NexusInvalidRuneCast
+            );
+            ensure!(
+                board
+                    .cells
+                    .get(well_cell as usize)
+                    .ok_or(Error::<T>::NexusCellOutOfBounds)?
+                    .card
+                    .is_none(),
+                Error::<T>::NexusCellOccupied
+            );
+            ensure!(
+                !board.rune_cells.iter().any(|rune| rune.cell == well_cell),
+                Error::<T>::NexusInvalidRuneCast
+            );
+            board
+                .rune_cells
+                .try_push(NexusRuneCell {
+                    cell: well_cell,
+                    caster_card_id,
+                    element,
+                })
+                .map_err(|_| Error::<T>::NexusInvalidRuneCast)?;
+            Ok(())
+        }
+
+        fn nexus_match_should_end(
+            match_id: MatchId,
+            match_state: &MatchStateOf<T>,
+            board: &NexusMatchBoardOf<T>,
+        ) -> bool {
+            let hands_empty = match_state.players.iter().all(|player| {
+                NexusMatchPlayedCards::<T>::get(match_id, player).len() as u32
+                    >= T::NexusTeamSize::get()
+            });
+            if hands_empty {
+                return true;
+            }
+
+            !(0..NEXUS_BOARD_CELL_COUNT).any(|cell| {
+                let mask = 1u16 << cell;
+                board.locked_cells & mask == 0
+                    && board
+                        .cells
+                        .get(cell as usize)
+                        .map(|board_cell| board_cell.card.is_none())
+                        .unwrap_or(false)
+            })
+        }
+
+        fn score_nexus_match(
+            match_state: &MatchStateOf<T>,
+            board: &NexusMatchBoardOf<T>,
+        ) -> [u8; 2] {
+            let mut score = [0u8; 2];
+            for board_cell in board.cells.iter() {
+                let Some(card) = board_cell.card.as_ref() else {
+                    continue;
+                };
+                for (index, player) in match_state.players.iter().take(2).enumerate() {
+                    if &card.controller == player {
+                        score[index] = score[index].saturating_add(1);
+                    }
+                }
+            }
+            score
+        }
+
+        fn nexus_match_winner(
+            match_state: &MatchStateOf<T>,
+            score: [u8; 2],
+        ) -> Option<T::AccountId> {
+            if score[0] > score[1] {
+                match_state.players.get(0).cloned()
+            } else if score[1] > score[0] {
+                match_state.players.get(1).cloned()
+            } else {
+                None
+            }
         }
 
         fn escrow_account_id() -> T::AccountId {
