@@ -225,6 +225,7 @@ pub enum NexusStorageLocation {
     Collection,
     Vault,
     Overflow,
+    Salvaged,
 }
 
 #[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
@@ -570,7 +571,7 @@ pub mod pallet {
     use pallet_alpha_access::AccessControl;
     use sp_runtime::traits::StaticLookup;
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(12);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(13);
     const ESCROW_PALLET_ID: PalletId = PalletId(*b"et/tcgsc");
     const WEIGHT_TOTAL_PERCENT: u32 = 100;
     const DEFAULT_WEIGHT_MULTIPLIER: WeightMultiplier = 100;
@@ -614,6 +615,7 @@ pub mod pallet {
     pub type BoundedNexusReason<T> = BoundedVec<u8, <T as Config>::MaxNexusReasonLen>;
     type BoundedNexusTeamCardIds<T> = BoundedVec<u32, <T as Config>::NexusTeamSize>;
     type BoundedNexusOverflowCards<T> = BoundedVec<u32, <T as Config>::NexusOverflowTotalCapacity>;
+    type BoundedNexusVaultVariants<T> = BoundedVec<VaultVariantId, <T as Config>::MaxOwnedCards>;
     type BoundedNexusBoardCells<T> =
         BoundedVec<NexusBoardCell<<T as frame_system::Config>::AccountId>, ConstU32<16>>;
     type BoundedNexusRuneCells = BoundedVec<NexusRuneCell, ConstU32<16>>;
@@ -1105,6 +1107,12 @@ pub mod pallet {
     #[pallet::getter(fn next_vault_variant_id)]
     pub type NextVaultVariantId<T: Config> = StorageValue<_, VaultVariantId, ValueQuery>;
 
+    /// Vault Variant ids owned by account, used to bound Season 1 Vault capacity checks.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_vault_variants_by_owner)]
+    pub type NexusVaultVariantsByOwner<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, BoundedNexusVaultVariants<T>, ValueQuery>;
+
     /// Collection + Vault subject copy counts. Overflow is tracked separately.
     #[pallet::storage]
     #[pallet::getter(fn nexus_subject_copy_count)]
@@ -1156,11 +1164,34 @@ pub mod pallet {
     pub type NexusGearItems<T: Config> =
         StorageMap<_, Blake2_128Concat, GearId, GearItemOf<T>, OptionQuery>;
 
+    /// Next Nexus gear id.
+    #[pallet::storage]
+    #[pallet::getter(fn next_nexus_gear_id)]
+    pub type NextNexusGearId<T: Config> = StorageValue<_, GearId, ValueQuery>;
+
+    /// Gear currently equipped to a card by slot type.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_equipped_gear)]
+    pub type NexusEquippedGear<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        u32,
+        Blake2_128Concat,
+        GearSlotType,
+        GearId,
+        OptionQuery,
+    >;
+
     /// Nexus spellbook records.
     #[pallet::storage]
     #[pallet::getter(fn nexus_spell_entry)]
     pub type NexusSpellbook<T: Config> =
         StorageMap<_, Blake2_128Concat, SpellId, SpellEntryOf<T>, OptionQuery>;
+
+    /// Next Nexus spell id.
+    #[pallet::storage]
+    #[pallet::getter(fn next_nexus_spell_id)]
+    pub type NextNexusSpellId<T: Config> = StorageValue<_, SpellId, ValueQuery>;
 
     /// Saved Nexus teams by owner and team id.
     #[pallet::storage]
@@ -1724,6 +1755,60 @@ pub mod pallet {
         NexusInvalidRuneCast,
         /// Nexus turn counter overflowed.
         NexusMatchTurnOverflow,
+        /// Nexus card must be in Collection for this action.
+        NexusCardNotInCollection,
+        /// Nexus Vault has reached the account's configured capacity.
+        NexusVaultCapacityExceeded,
+        /// Nexus metadata URI exceeds the runtime maximum.
+        NexusMetadataUriTooLong,
+        /// Nexus resource arithmetic overflowed.
+        NexusResourceOverflow,
+        /// Nexus resource balance is too low for the requested action.
+        NexusResourceInsufficient,
+        /// Nexus deterministic recipe id is unknown.
+        NexusUnknownRecipe,
+        /// No more Nexus gear ids are available.
+        NexusGearIdExhausted,
+        /// Nexus gear record does not exist.
+        NexusGearMissing,
+        /// Nexus gear is not owned by the caller.
+        NexusGearNotOwned,
+        /// Nexus gear is already equipped.
+        NexusGearAlreadyEquipped,
+        /// Nexus gear slot is already occupied on this card.
+        NexusGearSlotOccupied,
+        /// Nexus gear is not equipped to the requested card.
+        NexusGearNotEquippedToCard,
+        /// No more Nexus spell ids are available.
+        NexusSpellIdExhausted,
+        /// Nexus spell record does not exist.
+        NexusSpellMissing,
+        /// Nexus spell is not owned by the caller.
+        NexusSpellNotOwned,
+        /// Nexus spell is already slotted.
+        NexusSpellAlreadySlotted,
+        /// Nexus spell slot index is invalid.
+        NexusSpellSlotInvalid,
+        /// Nexus spell slot is locked.
+        NexusSpellSlotLocked,
+        /// Nexus spell slot is already occupied.
+        NexusSpellSlotOccupied,
+        /// Nexus spell element does not match the slot requirement.
+        NexusSpellElementMismatch,
+        /// Nexus spell is not slotted in the requested gear slot.
+        NexusSpellNotSlotted,
+        /// Nexus weapon cannot be advanced from its current Forge tier.
+        NexusWeaponTierInvalid,
+        /// Nexus Forge requires a completed Trial gate.
+        NexusForgeGateMissing,
+        /// Nexus Trial id is unknown or not active for this caller.
+        NexusTrialMissing,
+        /// Nexus Trial is already started.
+        NexusTrialAlreadyStarted,
+        /// Nexus Trial is already completed.
+        NexusTrialAlreadyCompleted,
+        /// Nexus Trial must be started before completion.
+        NexusTrialNotStarted,
         /// Nexus match requires two different players.
         NexusInvalidMatchPlayers,
         /// No more card capacity can be purchased because the hard storage ceiling was reached.
@@ -2188,6 +2273,500 @@ pub mod pallet {
 
             NexusMatchBoards::<T>::insert(match_id, board);
             NexusMatches::<T>::insert(match_id, match_state);
+            Ok(())
+        }
+
+        /// Salvage a Collection card into deterministic non-tradable Workshop resources.
+        #[pallet::call_index(30)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn salvage_nexus_card(origin: OriginFor<T>, card_record_id: u32) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+
+            let mut card = Self::ensure_nexus_card_owned(&player, card_record_id)?;
+            ensure!(
+                card.location == NexusStorageLocation::Collection,
+                Error::<T>::NexusCardNotInCollection
+            );
+
+            let outputs = Self::nexus_salvage_outputs(&card);
+            card.location = NexusStorageLocation::Salvaged;
+            NexusCollectionCards::<T>::insert(card_record_id, card.clone());
+            NexusSubjectCopyCounts::<T>::mutate(&player, card.subject_id, |count| {
+                *count = count.saturating_sub(1);
+            });
+            Self::add_nexus_resources(&player, outputs)?;
+
+            Self::deposit_event(Event::CardSalvaged {
+                account_id: player,
+                card_record_id,
+                outputs,
+                salvage_table_version: Self::current_nexus_config().config_version,
+            });
+            Ok(())
+        }
+
+        /// Seal a Collection card into a Vault Variant display snapshot.
+        #[pallet::call_index(31)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn seal_nexus_card(
+            origin: OriginFor<T>,
+            card_record_id: u32,
+            metadata_uri: Vec<u8>,
+        ) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+
+            let mut card = Self::ensure_nexus_card_owned(&player, card_record_id)?;
+            ensure!(
+                card.location == NexusStorageLocation::Collection,
+                Error::<T>::NexusCardNotInCollection
+            );
+            let bounded_uri: BoundedNexusMetadataUri<T> = metadata_uri
+                .try_into()
+                .map_err(|_| Error::<T>::NexusMetadataUriTooLong)?;
+            let capacity = NexusAccountStates::<T>::get(&player)
+                .map(|state| state.vault_capacity)
+                .unwrap_or_else(|| Self::current_nexus_config().base_vault_capacity);
+            let mut owned_variants = NexusVaultVariantsByOwner::<T>::get(&player);
+            ensure!(
+                (owned_variants.len() as u32) < capacity,
+                Error::<T>::NexusVaultCapacityExceeded
+            );
+
+            let variant_id = NextVaultVariantId::<T>::get();
+            let next_variant_id = variant_id
+                .checked_add(1)
+                .ok_or(Error::<T>::CardIdExhausted)?;
+            owned_variants
+                .try_push(variant_id)
+                .map_err(|_| Error::<T>::NexusVaultCapacityExceeded)?;
+
+            card.location = NexusStorageLocation::Vault;
+            NexusCollectionCards::<T>::insert(card_record_id, card.clone());
+            VaultVariants::<T>::insert(
+                variant_id,
+                VaultVariant {
+                    variant_id,
+                    card_record_id,
+                    subject_id: card.subject_id,
+                    sealed_at: <frame_system::Pallet<T>>::block_number(),
+                    metadata_uri: bounded_uri.clone(),
+                    trade_eligible: false,
+                    config_version: Self::current_nexus_config().config_version,
+                },
+            );
+            NexusVaultVariantsByOwner::<T>::insert(&player, owned_variants);
+            NextVaultVariantId::<T>::put(next_variant_id);
+
+            Self::deposit_event(Event::CardSealed {
+                account_id: player,
+                card_record_id,
+                variant_id,
+                metadata_uri: bounded_uri,
+            });
+            Ok(())
+        }
+
+        /// Craft deterministic Season 1 gear from Workshop resources.
+        #[pallet::call_index(32)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn craft_nexus_gear(origin: OriginFor<T>, recipe_id: u32) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+
+            let (slot_type, tier, power, spell_slots, cost) = Self::nexus_gear_recipe(recipe_id)?;
+            Self::spend_nexus_resources(&player, cost)?;
+            let gear_id = NextNexusGearId::<T>::get();
+            let next_gear_id = gear_id
+                .checked_add(1)
+                .ok_or(Error::<T>::NexusGearIdExhausted)?;
+            let config = Self::current_nexus_config();
+
+            NexusGearItems::<T>::insert(
+                gear_id,
+                GearItem {
+                    owner: player.clone(),
+                    gear_id,
+                    slot_type,
+                    tier,
+                    power,
+                    spell_slots,
+                    equipped_card_id: None,
+                    season_id: 1,
+                    config_version: config.config_version,
+                },
+            );
+            NextNexusGearId::<T>::put(next_gear_id);
+
+            Self::deposit_event(Event::GearCrafted {
+                account_id: player,
+                gear_id,
+                recipe_id,
+                cost,
+                config_version: config.config_version,
+            });
+            Ok(())
+        }
+
+        /// Equip gear to a Nexus card build.
+        #[pallet::call_index(33)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn equip_nexus_gear(
+            origin: OriginFor<T>,
+            card_record_id: u32,
+            gear_id: GearId,
+        ) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_card_buildable(&player, card_record_id)?;
+
+            let mut gear = NexusGearItems::<T>::get(gear_id).ok_or(Error::<T>::NexusGearMissing)?;
+            ensure!(gear.owner == player, Error::<T>::NexusGearNotOwned);
+            ensure!(
+                gear.equipped_card_id.is_none(),
+                Error::<T>::NexusGearAlreadyEquipped
+            );
+            ensure!(
+                NexusEquippedGear::<T>::get(card_record_id, gear.slot_type).is_none(),
+                Error::<T>::NexusGearSlotOccupied
+            );
+
+            gear.equipped_card_id = Some(card_record_id);
+            NexusGearItems::<T>::insert(gear_id, gear.clone());
+            NexusEquippedGear::<T>::insert(card_record_id, gear.slot_type, gear_id);
+
+            Self::deposit_event(Event::GearEquipped {
+                account_id: player,
+                card_id: card_record_id,
+                gear_id,
+                slot_type: gear.slot_type,
+            });
+            Ok(())
+        }
+
+        /// Remove gear from a Nexus card build.
+        #[pallet::call_index(34)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn unequip_nexus_gear(
+            origin: OriginFor<T>,
+            card_record_id: u32,
+            gear_id: GearId,
+        ) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_card_buildable(&player, card_record_id)?;
+
+            let mut gear = NexusGearItems::<T>::get(gear_id).ok_or(Error::<T>::NexusGearMissing)?;
+            ensure!(gear.owner == player, Error::<T>::NexusGearNotOwned);
+            ensure!(
+                gear.equipped_card_id == Some(card_record_id),
+                Error::<T>::NexusGearNotEquippedToCard
+            );
+
+            gear.equipped_card_id = None;
+            NexusGearItems::<T>::insert(gear_id, gear.clone());
+            NexusEquippedGear::<T>::remove(card_record_id, gear.slot_type);
+
+            Self::deposit_event(Event::GearUnequipped {
+                account_id: player,
+                card_id: card_record_id,
+                gear_id,
+                slot_type: gear.slot_type,
+            });
+            Ok(())
+        }
+
+        /// Craft a deterministic Season 1 spell.
+        #[pallet::call_index(35)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn craft_nexus_spell(origin: OriginFor<T>, recipe_id: u32) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+
+            let (element, power, cost) = Self::nexus_spell_recipe(recipe_id)?;
+            Self::spend_nexus_resources(&player, cost)?;
+            let spell_id = NextNexusSpellId::<T>::get();
+            let next_spell_id = spell_id
+                .checked_add(1)
+                .ok_or(Error::<T>::NexusSpellIdExhausted)?;
+            let config = Self::current_nexus_config();
+
+            NexusSpellbook::<T>::insert(
+                spell_id,
+                SpellEntry {
+                    owner: player.clone(),
+                    spell_id,
+                    element,
+                    power,
+                    slotted_to: None,
+                    config_version: config.config_version,
+                },
+            );
+            NextNexusSpellId::<T>::put(next_spell_id);
+
+            Self::deposit_event(Event::SpellCrafted {
+                account_id: player,
+                spell_id,
+                cost,
+            });
+            Ok(())
+        }
+
+        /// Slot a spell into equipped gear on a Nexus card build.
+        #[pallet::call_index(36)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn slot_nexus_spell(
+            origin: OriginFor<T>,
+            card_record_id: u32,
+            gear_id: GearId,
+            slot_index: u8,
+            spell_id: SpellId,
+        ) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_card_buildable(&player, card_record_id)?;
+
+            let mut spell =
+                NexusSpellbook::<T>::get(spell_id).ok_or(Error::<T>::NexusSpellMissing)?;
+            ensure!(spell.owner == player, Error::<T>::NexusSpellNotOwned);
+            ensure!(
+                spell.slotted_to.is_none(),
+                Error::<T>::NexusSpellAlreadySlotted
+            );
+
+            let mut gear = NexusGearItems::<T>::get(gear_id).ok_or(Error::<T>::NexusGearMissing)?;
+            ensure!(gear.owner == player, Error::<T>::NexusGearNotOwned);
+            ensure!(
+                gear.equipped_card_id == Some(card_record_id),
+                Error::<T>::NexusGearNotEquippedToCard
+            );
+            let slot = gear
+                .spell_slots
+                .get_mut(slot_index as usize)
+                .ok_or(Error::<T>::NexusSpellSlotInvalid)?;
+            match slot.slot_kind {
+                SpellSlotKind::Locked => return Err(Error::<T>::NexusSpellSlotLocked.into()),
+                SpellSlotKind::Element(required) => {
+                    ensure!(
+                        required == spell.element,
+                        Error::<T>::NexusSpellElementMismatch
+                    );
+                }
+                SpellSlotKind::Open => {}
+            }
+            ensure!(slot.spell_id.is_none(), Error::<T>::NexusSpellSlotOccupied);
+
+            slot.spell_id = Some(spell_id);
+            spell.slotted_to = Some((gear_id, slot_index));
+            NexusGearItems::<T>::insert(gear_id, gear);
+            NexusSpellbook::<T>::insert(spell_id, spell);
+
+            Self::deposit_event(Event::SpellSlotted {
+                account_id: player,
+                card_id: card_record_id,
+                gear_id,
+                slot_index,
+                spell_id,
+            });
+            Ok(())
+        }
+
+        /// Remove a spell from equipped gear.
+        #[pallet::call_index(37)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn unslot_nexus_spell(
+            origin: OriginFor<T>,
+            card_record_id: u32,
+            gear_id: GearId,
+            slot_index: u8,
+            spell_id: SpellId,
+        ) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_card_buildable(&player, card_record_id)?;
+
+            let mut gear = NexusGearItems::<T>::get(gear_id).ok_or(Error::<T>::NexusGearMissing)?;
+            ensure!(gear.owner == player, Error::<T>::NexusGearNotOwned);
+            ensure!(
+                gear.equipped_card_id == Some(card_record_id),
+                Error::<T>::NexusGearNotEquippedToCard
+            );
+            let slot = gear
+                .spell_slots
+                .get_mut(slot_index as usize)
+                .ok_or(Error::<T>::NexusSpellSlotInvalid)?;
+            ensure!(
+                slot.spell_id == Some(spell_id),
+                Error::<T>::NexusSpellNotSlotted
+            );
+
+            let mut spell =
+                NexusSpellbook::<T>::get(spell_id).ok_or(Error::<T>::NexusSpellMissing)?;
+            ensure!(spell.owner == player, Error::<T>::NexusSpellNotOwned);
+            ensure!(
+                spell.slotted_to == Some((gear_id, slot_index)),
+                Error::<T>::NexusSpellNotSlotted
+            );
+
+            slot.spell_id = None;
+            spell.slotted_to = None;
+            NexusGearItems::<T>::insert(gear_id, gear);
+            NexusSpellbook::<T>::insert(spell_id, spell);
+
+            Self::deposit_event(Event::SpellUnslotted {
+                account_id: player,
+                card_id: card_record_id,
+                gear_id,
+                slot_index,
+                spell_id,
+            });
+            Ok(())
+        }
+
+        /// Advance a Season 1 weapon through a deterministic Forge path.
+        #[pallet::call_index(38)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn forge_nexus_weapon(
+            origin: OriginFor<T>,
+            gear_id: GearId,
+            branch: ForgeBranch,
+        ) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+
+            let mut gear = NexusGearItems::<T>::get(gear_id).ok_or(Error::<T>::NexusGearMissing)?;
+            ensure!(gear.owner == player, Error::<T>::NexusGearNotOwned);
+            ensure!(
+                gear.slot_type == GearSlotType::Weapon,
+                Error::<T>::NexusWeaponTierInvalid
+            );
+            Self::ensure_nexus_forge_gate(&player, gear.tier)?;
+            let old_tier = gear.tier;
+            let new_tier = Self::nexus_next_weapon_tier(old_tier)?;
+            let cost = Self::nexus_forge_cost(old_tier)?;
+            Self::spend_nexus_resources(&player, cost)?;
+
+            gear.tier = new_tier;
+            gear.power = gear
+                .power
+                .checked_add(2)
+                .ok_or(Error::<T>::NexusTeamPowerOverflow)?;
+            let config = Self::current_nexus_config();
+            gear.config_version = config.config_version;
+            NexusGearItems::<T>::insert(gear_id, gear);
+
+            Self::deposit_event(Event::WeaponForged {
+                account_id: player,
+                gear_id,
+                old_tier,
+                new_tier,
+                branch,
+                cost,
+                forge_table_version: config.config_version,
+            });
+            Ok(())
+        }
+
+        /// Start a deterministic Season 1 Trial.
+        #[pallet::call_index(39)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn start_nexus_trial(origin: OriginFor<T>, trial_id: TrialId) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+
+            let (trial_type, board_id, _) = Self::nexus_trial_spec(trial_id)?;
+            if let Some(existing) = NexusTrials::<T>::get(&player, trial_id) {
+                match existing.status {
+                    TrialStatus::Started => return Err(Error::<T>::NexusTrialAlreadyStarted.into()),
+                    TrialStatus::Completed => {
+                        return Err(Error::<T>::NexusTrialAlreadyCompleted.into());
+                    }
+                    TrialStatus::Failed => {}
+                }
+            }
+            let config = Self::current_nexus_config();
+            NexusTrials::<T>::insert(
+                &player,
+                trial_id,
+                TrialState {
+                    account_id: player.clone(),
+                    trial_id,
+                    trial_type,
+                    board_id,
+                    status: TrialStatus::Started,
+                    config_version: config.config_version,
+                },
+            );
+
+            Self::deposit_event(Event::TrialStarted {
+                account_id: player,
+                trial_id,
+                board_id,
+            });
+            Ok(())
+        }
+
+        /// Complete a started Trial and grant deterministic rewards on success.
+        #[pallet::call_index(40)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn complete_nexus_trial(
+            origin: OriginFor<T>,
+            trial_id: TrialId,
+            success: bool,
+        ) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&player)?;
+
+            let (_, _, rewards) = Self::nexus_trial_spec(trial_id)?;
+            let mut trial =
+                NexusTrials::<T>::get(&player, trial_id).ok_or(Error::<T>::NexusTrialMissing)?;
+            ensure!(
+                trial.status == TrialStatus::Started,
+                Error::<T>::NexusTrialNotStarted
+            );
+            trial.status = if success {
+                TrialStatus::Completed
+            } else {
+                TrialStatus::Failed
+            };
+            let granted = if success {
+                Self::add_nexus_resources(&player, rewards)?;
+                rewards
+            } else {
+                ResourceBundle::default()
+            };
+            NexusTrials::<T>::insert(&player, trial_id, trial);
+
+            Self::deposit_event(Event::TrialCompleted {
+                account_id: player.clone(),
+                trial_id,
+                result: if success {
+                    TrialStatus::Completed
+                } else {
+                    TrialStatus::Failed
+                },
+                rewards: granted,
+            });
+            if granted.forge_stars > 0 {
+                Self::deposit_event(Event::ForgeStarsGranted {
+                    account_id: player,
+                    amount: granted.forge_stars,
+                    reason: Self::nexus_reason(b"trial-complete")?,
+                    season: 1,
+                });
+            }
             Ok(())
         }
 
@@ -3172,6 +3751,316 @@ pub mod pallet {
             Ok(NexusStorageLocation::Overflow)
         }
 
+        fn nexus_reason(reason: &'static [u8]) -> Result<BoundedNexusReason<T>, DispatchError> {
+            reason
+                .to_vec()
+                .try_into()
+                .map_err(|_| Error::<T>::NexusMetadataUriTooLong.into())
+        }
+
+        fn ensure_nexus_card_owned(
+            owner: &T::AccountId,
+            card_id: u32,
+        ) -> Result<CollectionCardOf<T>, Error<T>> {
+            let card =
+                NexusCollectionCards::<T>::get(card_id).ok_or(Error::<T>::UnknownNexusCard)?;
+            ensure!(&card.owner == owner, Error::<T>::NotCardOwner);
+            Ok(card)
+        }
+
+        fn ensure_nexus_card_buildable(
+            owner: &T::AccountId,
+            card_id: u32,
+        ) -> Result<CollectionCardOf<T>, Error<T>> {
+            let card = Self::ensure_nexus_card_owned(owner, card_id)?;
+            ensure!(
+                matches!(
+                    card.location,
+                    NexusStorageLocation::Collection | NexusStorageLocation::Vault
+                ),
+                Error::<T>::NexusCardNotPlayable
+            );
+            Ok(card)
+        }
+
+        fn nexus_resource_amount(bundle: ResourceBundle, kind: ResourceKind) -> u32 {
+            match kind {
+                ResourceKind::EonCoins => bundle.eon_coins,
+                ResourceKind::GearParts => bundle.gear_parts,
+                ResourceKind::ElementShards => bundle.element_shards,
+                ResourceKind::EchoCoreFragments => bundle.echo_core_fragments,
+                ResourceKind::EchoCores => bundle.echo_cores,
+                ResourceKind::ForgeStars => bundle.forge_stars,
+                ResourceKind::MakeUpStamps => bundle.make_up_stamps,
+            }
+        }
+
+        fn nexus_resource_kinds() -> [ResourceKind; 7] {
+            [
+                ResourceKind::EonCoins,
+                ResourceKind::GearParts,
+                ResourceKind::ElementShards,
+                ResourceKind::EchoCoreFragments,
+                ResourceKind::EchoCores,
+                ResourceKind::ForgeStars,
+                ResourceKind::MakeUpStamps,
+            ]
+        }
+
+        fn add_nexus_resources(owner: &T::AccountId, bundle: ResourceBundle) -> DispatchResult {
+            for kind in Self::nexus_resource_kinds() {
+                let delta = Self::nexus_resource_amount(bundle, kind);
+                if delta == 0 {
+                    continue;
+                }
+                let current = NexusResources::<T>::get(owner, kind);
+                let next = current
+                    .checked_add(delta)
+                    .ok_or(Error::<T>::NexusResourceOverflow)?;
+                NexusResources::<T>::insert(owner, kind, next);
+            }
+            Ok(())
+        }
+
+        fn spend_nexus_resources(owner: &T::AccountId, cost: ResourceBundle) -> DispatchResult {
+            for kind in Self::nexus_resource_kinds() {
+                let amount = Self::nexus_resource_amount(cost, kind);
+                if amount == 0 {
+                    continue;
+                }
+                ensure!(
+                    NexusResources::<T>::get(owner, kind) >= amount,
+                    Error::<T>::NexusResourceInsufficient
+                );
+            }
+            for kind in Self::nexus_resource_kinds() {
+                let amount = Self::nexus_resource_amount(cost, kind);
+                if amount == 0 {
+                    continue;
+                }
+                NexusResources::<T>::mutate(owner, kind, |balance| {
+                    *balance = balance.saturating_sub(amount);
+                });
+            }
+            Ok(())
+        }
+
+        fn nexus_spell_slots(
+            slot_kinds: [SpellSlotKind; 3],
+        ) -> Result<BoundedNexusSpellSlots<T>, Error<T>> {
+            let mut slots = BoundedNexusSpellSlots::<T>::default();
+            for slot_kind in slot_kinds.iter().copied() {
+                slots
+                    .try_push(SpellSlotEntry {
+                        slot_kind,
+                        spell_id: None,
+                    })
+                    .map_err(|_| Error::<T>::NexusSpellSlotInvalid)?;
+            }
+            Ok(slots)
+        }
+
+        fn nexus_gear_recipe(
+            recipe_id: u32,
+        ) -> Result<
+            (
+                GearSlotType,
+                GearTier,
+                u16,
+                BoundedNexusSpellSlots<T>,
+                ResourceBundle,
+            ),
+            Error<T>,
+        > {
+            let mut cost = ResourceBundle::default();
+            let recipe = match recipe_id {
+                1 => {
+                    cost.gear_parts = 10;
+                    cost.element_shards = 2;
+                    (
+                        GearSlotType::Weapon,
+                        GearTier::Common,
+                        2,
+                        Self::nexus_spell_slots([
+                            SpellSlotKind::Element(Element::Fire),
+                            SpellSlotKind::Open,
+                            SpellSlotKind::Locked,
+                        ])?,
+                    )
+                }
+                2 => {
+                    cost.gear_parts = 8;
+                    cost.element_shards = 2;
+                    (
+                        GearSlotType::Armor,
+                        GearTier::Common,
+                        1,
+                        Self::nexus_spell_slots([
+                            SpellSlotKind::Element(Element::Earth),
+                            SpellSlotKind::Locked,
+                            SpellSlotKind::Locked,
+                        ])?,
+                    )
+                }
+                3 => {
+                    cost.gear_parts = 6;
+                    (
+                        GearSlotType::Accessory,
+                        GearTier::Common,
+                        1,
+                        Self::nexus_spell_slots([
+                            SpellSlotKind::Open,
+                            SpellSlotKind::Locked,
+                            SpellSlotKind::Locked,
+                        ])?,
+                    )
+                }
+                _ => return Err(Error::<T>::NexusUnknownRecipe),
+            };
+            Ok((recipe.0, recipe.1, recipe.2, recipe.3, cost))
+        }
+
+        fn nexus_spell_recipe(recipe_id: u32) -> Result<(Element, u16, ResourceBundle), Error<T>> {
+            let mut cost = ResourceBundle::default();
+            cost.element_shards = 3;
+            let element = match recipe_id {
+                1 => Element::Fire,
+                2 => Element::Earth,
+                3 => Element::Water,
+                4 => Element::Wind,
+                _ => return Err(Error::<T>::NexusTrialMissing),
+            };
+            Ok((element, 1, cost))
+        }
+
+        fn nexus_salvage_outputs(card: &CollectionCardOf<T>) -> ResourceBundle {
+            let mut outputs = ResourceBundle::default();
+            outputs.gear_parts = 4u32.saturating_add(u32::from(card.card_power / 2));
+            outputs.element_shards = if card.element_profile.minor.is_some() {
+                2
+            } else {
+                1
+            };
+            if card.kind == NexusCardKind::Boss || card.card_power >= 8 {
+                outputs.echo_core_fragments = 1;
+            }
+            outputs
+        }
+
+        fn nexus_next_weapon_tier(tier: GearTier) -> Result<GearTier, Error<T>> {
+            match tier {
+                GearTier::Common => Ok(GearTier::Rare),
+                GearTier::Rare => Ok(GearTier::Epic),
+                GearTier::Epic => Ok(GearTier::Legendary),
+                GearTier::Legendary => Ok(GearTier::Mythical),
+                GearTier::Mythical | GearTier::Basic | GearTier::Improved | GearTier::Refined => {
+                    Err(Error::<T>::NexusWeaponTierInvalid)
+                }
+            }
+        }
+
+        fn nexus_forge_cost(tier: GearTier) -> Result<ResourceBundle, Error<T>> {
+            let mut cost = ResourceBundle::default();
+            match tier {
+                GearTier::Common => {
+                    cost.gear_parts = 15;
+                    cost.element_shards = 5;
+                }
+                GearTier::Rare => {
+                    cost.gear_parts = 25;
+                    cost.element_shards = 10;
+                }
+                GearTier::Epic => {
+                    cost.gear_parts = 40;
+                    cost.element_shards = 15;
+                    cost.forge_stars = 1;
+                }
+                GearTier::Legendary => {
+                    cost.gear_parts = 60;
+                    cost.element_shards = 20;
+                    cost.echo_cores = 1;
+                    cost.forge_stars = 3;
+                }
+                GearTier::Mythical | GearTier::Basic | GearTier::Improved | GearTier::Refined => {
+                    return Err(Error::<T>::NexusWeaponTierInvalid)
+                }
+            }
+            Ok(cost)
+        }
+
+        fn ensure_nexus_trial_completed(owner: &T::AccountId, trial_id: TrialId) -> DispatchResult {
+            let completed = NexusTrials::<T>::get(owner, trial_id)
+                .map(|trial| trial.status == TrialStatus::Completed)
+                .unwrap_or(false);
+            ensure!(completed, Error::<T>::NexusForgeGateMissing);
+            Ok(())
+        }
+
+        fn ensure_nexus_forge_gate(owner: &T::AccountId, tier: GearTier) -> DispatchResult {
+            match tier {
+                GearTier::Epic => Self::ensure_nexus_trial_completed(owner, 1),
+                GearTier::Legendary => Self::ensure_nexus_trial_completed(owner, 3),
+                _ => Ok(()),
+            }
+        }
+
+        fn nexus_trial_spec(
+            trial_id: TrialId,
+        ) -> Result<(TrialType, BoardId, ResourceBundle), Error<T>> {
+            let mut rewards = ResourceBundle::default();
+            let spec = match trial_id {
+                1 => {
+                    rewards.gear_parts = 12;
+                    rewards.forge_stars = 1;
+                    (TrialType::Weapon, 2, rewards)
+                }
+                2 => {
+                    rewards.element_shards = 8;
+                    rewards.forge_stars = 1;
+                    (TrialType::Element, 2, rewards)
+                }
+                3 => {
+                    rewards.echo_core_fragments = 2;
+                    rewards.echo_cores = 1;
+                    rewards.forge_stars = 2;
+                    (TrialType::Season, 3, rewards)
+                }
+                _ => return Err(Error::<T>::NexusUnknownRecipe),
+            };
+            Ok(spec)
+        }
+
+        fn nexus_card_build_power(
+            owner: &T::AccountId,
+            card_id: u32,
+            card: &CollectionCardOf<T>,
+        ) -> Result<u16, Error<T>> {
+            let mut power = card.card_power;
+            for (_, gear_id) in NexusEquippedGear::<T>::iter_prefix(card_id) {
+                let gear = NexusGearItems::<T>::get(gear_id).ok_or(Error::<T>::NexusGearMissing)?;
+                ensure!(&gear.owner == owner, Error::<T>::NexusGearNotOwned);
+                ensure!(
+                    gear.equipped_card_id == Some(card_id),
+                    Error::<T>::NexusGearNotEquippedToCard
+                );
+                power = power
+                    .checked_add(gear.power)
+                    .ok_or(Error::<T>::NexusTeamPowerOverflow)?;
+                for slot in gear.spell_slots.iter() {
+                    if let Some(spell_id) = slot.spell_id {
+                        let spell = NexusSpellbook::<T>::get(spell_id)
+                            .ok_or(Error::<T>::NexusSpellMissing)?;
+                        ensure!(&spell.owner == owner, Error::<T>::NexusSpellNotOwned);
+                        ensure!(spell.slotted_to.is_some(), Error::<T>::NexusSpellNotSlotted);
+                        power = power
+                            .checked_add(spell.power)
+                            .ok_or(Error::<T>::NexusTeamPowerOverflow)?;
+                    }
+                }
+            }
+            Ok(power)
+        }
+
         fn cell_mask(cell: u8) -> Result<u16, Error<T>> {
             ensure!(
                 cell < NEXUS_BOARD_CELL_COUNT,
@@ -3277,7 +4166,10 @@ pub mod pallet {
                 NexusCollectionCards::<T>::get(card_id).ok_or(Error::<T>::UnknownNexusCard)?;
             ensure!(&card.owner == owner, Error::<T>::NotCardOwner);
             ensure!(
-                card.location != NexusStorageLocation::Overflow,
+                matches!(
+                    card.location,
+                    NexusStorageLocation::Collection | NexusStorageLocation::Vault
+                ),
                 Error::<T>::NexusCardNotPlayable
             );
             Ok(card)
@@ -3296,8 +4188,9 @@ pub mod pallet {
                     Error::<T>::NexusTeamDuplicateCard
                 );
                 let card = Self::ensure_playable_nexus_card(owner, card_id)?;
+                let card_power = Self::nexus_card_build_power(owner, card_id, &card)?;
                 team_power = team_power
-                    .checked_add(card.card_power)
+                    .checked_add(card_power)
                     .ok_or(Error::<T>::NexusTeamPowerOverflow)?;
             }
 

@@ -1,12 +1,15 @@
 use crate::pallet::Config as EterraSlotsConfig;
 use crate::{
     mock::*, ActiveCard, ApexSide, CardArtworkCollectionId, CardCapacityBonus, CardPrices, Cards,
-    CardsByOwner, CollectionCard, Element, ElementProfile, Error, Event, GeneProfile,
-    ListedByOwner, MatchMode, MatchStatus, NextCardId, NextNexusMatchId, NextStarterGrantId,
-    NexusAccountStates, NexusCardKind, NexusCardOrigin, NexusCollectionCards, NexusMatchBoards,
-    NexusMatches, NexusOverflowCards, NexusOverflowSubjectCounts, NexusStorageLocation,
-    NexusSubjectCopyCounts, NexusTeams, PackCardInProgress, PackInProgress, PlayerPacks, RankValue,
-    SeasonCollectionIds, SeasonCollectionStatus, SeasonCollections, StarterGrants, StarterPath,
+    CardsByOwner, CollectionCard, Element, ElementProfile, Error, Event, ForgeBranch, GearSlotType,
+    GearTier, GeneProfile, ListedByOwner, MatchMode, MatchStatus, NextCardId, NextNexusGearId,
+    NextNexusMatchId, NextStarterGrantId, NextVaultVariantId, NexusAccountStates, NexusCardKind,
+    NexusCardOrigin, NexusCollectionCards, NexusEquippedGear, NexusGearItems, NexusMatchBoards,
+    NexusMatches, NexusOverflowCards, NexusOverflowSubjectCounts, NexusResources, NexusSpellbook,
+    NexusStorageLocation, NexusSubjectCopyCounts, NexusTeams, NexusTrials,
+    NexusVaultVariantsByOwner, PackCardInProgress, PackInProgress, PlayerPacks, RankValue,
+    ResourceKind, SeasonCollectionIds, SeasonCollectionStatus, SeasonCollections, SpellSlotKind,
+    StarterGrants, StarterPath, TrialStatus, VaultVariants,
 };
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok, BoundedBTreeSet, BoundedVec};
@@ -137,6 +140,18 @@ fn seed_nexus_card(
             config_version: 1,
         },
     );
+}
+
+fn seed_workshop_resources(owner: u64, amount: u32) {
+    for kind in [
+        ResourceKind::GearParts,
+        ResourceKind::ElementShards,
+        ResourceKind::EchoCoreFragments,
+        ResourceKind::EchoCores,
+        ResourceKind::ForgeStars,
+    ] {
+        NexusResources::<Test>::insert(owner, kind, amount);
+    }
 }
 
 fn seed_nexus_team(owner: u64, first_card_id: u32) -> Vec<u32> {
@@ -411,6 +426,344 @@ fn save_nexus_team_validates_ownership_duplicates_and_overflow() {
                 vec![100, 101, 102, 103, 201]
             ),
             Error::<Test>::NexusCardNotPlayable
+        );
+    });
+}
+
+#[test]
+fn salvage_nexus_card_grants_deterministic_workshop_resources() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        seed_nexus_card(
+            player,
+            100,
+            42,
+            all_number(2),
+            6,
+            NexusStorageLocation::Collection,
+            profile(Element::Fire, None),
+        );
+        NexusSubjectCopyCounts::<Test>::insert(player, 42, 1);
+
+        assert_ok!(EterraSlots::salvage_nexus_card(
+            RuntimeOrigin::signed(player),
+            100
+        ));
+
+        let card = NexusCollectionCards::<Test>::get(100).expect("card remains as record");
+        assert_eq!(card.location, NexusStorageLocation::Salvaged);
+        assert_eq!(NexusSubjectCopyCounts::<Test>::get(player, 42), 0);
+        assert_eq!(
+            NexusResources::<Test>::get(player, ResourceKind::GearParts),
+            7
+        );
+        assert_eq!(
+            NexusResources::<Test>::get(player, ResourceKind::ElementShards),
+            1
+        );
+        assert_eq!(
+            NexusResources::<Test>::get(player, ResourceKind::EonCoins),
+            0
+        );
+
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::CardSalvaged {
+                        account_id,
+                        card_record_id,
+                        outputs,
+                        salvage_table_version
+                    }) if *account_id == player
+                        && *card_record_id == 100
+                        && outputs.gear_parts == 7
+                        && outputs.element_shards == 1
+                        && outputs.eon_coins == 0
+                        && *salvage_table_version == 1
+                )
+            },
+            "CardSalvaged",
+        );
+
+        assert_noop!(
+            EterraSlots::salvage_nexus_card(RuntimeOrigin::signed(player), 100),
+            Error::<Test>::NexusCardNotInCollection
+        );
+    });
+}
+
+#[test]
+fn seal_nexus_card_creates_vault_variant_and_enforces_capacity() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        assert_ok!(EterraSlots::claim_starter_grant(
+            RuntimeOrigin::signed(player),
+            StarterPath::Fire
+        ));
+        seed_nexus_card(
+            player,
+            100,
+            42,
+            all_number(2),
+            3,
+            NexusStorageLocation::Collection,
+            profile(Element::Fire, None),
+        );
+
+        assert_ok!(EterraSlots::seal_nexus_card(
+            RuntimeOrigin::signed(player),
+            100,
+            b"ipfs://nexus/card-100".to_vec()
+        ));
+
+        let card = NexusCollectionCards::<Test>::get(100).expect("card remains as record");
+        assert_eq!(card.location, NexusStorageLocation::Vault);
+        assert_eq!(NextVaultVariantId::<Test>::get(), 1);
+        assert_eq!(
+            NexusVaultVariantsByOwner::<Test>::get(player).to_vec(),
+            vec![0]
+        );
+        let variant = VaultVariants::<Test>::get(0).expect("vault variant stored");
+        assert_eq!(variant.card_record_id, 100);
+        assert_eq!(variant.subject_id, 42);
+        assert_eq!(
+            variant.metadata_uri.to_vec(),
+            b"ipfs://nexus/card-100".to_vec()
+        );
+        assert!(!variant.trade_eligible);
+
+        NexusAccountStates::<Test>::mutate(player, |state| {
+            state.as_mut().expect("account state exists").vault_capacity = 1;
+        });
+        seed_nexus_card(
+            player,
+            101,
+            43,
+            all_number(2),
+            3,
+            NexusStorageLocation::Collection,
+            profile(Element::Earth, None),
+        );
+        assert_noop!(
+            EterraSlots::seal_nexus_card(
+                RuntimeOrigin::signed(player),
+                101,
+                b"ipfs://nexus/card-101".to_vec()
+            ),
+            Error::<Test>::NexusVaultCapacityExceeded
+        );
+    });
+}
+
+#[test]
+fn craft_and_equip_nexus_gear_updates_card_build_power() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let cards = seed_nexus_team(player, 100);
+        seed_workshop_resources(player, 100);
+
+        assert_ok!(EterraSlots::craft_nexus_gear(
+            RuntimeOrigin::signed(player),
+            1
+        ));
+        assert_eq!(NextNexusGearId::<Test>::get(), 1);
+        let gear = NexusGearItems::<Test>::get(0).expect("gear stored");
+        assert_eq!(gear.slot_type, GearSlotType::Weapon);
+        assert_eq!(gear.tier, GearTier::Common);
+        assert_eq!(gear.power, 2);
+        assert_eq!(
+            NexusResources::<Test>::get(player, ResourceKind::GearParts),
+            90
+        );
+        assert_eq!(
+            NexusResources::<Test>::get(player, ResourceKind::ElementShards),
+            98
+        );
+
+        assert_ok!(EterraSlots::equip_nexus_gear(
+            RuntimeOrigin::signed(player),
+            100,
+            0
+        ));
+        assert_eq!(
+            NexusEquippedGear::<Test>::get(100, GearSlotType::Weapon),
+            Some(0)
+        );
+
+        assert_ok!(EterraSlots::save_nexus_team(
+            RuntimeOrigin::signed(player),
+            1,
+            cards
+        ));
+        let team = NexusTeams::<Test>::get(player, 1).expect("team stored");
+        assert_eq!(team.team_power, 7);
+
+        assert_ok!(EterraSlots::craft_nexus_gear(
+            RuntimeOrigin::signed(player),
+            1
+        ));
+        assert_noop!(
+            EterraSlots::equip_nexus_gear(RuntimeOrigin::signed(player), 100, 1),
+            Error::<Test>::NexusGearSlotOccupied
+        );
+    });
+}
+
+#[test]
+fn spell_slotting_validates_element_open_and_locked_slots() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        seed_nexus_card(
+            player,
+            100,
+            42,
+            all_number(2),
+            3,
+            NexusStorageLocation::Collection,
+            profile(Element::Fire, None),
+        );
+        seed_workshop_resources(player, 100);
+
+        assert_ok!(EterraSlots::craft_nexus_gear(
+            RuntimeOrigin::signed(player),
+            1
+        ));
+        assert_ok!(EterraSlots::equip_nexus_gear(
+            RuntimeOrigin::signed(player),
+            100,
+            0
+        ));
+        assert_ok!(EterraSlots::craft_nexus_spell(
+            RuntimeOrigin::signed(player),
+            3
+        ));
+        assert_noop!(
+            EterraSlots::slot_nexus_spell(RuntimeOrigin::signed(player), 100, 0, 0, 0),
+            Error::<Test>::NexusSpellElementMismatch
+        );
+
+        assert_ok!(EterraSlots::craft_nexus_spell(
+            RuntimeOrigin::signed(player),
+            1
+        ));
+        assert_ok!(EterraSlots::slot_nexus_spell(
+            RuntimeOrigin::signed(player),
+            100,
+            0,
+            0,
+            1
+        ));
+        assert_eq!(
+            NexusSpellbook::<Test>::get(1)
+                .expect("fire spell stored")
+                .slotted_to,
+            Some((0, 0))
+        );
+
+        assert_ok!(EterraSlots::slot_nexus_spell(
+            RuntimeOrigin::signed(player),
+            100,
+            0,
+            1,
+            0
+        ));
+        assert_ok!(EterraSlots::craft_nexus_spell(
+            RuntimeOrigin::signed(player),
+            2
+        ));
+        assert_noop!(
+            EterraSlots::slot_nexus_spell(RuntimeOrigin::signed(player), 100, 0, 2, 2),
+            Error::<Test>::NexusSpellSlotLocked
+        );
+
+        assert_ok!(EterraSlots::unslot_nexus_spell(
+            RuntimeOrigin::signed(player),
+            100,
+            0,
+            0,
+            1
+        ));
+        assert_eq!(
+            NexusSpellbook::<Test>::get(1)
+                .expect("fire spell stored")
+                .slotted_to,
+            None
+        );
+        let gear = NexusGearItems::<Test>::get(0).expect("gear stored");
+        assert_eq!(gear.spell_slots[0].spell_id, None);
+        assert_eq!(
+            gear.spell_slots[0].slot_kind,
+            SpellSlotKind::Element(Element::Fire)
+        );
+    });
+}
+
+#[test]
+fn trials_grant_forge_stars_and_gate_weapon_forge_paths() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        NexusResources::<Test>::insert(player, ResourceKind::GearParts, 200);
+        NexusResources::<Test>::insert(player, ResourceKind::ElementShards, 200);
+
+        assert_ok!(EterraSlots::craft_nexus_gear(
+            RuntimeOrigin::signed(player),
+            1
+        ));
+        assert_ok!(EterraSlots::forge_nexus_weapon(
+            RuntimeOrigin::signed(player),
+            0,
+            ForgeBranch::Sword
+        ));
+        assert_eq!(
+            NexusGearItems::<Test>::get(0).expect("gear stored").tier,
+            GearTier::Rare
+        );
+        assert_ok!(EterraSlots::forge_nexus_weapon(
+            RuntimeOrigin::signed(player),
+            0,
+            ForgeBranch::Sword
+        ));
+        assert_eq!(
+            NexusGearItems::<Test>::get(0).expect("gear stored").tier,
+            GearTier::Epic
+        );
+        assert_noop!(
+            EterraSlots::forge_nexus_weapon(RuntimeOrigin::signed(player), 0, ForgeBranch::Sword),
+            Error::<Test>::NexusForgeGateMissing
+        );
+
+        assert_ok!(EterraSlots::start_nexus_trial(
+            RuntimeOrigin::signed(player),
+            1
+        ));
+        assert_noop!(
+            EterraSlots::start_nexus_trial(RuntimeOrigin::signed(player), 1),
+            Error::<Test>::NexusTrialAlreadyStarted
+        );
+        assert_ok!(EterraSlots::complete_nexus_trial(
+            RuntimeOrigin::signed(player),
+            1,
+            true
+        ));
+        let trial = NexusTrials::<Test>::get(player, 1).expect("trial stored");
+        assert_eq!(trial.status, TrialStatus::Completed);
+        assert_eq!(
+            NexusResources::<Test>::get(player, ResourceKind::ForgeStars),
+            1
+        );
+
+        assert_ok!(EterraSlots::forge_nexus_weapon(
+            RuntimeOrigin::signed(player),
+            0,
+            ForgeBranch::Sword
+        ));
+        let gear = NexusGearItems::<Test>::get(0).expect("gear stored");
+        assert_eq!(gear.tier, GearTier::Legendary);
+        assert_eq!(gear.power, 8);
+        assert_eq!(
+            NexusResources::<Test>::get(player, ResourceKind::ForgeStars),
+            0
         );
     });
 }
