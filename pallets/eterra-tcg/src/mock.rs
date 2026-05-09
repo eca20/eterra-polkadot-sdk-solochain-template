@@ -197,6 +197,7 @@ impl pallet_eterra_slots::Config for Test {
     type PaymentCurrency = Balances;
     type AccessControl = ();
     type HandChecker = ();
+    type SeasonRules = pallet_eterra_slots::NexusSeasonOneRules;
     type PackPrice = PackPrice;
     type PackPriceReceiver = PackPriceReceiver;
     type ProPrice = ProPrice;

@@ -741,6 +741,7 @@ impl pallet_eterra_tcg::Config for Runtime {
 
     type PaymentCurrency = Balances;
     type HandChecker = TcgHandChecker;
+    type SeasonRules = pallet_eterra_tcg::NexusSeasonOneRules;
     type PackPrice = ConstU128<{ 500 * UNIT }>;
     type PackPriceReceiver = TreasuryAccount;
     type ProPrice = ConstU128<{ 200 * UNIT }>;

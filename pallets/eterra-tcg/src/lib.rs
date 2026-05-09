@@ -39,7 +39,6 @@ pub type BoardId = u32;
 pub type NexusConfigVersion = u32;
 
 const NEXUS_BOARD_CELL_COUNT: u8 = 16;
-const NEXUS_RANKED_TEAM_POWER_LIMIT: u16 = 25;
 
 /// Provides a runtime-defined view of whether a given `card_id` is currently included
 /// in `owner`'s configured "current hand".
@@ -561,6 +560,259 @@ pub struct NexusConfigState<BlockNumber> {
     pub updated_at: BlockNumber,
 }
 
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusGearRecipe {
+    pub slot_type: GearSlotType,
+    pub tier: GearTier,
+    pub power: u16,
+    pub spell_slots: [SpellSlotKind; 3],
+    pub cost: ResourceBundle,
+    pub season_id: SeasonId,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusSpellRecipe {
+    pub element: Element,
+    pub power: u16,
+    pub cost: ResourceBundle,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusTrialSpec {
+    pub trial_type: TrialType,
+    pub board_id: BoardId,
+    pub rewards: ResourceBundle,
+}
+
+pub trait NexusSeasonRules {
+    fn season_id() -> SeasonId;
+    fn ranked_team_power_limit() -> u16;
+    fn board_layout(board_id: BoardId) -> Option<NexusBoardLayout>;
+    fn gear_recipe(recipe_id: u32) -> Option<NexusGearRecipe>;
+    fn spell_recipe(recipe_id: u32) -> Option<NexusSpellRecipe>;
+    fn salvage_outputs(
+        kind: NexusCardKind,
+        card_power: u16,
+        element_profile: ElementProfile,
+    ) -> ResourceBundle;
+    fn next_weapon_tier(tier: GearTier) -> Option<GearTier>;
+    fn forge_cost(tier: GearTier) -> Option<ResourceBundle>;
+    fn forge_gate_trial(tier: GearTier) -> Option<TrialId>;
+    fn trial_spec(trial_id: TrialId) -> Option<NexusTrialSpec>;
+}
+
+pub struct NexusSeasonOneRules;
+
+impl NexusSeasonRules for NexusSeasonOneRules {
+    fn season_id() -> SeasonId {
+        1
+    }
+
+    fn ranked_team_power_limit() -> u16 {
+        25
+    }
+
+    fn board_layout(board_id: BoardId) -> Option<NexusBoardLayout> {
+        let layout = match board_id {
+            0 => NexusBoardLayout {
+                board_id,
+                locked_cells: 0,
+                mana_wells: 0,
+            },
+            1 => NexusBoardLayout {
+                board_id,
+                locked_cells: (1u16 << 0) | (1u16 << 15),
+                mana_wells: 0,
+            },
+            2 => NexusBoardLayout {
+                board_id,
+                locked_cells: (1u16 << 3) | (1u16 << 12),
+                mana_wells: (1u16 << 5) | (1u16 << 10),
+            },
+            3 => NexusBoardLayout {
+                board_id,
+                locked_cells: (1u16 << 0) | (1u16 << 7) | (1u16 << 8) | (1u16 << 15),
+                mana_wells: (1u16 << 5) | (1u16 << 10),
+            },
+            _ => return None,
+        };
+        Some(layout)
+    }
+
+    fn gear_recipe(recipe_id: u32) -> Option<NexusGearRecipe> {
+        let mut cost = ResourceBundle::default();
+        let recipe = match recipe_id {
+            1 => {
+                cost.gear_parts = 10;
+                cost.element_shards = 2;
+                NexusGearRecipe {
+                    slot_type: GearSlotType::Weapon,
+                    tier: GearTier::Common,
+                    power: 2,
+                    spell_slots: [
+                        SpellSlotKind::Element(Element::Fire),
+                        SpellSlotKind::Open,
+                        SpellSlotKind::Locked,
+                    ],
+                    cost,
+                    season_id: Self::season_id(),
+                }
+            }
+            2 => {
+                cost.gear_parts = 8;
+                cost.element_shards = 2;
+                NexusGearRecipe {
+                    slot_type: GearSlotType::Armor,
+                    tier: GearTier::Common,
+                    power: 1,
+                    spell_slots: [
+                        SpellSlotKind::Element(Element::Earth),
+                        SpellSlotKind::Locked,
+                        SpellSlotKind::Locked,
+                    ],
+                    cost,
+                    season_id: Self::season_id(),
+                }
+            }
+            3 => {
+                cost.gear_parts = 6;
+                NexusGearRecipe {
+                    slot_type: GearSlotType::Accessory,
+                    tier: GearTier::Common,
+                    power: 1,
+                    spell_slots: [
+                        SpellSlotKind::Open,
+                        SpellSlotKind::Locked,
+                        SpellSlotKind::Locked,
+                    ],
+                    cost,
+                    season_id: Self::season_id(),
+                }
+            }
+            _ => return None,
+        };
+        Some(recipe)
+    }
+
+    fn spell_recipe(recipe_id: u32) -> Option<NexusSpellRecipe> {
+        let mut cost = ResourceBundle::default();
+        cost.element_shards = 3;
+        let element = match recipe_id {
+            1 => Element::Fire,
+            2 => Element::Earth,
+            3 => Element::Water,
+            4 => Element::Wind,
+            _ => return None,
+        };
+        Some(NexusSpellRecipe {
+            element,
+            power: 1,
+            cost,
+        })
+    }
+
+    fn salvage_outputs(
+        kind: NexusCardKind,
+        card_power: u16,
+        element_profile: ElementProfile,
+    ) -> ResourceBundle {
+        let mut outputs = ResourceBundle::default();
+        outputs.gear_parts = 4u32.saturating_add(u32::from(card_power / 2));
+        outputs.element_shards = if element_profile.minor.is_some() {
+            2
+        } else {
+            1
+        };
+        if kind == NexusCardKind::Boss || card_power >= 8 {
+            outputs.echo_core_fragments = 1;
+        }
+        outputs
+    }
+
+    fn next_weapon_tier(tier: GearTier) -> Option<GearTier> {
+        match tier {
+            GearTier::Common => Some(GearTier::Rare),
+            GearTier::Rare => Some(GearTier::Epic),
+            GearTier::Epic => Some(GearTier::Legendary),
+            GearTier::Legendary => Some(GearTier::Mythical),
+            GearTier::Mythical | GearTier::Basic | GearTier::Improved | GearTier::Refined => None,
+        }
+    }
+
+    fn forge_cost(tier: GearTier) -> Option<ResourceBundle> {
+        let mut cost = ResourceBundle::default();
+        match tier {
+            GearTier::Common => {
+                cost.gear_parts = 15;
+                cost.element_shards = 5;
+            }
+            GearTier::Rare => {
+                cost.gear_parts = 25;
+                cost.element_shards = 10;
+            }
+            GearTier::Epic => {
+                cost.gear_parts = 40;
+                cost.element_shards = 15;
+                cost.forge_stars = 1;
+            }
+            GearTier::Legendary => {
+                cost.gear_parts = 60;
+                cost.element_shards = 20;
+                cost.echo_cores = 1;
+                cost.forge_stars = 3;
+            }
+            GearTier::Mythical | GearTier::Basic | GearTier::Improved | GearTier::Refined => {
+                return None;
+            }
+        }
+        Some(cost)
+    }
+
+    fn forge_gate_trial(tier: GearTier) -> Option<TrialId> {
+        match tier {
+            GearTier::Epic => Some(1),
+            GearTier::Legendary => Some(3),
+            _ => None,
+        }
+    }
+
+    fn trial_spec(trial_id: TrialId) -> Option<NexusTrialSpec> {
+        let mut rewards = ResourceBundle::default();
+        let spec = match trial_id {
+            1 => {
+                rewards.gear_parts = 12;
+                rewards.forge_stars = 1;
+                NexusTrialSpec {
+                    trial_type: TrialType::Weapon,
+                    board_id: 2,
+                    rewards,
+                }
+            }
+            2 => {
+                rewards.element_shards = 8;
+                rewards.forge_stars = 1;
+                NexusTrialSpec {
+                    trial_type: TrialType::Element,
+                    board_id: 2,
+                    rewards,
+                }
+            }
+            3 => {
+                rewards.echo_core_fragments = 2;
+                rewards.echo_cores = 1;
+                rewards.forge_stars = 2;
+                NexusTrialSpec {
+                    trial_type: TrialType::Season,
+                    board_id: 3,
+                    rewards,
+                }
+            }
+            _ => return None,
+        };
+        Some(spec)
+    }
+}
+
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
@@ -705,6 +957,9 @@ pub mod pallet {
         /// A runtime-provided hook for checking whether a card is currently part of the owner's
         /// gameplay "current hand".
         type HandChecker: crate::HandChecker<Self::AccountId>;
+
+        /// Runtime-selected Nexus season rules and deterministic lookup tables.
+        type SeasonRules: NexusSeasonRules;
 
         /// Fixed pack mint price (in native `COIN` base units).
         #[pallet::constant]
@@ -2378,7 +2633,8 @@ pub mod pallet {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
 
-            let (slot_type, tier, power, spell_slots, cost) = Self::nexus_gear_recipe(recipe_id)?;
+            let (slot_type, tier, power, spell_slots, cost, season_id) =
+                Self::nexus_gear_recipe(recipe_id)?;
             Self::spend_nexus_resources(&player, cost)?;
             let gear_id = NextNexusGearId::<T>::get();
             let next_gear_id = gear_id
@@ -2396,7 +2652,7 @@ pub mod pallet {
                     power,
                     spell_slots,
                     equipped_card_id: None,
-                    season_id: 1,
+                    season_id,
                     config_version: config.config_version,
                 },
             );
@@ -2764,7 +3020,7 @@ pub mod pallet {
                     account_id: player,
                     amount: granted.forge_stars,
                     reason: Self::nexus_reason(b"trial-complete")?,
-                    season: 1,
+                    season: T::SeasonRules::season_id(),
                 });
             }
             Ok(())
@@ -3869,123 +4125,39 @@ pub mod pallet {
                 u16,
                 BoundedNexusSpellSlots<T>,
                 ResourceBundle,
+                SeasonId,
             ),
             Error<T>,
         > {
-            let mut cost = ResourceBundle::default();
-            let recipe = match recipe_id {
-                1 => {
-                    cost.gear_parts = 10;
-                    cost.element_shards = 2;
-                    (
-                        GearSlotType::Weapon,
-                        GearTier::Common,
-                        2,
-                        Self::nexus_spell_slots([
-                            SpellSlotKind::Element(Element::Fire),
-                            SpellSlotKind::Open,
-                            SpellSlotKind::Locked,
-                        ])?,
-                    )
-                }
-                2 => {
-                    cost.gear_parts = 8;
-                    cost.element_shards = 2;
-                    (
-                        GearSlotType::Armor,
-                        GearTier::Common,
-                        1,
-                        Self::nexus_spell_slots([
-                            SpellSlotKind::Element(Element::Earth),
-                            SpellSlotKind::Locked,
-                            SpellSlotKind::Locked,
-                        ])?,
-                    )
-                }
-                3 => {
-                    cost.gear_parts = 6;
-                    (
-                        GearSlotType::Accessory,
-                        GearTier::Common,
-                        1,
-                        Self::nexus_spell_slots([
-                            SpellSlotKind::Open,
-                            SpellSlotKind::Locked,
-                            SpellSlotKind::Locked,
-                        ])?,
-                    )
-                }
-                _ => return Err(Error::<T>::NexusUnknownRecipe),
-            };
-            Ok((recipe.0, recipe.1, recipe.2, recipe.3, cost))
+            let recipe =
+                T::SeasonRules::gear_recipe(recipe_id).ok_or(Error::<T>::NexusUnknownRecipe)?;
+            let spell_slots = Self::nexus_spell_slots(recipe.spell_slots)?;
+            Ok((
+                recipe.slot_type,
+                recipe.tier,
+                recipe.power,
+                spell_slots,
+                recipe.cost,
+                recipe.season_id,
+            ))
         }
 
         fn nexus_spell_recipe(recipe_id: u32) -> Result<(Element, u16, ResourceBundle), Error<T>> {
-            let mut cost = ResourceBundle::default();
-            cost.element_shards = 3;
-            let element = match recipe_id {
-                1 => Element::Fire,
-                2 => Element::Earth,
-                3 => Element::Water,
-                4 => Element::Wind,
-                _ => return Err(Error::<T>::NexusTrialMissing),
-            };
-            Ok((element, 1, cost))
+            let recipe =
+                T::SeasonRules::spell_recipe(recipe_id).ok_or(Error::<T>::NexusTrialMissing)?;
+            Ok((recipe.element, recipe.power, recipe.cost))
         }
 
         fn nexus_salvage_outputs(card: &CollectionCardOf<T>) -> ResourceBundle {
-            let mut outputs = ResourceBundle::default();
-            outputs.gear_parts = 4u32.saturating_add(u32::from(card.card_power / 2));
-            outputs.element_shards = if card.element_profile.minor.is_some() {
-                2
-            } else {
-                1
-            };
-            if card.kind == NexusCardKind::Boss || card.card_power >= 8 {
-                outputs.echo_core_fragments = 1;
-            }
-            outputs
+            T::SeasonRules::salvage_outputs(card.kind, card.card_power, card.element_profile)
         }
 
         fn nexus_next_weapon_tier(tier: GearTier) -> Result<GearTier, Error<T>> {
-            match tier {
-                GearTier::Common => Ok(GearTier::Rare),
-                GearTier::Rare => Ok(GearTier::Epic),
-                GearTier::Epic => Ok(GearTier::Legendary),
-                GearTier::Legendary => Ok(GearTier::Mythical),
-                GearTier::Mythical | GearTier::Basic | GearTier::Improved | GearTier::Refined => {
-                    Err(Error::<T>::NexusWeaponTierInvalid)
-                }
-            }
+            T::SeasonRules::next_weapon_tier(tier).ok_or(Error::<T>::NexusWeaponTierInvalid)
         }
 
         fn nexus_forge_cost(tier: GearTier) -> Result<ResourceBundle, Error<T>> {
-            let mut cost = ResourceBundle::default();
-            match tier {
-                GearTier::Common => {
-                    cost.gear_parts = 15;
-                    cost.element_shards = 5;
-                }
-                GearTier::Rare => {
-                    cost.gear_parts = 25;
-                    cost.element_shards = 10;
-                }
-                GearTier::Epic => {
-                    cost.gear_parts = 40;
-                    cost.element_shards = 15;
-                    cost.forge_stars = 1;
-                }
-                GearTier::Legendary => {
-                    cost.gear_parts = 60;
-                    cost.element_shards = 20;
-                    cost.echo_cores = 1;
-                    cost.forge_stars = 3;
-                }
-                GearTier::Mythical | GearTier::Basic | GearTier::Improved | GearTier::Refined => {
-                    return Err(Error::<T>::NexusWeaponTierInvalid)
-                }
-            }
-            Ok(cost)
+            T::SeasonRules::forge_cost(tier).ok_or(Error::<T>::NexusWeaponTierInvalid)
         }
 
         fn ensure_nexus_trial_completed(owner: &T::AccountId, trial_id: TrialId) -> DispatchResult {
@@ -3997,37 +4169,19 @@ pub mod pallet {
         }
 
         fn ensure_nexus_forge_gate(owner: &T::AccountId, tier: GearTier) -> DispatchResult {
-            match tier {
-                GearTier::Epic => Self::ensure_nexus_trial_completed(owner, 1),
-                GearTier::Legendary => Self::ensure_nexus_trial_completed(owner, 3),
-                _ => Ok(()),
+            if let Some(trial_id) = T::SeasonRules::forge_gate_trial(tier) {
+                Self::ensure_nexus_trial_completed(owner, trial_id)
+            } else {
+                Ok(())
             }
         }
 
         fn nexus_trial_spec(
             trial_id: TrialId,
         ) -> Result<(TrialType, BoardId, ResourceBundle), Error<T>> {
-            let mut rewards = ResourceBundle::default();
-            let spec = match trial_id {
-                1 => {
-                    rewards.gear_parts = 12;
-                    rewards.forge_stars = 1;
-                    (TrialType::Weapon, 2, rewards)
-                }
-                2 => {
-                    rewards.element_shards = 8;
-                    rewards.forge_stars = 1;
-                    (TrialType::Element, 2, rewards)
-                }
-                3 => {
-                    rewards.echo_core_fragments = 2;
-                    rewards.echo_cores = 1;
-                    rewards.forge_stars = 2;
-                    (TrialType::Season, 3, rewards)
-                }
-                _ => return Err(Error::<T>::NexusUnknownRecipe),
-            };
-            Ok(spec)
+            let spec =
+                T::SeasonRules::trial_spec(trial_id).ok_or(Error::<T>::NexusUnknownRecipe)?;
+            Ok((spec.trial_type, spec.board_id, spec.rewards))
         }
 
         fn nexus_card_build_power(
@@ -4070,29 +4224,8 @@ pub mod pallet {
         }
 
         fn nexus_board_layout(board_id: BoardId) -> Result<NexusBoardLayout, Error<T>> {
-            let layout = match board_id {
-                0 => NexusBoardLayout {
-                    board_id,
-                    locked_cells: 0,
-                    mana_wells: 0,
-                },
-                1 => NexusBoardLayout {
-                    board_id,
-                    locked_cells: (1u16 << 0) | (1u16 << 15),
-                    mana_wells: 0,
-                },
-                2 => NexusBoardLayout {
-                    board_id,
-                    locked_cells: (1u16 << 3) | (1u16 << 12),
-                    mana_wells: (1u16 << 5) | (1u16 << 10),
-                },
-                3 => NexusBoardLayout {
-                    board_id,
-                    locked_cells: (1u16 << 0) | (1u16 << 7) | (1u16 << 8) | (1u16 << 15),
-                    mana_wells: (1u16 << 5) | (1u16 << 10),
-                },
-                _ => return Err(Error::<T>::UnknownNexusBoard),
-            };
+            let layout =
+                T::SeasonRules::board_layout(board_id).ok_or(Error::<T>::UnknownNexusBoard)?;
             Self::ensure_nexus_board_layout_valid(layout)?;
             Ok(layout)
         }
@@ -4217,7 +4350,7 @@ pub mod pallet {
             );
             if mode == MatchMode::Ranked {
                 ensure!(
-                    team_power <= NEXUS_RANKED_TEAM_POWER_LIMIT,
+                    team_power <= T::SeasonRules::ranked_team_power_limit(),
                     Error::<T>::NexusTeamPowerLimitExceeded
                 );
             }

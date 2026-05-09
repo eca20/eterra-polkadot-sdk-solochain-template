@@ -5,11 +5,12 @@ use crate::{
     GearTier, GeneProfile, ListedByOwner, MatchMode, MatchStatus, NextCardId, NextNexusGearId,
     NextNexusMatchId, NextStarterGrantId, NextVaultVariantId, NexusAccountStates, NexusCardKind,
     NexusCardOrigin, NexusCollectionCards, NexusEquippedGear, NexusGearItems, NexusMatchBoards,
-    NexusMatches, NexusOverflowCards, NexusOverflowSubjectCounts, NexusResources, NexusSpellbook,
-    NexusStorageLocation, NexusSubjectCopyCounts, NexusTeams, NexusTrials,
-    NexusVaultVariantsByOwner, PackCardInProgress, PackInProgress, PlayerPacks, RankValue,
-    ResourceKind, SeasonCollectionIds, SeasonCollectionStatus, SeasonCollections, SpellSlotKind,
-    StarterGrants, StarterPath, TrialStatus, VaultVariants,
+    NexusMatches, NexusOverflowCards, NexusOverflowSubjectCounts, NexusResources,
+    NexusSeasonOneRules, NexusSeasonRules, NexusSpellbook, NexusStorageLocation,
+    NexusSubjectCopyCounts, NexusTeams, NexusTrials, NexusVaultVariantsByOwner, PackCardInProgress,
+    PackInProgress, PlayerPacks, RankValue, ResourceKind, SeasonCollectionIds,
+    SeasonCollectionStatus, SeasonCollections, SpellSlotKind, StarterGrants, StarterPath,
+    TrialStatus, TrialType, VaultVariants,
 };
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok, BoundedBTreeSet, BoundedVec};
@@ -222,6 +223,200 @@ fn nexus_config_defaults_use_season_1_constants() {
         assert_eq!(config.team_size, 5);
         assert_eq!(config.updated_at, System::block_number());
     });
+}
+
+#[test]
+fn season_one_rules_expose_expected_board_layouts() {
+    assert_eq!(NexusSeasonOneRules::season_id(), 1);
+    assert_eq!(NexusSeasonOneRules::ranked_team_power_limit(), 25);
+
+    let board_0 = NexusSeasonOneRules::board_layout(0).expect("board 0");
+    assert_eq!(board_0.locked_cells, 0);
+    assert_eq!(board_0.mana_wells, 0);
+
+    let board_1 = NexusSeasonOneRules::board_layout(1).expect("board 1");
+    assert_eq!(board_1.locked_cells, (1u16 << 0) | (1u16 << 15));
+    assert_eq!(board_1.mana_wells, 0);
+
+    let board_2 = NexusSeasonOneRules::board_layout(2).expect("board 2");
+    assert_eq!(board_2.locked_cells, (1u16 << 3) | (1u16 << 12));
+    assert_eq!(board_2.mana_wells, (1u16 << 5) | (1u16 << 10));
+
+    let board_3 = NexusSeasonOneRules::board_layout(3).expect("board 3");
+    assert_eq!(
+        board_3.locked_cells,
+        (1u16 << 0) | (1u16 << 7) | (1u16 << 8) | (1u16 << 15)
+    );
+    assert_eq!(board_3.mana_wells, (1u16 << 5) | (1u16 << 10));
+
+    assert!(NexusSeasonOneRules::board_layout(99).is_none());
+}
+
+#[test]
+fn season_one_rules_expose_expected_workshop_recipes() {
+    let weapon = NexusSeasonOneRules::gear_recipe(1).expect("weapon recipe");
+    assert_eq!(weapon.slot_type, GearSlotType::Weapon);
+    assert_eq!(weapon.tier, GearTier::Common);
+    assert_eq!(weapon.power, 2);
+    assert_eq!(
+        weapon.spell_slots,
+        [
+            SpellSlotKind::Element(Element::Fire),
+            SpellSlotKind::Open,
+            SpellSlotKind::Locked,
+        ]
+    );
+    assert_eq!(weapon.cost.gear_parts, 10);
+    assert_eq!(weapon.cost.element_shards, 2);
+    assert_eq!(weapon.season_id, 1);
+
+    let armor = NexusSeasonOneRules::gear_recipe(2).expect("armor recipe");
+    assert_eq!(armor.slot_type, GearSlotType::Armor);
+    assert_eq!(armor.power, 1);
+    assert_eq!(
+        armor.spell_slots,
+        [
+            SpellSlotKind::Element(Element::Earth),
+            SpellSlotKind::Locked,
+            SpellSlotKind::Locked,
+        ]
+    );
+    assert_eq!(armor.cost.gear_parts, 8);
+    assert_eq!(armor.cost.element_shards, 2);
+
+    let accessory = NexusSeasonOneRules::gear_recipe(3).expect("accessory recipe");
+    assert_eq!(accessory.slot_type, GearSlotType::Accessory);
+    assert_eq!(accessory.power, 1);
+    assert_eq!(
+        accessory.spell_slots,
+        [
+            SpellSlotKind::Open,
+            SpellSlotKind::Locked,
+            SpellSlotKind::Locked,
+        ]
+    );
+    assert_eq!(accessory.cost.gear_parts, 6);
+    assert_eq!(accessory.cost.element_shards, 0);
+    assert!(NexusSeasonOneRules::gear_recipe(99).is_none());
+
+    for (recipe_id, element) in [
+        (1, Element::Fire),
+        (2, Element::Earth),
+        (3, Element::Water),
+        (4, Element::Wind),
+    ] {
+        let spell = NexusSeasonOneRules::spell_recipe(recipe_id).expect("spell recipe");
+        assert_eq!(spell.element, element);
+        assert_eq!(spell.power, 1);
+        assert_eq!(spell.cost.element_shards, 3);
+    }
+    assert!(NexusSeasonOneRules::spell_recipe(99).is_none());
+}
+
+#[test]
+fn season_one_rules_salvage_outputs_match_existing_determinism() {
+    let basic = NexusSeasonOneRules::salvage_outputs(
+        NexusCardKind::Monster,
+        4,
+        ElementProfile {
+            main: Element::Fire,
+            minor: None,
+            resistance: None,
+            weakness: None,
+        },
+    );
+    assert_eq!(basic.gear_parts, 6);
+    assert_eq!(basic.element_shards, 1);
+    assert_eq!(basic.echo_core_fragments, 0);
+    assert_eq!(basic.eon_coins, 0);
+
+    let boss = NexusSeasonOneRules::salvage_outputs(
+        NexusCardKind::Boss,
+        8,
+        ElementProfile {
+            main: Element::Fire,
+            minor: Some(Element::Wind),
+            resistance: None,
+            weakness: None,
+        },
+    );
+    assert_eq!(boss.gear_parts, 8);
+    assert_eq!(boss.element_shards, 2);
+    assert_eq!(boss.echo_core_fragments, 1);
+    assert_eq!(boss.eon_coins, 0);
+}
+
+#[test]
+fn season_one_rules_expose_expected_forge_and_trial_tables() {
+    assert_eq!(
+        NexusSeasonOneRules::next_weapon_tier(GearTier::Common),
+        Some(GearTier::Rare)
+    );
+    assert_eq!(
+        NexusSeasonOneRules::next_weapon_tier(GearTier::Rare),
+        Some(GearTier::Epic)
+    );
+    assert_eq!(
+        NexusSeasonOneRules::next_weapon_tier(GearTier::Epic),
+        Some(GearTier::Legendary)
+    );
+    assert_eq!(
+        NexusSeasonOneRules::next_weapon_tier(GearTier::Legendary),
+        Some(GearTier::Mythical)
+    );
+    assert_eq!(
+        NexusSeasonOneRules::next_weapon_tier(GearTier::Mythical),
+        None
+    );
+
+    let common_cost = NexusSeasonOneRules::forge_cost(GearTier::Common).expect("common cost");
+    assert_eq!(common_cost.gear_parts, 15);
+    assert_eq!(common_cost.element_shards, 5);
+    assert_eq!(common_cost.forge_stars, 0);
+
+    let epic_cost = NexusSeasonOneRules::forge_cost(GearTier::Epic).expect("epic cost");
+    assert_eq!(epic_cost.gear_parts, 40);
+    assert_eq!(epic_cost.element_shards, 15);
+    assert_eq!(epic_cost.forge_stars, 1);
+
+    let legendary_cost =
+        NexusSeasonOneRules::forge_cost(GearTier::Legendary).expect("legendary cost");
+    assert_eq!(legendary_cost.gear_parts, 60);
+    assert_eq!(legendary_cost.element_shards, 20);
+    assert_eq!(legendary_cost.echo_cores, 1);
+    assert_eq!(legendary_cost.forge_stars, 3);
+    assert!(NexusSeasonOneRules::forge_cost(GearTier::Mythical).is_none());
+
+    assert_eq!(
+        NexusSeasonOneRules::forge_gate_trial(GearTier::Epic),
+        Some(1)
+    );
+    assert_eq!(
+        NexusSeasonOneRules::forge_gate_trial(GearTier::Legendary),
+        Some(3)
+    );
+    assert_eq!(NexusSeasonOneRules::forge_gate_trial(GearTier::Rare), None);
+
+    let weapon_trial = NexusSeasonOneRules::trial_spec(1).expect("weapon trial");
+    assert_eq!(weapon_trial.trial_type, TrialType::Weapon);
+    assert_eq!(weapon_trial.board_id, 2);
+    assert_eq!(weapon_trial.rewards.gear_parts, 12);
+    assert_eq!(weapon_trial.rewards.forge_stars, 1);
+
+    let element_trial = NexusSeasonOneRules::trial_spec(2).expect("element trial");
+    assert_eq!(element_trial.trial_type, TrialType::Element);
+    assert_eq!(element_trial.board_id, 2);
+    assert_eq!(element_trial.rewards.element_shards, 8);
+    assert_eq!(element_trial.rewards.forge_stars, 1);
+
+    let season_trial = NexusSeasonOneRules::trial_spec(3).expect("season trial");
+    assert_eq!(season_trial.trial_type, TrialType::Season);
+    assert_eq!(season_trial.board_id, 3);
+    assert_eq!(season_trial.rewards.echo_core_fragments, 2);
+    assert_eq!(season_trial.rewards.echo_cores, 1);
+    assert_eq!(season_trial.rewards.forge_stars, 2);
+
+    assert!(NexusSeasonOneRules::trial_spec(99).is_none());
 }
 
 #[test]
