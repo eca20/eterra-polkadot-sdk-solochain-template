@@ -373,6 +373,24 @@ pub enum SystemKey {
     Trading,
 }
 
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum NexusLockTarget {
+    Account,
+    Card,
+    VaultVariant,
+    Gear,
+    Spell,
+    Team,
+    Match,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusControlInfo<AccountId, BlockNumber, BReason> {
+    pub reason: BReason,
+    pub actor: AccountId,
+    pub updated_at: BlockNumber,
+}
+
 #[derive(
     Clone, Copy, Encode, Decode, Default, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug,
 )]
@@ -904,6 +922,11 @@ pub mod pallet {
         MatchState<<T as frame_system::Config>::AccountId, BoundedNexusMatchPlayers<T>>;
     type TrialStateOf<T> = TrialState<<T as frame_system::Config>::AccountId>;
     type NexusConfigStateOf<T> = NexusConfigState<BlockNumberFor<T>>;
+    type NexusControlInfoOf<T> = NexusControlInfo<
+        <T as frame_system::Config>::AccountId,
+        BlockNumberFor<T>,
+        BoundedNexusReason<T>,
+    >;
 
     #[derive(Clone, Copy)]
     struct SelectedSeasonAsset {
@@ -1522,6 +1545,31 @@ pub mod pallet {
     #[pallet::getter(fn nexus_config)]
     pub type NexusConfig<T: Config> = StorageValue<_, NexusConfigStateOf<T>, OptionQuery>;
 
+    /// Paused Nexus systems. Presence means the keyed system rejects player actions.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_system_pause)]
+    pub type NexusSystemPauses<T: Config> =
+        StorageMap<_, Blake2_128Concat, SystemKey, NexusControlInfoOf<T>, OptionQuery>;
+
+    /// Locked Nexus assets by target type and numeric runtime id.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_asset_lock)]
+    pub type NexusAssetLocks<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        NexusLockTarget,
+        Blake2_128Concat,
+        u32,
+        NexusControlInfoOf<T>,
+        OptionQuery,
+    >;
+
+    /// Locked Nexus accounts. Presence blocks player-facing Nexus actions for that account.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_account_lock)]
+    pub type NexusAccountLocks<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, NexusControlInfoOf<T>, OptionQuery>;
+
     // ------------------
     // Events
     // ------------------
@@ -1883,7 +1931,7 @@ pub mod pallet {
         },
         /// A Nexus asset was locked.
         AssetLocked {
-            asset_type: SystemKey,
+            asset_type: NexusLockTarget,
             asset_id: u32,
             reason: BoundedNexusReason<T>,
             actor: T::AccountId,
@@ -1891,7 +1939,7 @@ pub mod pallet {
         },
         /// A Nexus asset was unlocked.
         AssetUnlocked {
-            asset_type: SystemKey,
+            asset_type: NexusLockTarget,
             asset_id: u32,
             actor: T::AccountId,
             timestamp: BlockNumberFor<T>,
@@ -1924,6 +1972,19 @@ pub mod pallet {
             player: T::AccountId,
             card_id: u32,
             values: [u8; 4],
+        },
+        /// A Nexus account was locked.
+        AccountLocked {
+            account_id: T::AccountId,
+            reason: BoundedNexusReason<T>,
+            actor: T::AccountId,
+            timestamp: BlockNumberFor<T>,
+        },
+        /// A Nexus account was unlocked.
+        AccountUnlocked {
+            account_id: T::AccountId,
+            actor: T::AccountId,
+            timestamp: BlockNumberFor<T>,
         },
     }
 
@@ -2064,6 +2125,20 @@ pub mod pallet {
         NexusTrialAlreadyCompleted,
         /// Nexus Trial must be started before completion.
         NexusTrialNotStarted,
+        /// The requested Nexus system is paused by an admin safety control.
+        NexusSystemPaused,
+        /// The requested Nexus account is locked by an admin safety control.
+        NexusAccountLocked,
+        /// The requested Nexus asset is locked by an admin safety control.
+        NexusAssetLocked,
+        /// Nexus lock or pause reason must be present.
+        NexusReasonRequired,
+        /// Nexus lock or pause reason exceeds the runtime maximum.
+        NexusReasonTooLong,
+        /// The requested Nexus lock target is not valid for this call.
+        NexusLockTargetInvalid,
+        /// The requested Nexus config update is invalid.
+        NexusConfigInvalid,
         /// Nexus match requires two different players.
         NexusInvalidMatchPlayers,
         /// No more card capacity can be purchased because the hard storage ceiling was reached.
@@ -2246,6 +2321,8 @@ pub mod pallet {
         pub fn claim_starter_grant(origin: OriginFor<T>, path: StarterPath) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_account_unlocked(&player)?;
+            Self::ensure_nexus_system_available(SystemKey::Claims)?;
             ensure!(
                 !StarterGrants::<T>::contains_key(&player),
                 Error::<T>::NexusStarterGrantAlreadyClaimed
@@ -2297,6 +2374,8 @@ pub mod pallet {
         ) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_account_unlocked(&player)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Team, team_id)?;
             Self::validate_nexus_team_size(card_ids.len() as u32)?;
 
             let (bounded_card_ids, team_power) =
@@ -2340,6 +2419,10 @@ pub mod pallet {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
             T::AccessControl::ensure_whitelisted(&opponent)?;
+            Self::ensure_nexus_account_unlocked(&player)?;
+            Self::ensure_nexus_account_unlocked(&opponent)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Team, team_id)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Team, opponent_team_id)?;
             ensure!(player != opponent, Error::<T>::NexusInvalidMatchPlayers);
 
             let player_team = Self::load_valid_nexus_team(&player, team_id, mode)?;
@@ -2415,6 +2498,8 @@ pub mod pallet {
         ) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_account_unlocked(&player)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Match, match_id)?;
 
             let mut match_state =
                 NexusMatches::<T>::get(match_id).ok_or(Error::<T>::NexusMatchMissing)?;
@@ -2538,6 +2623,7 @@ pub mod pallet {
         pub fn salvage_nexus_card(origin: OriginFor<T>, card_record_id: u32) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_system_available(SystemKey::Salvage)?;
 
             let mut card = Self::ensure_nexus_card_owned(&player, card_record_id)?;
             ensure!(
@@ -2573,6 +2659,7 @@ pub mod pallet {
         ) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_system_available(SystemKey::Seal)?;
 
             let mut card = Self::ensure_nexus_card_owned(&player, card_record_id)?;
             ensure!(
@@ -2632,6 +2719,8 @@ pub mod pallet {
         pub fn craft_nexus_gear(origin: OriginFor<T>, recipe_id: u32) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_account_unlocked(&player)?;
+            Self::ensure_nexus_system_available(SystemKey::Forge)?;
 
             let (slot_type, tier, power, spell_slots, cost, season_id) =
                 Self::nexus_gear_recipe(recipe_id)?;
@@ -2679,9 +2768,11 @@ pub mod pallet {
         ) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_system_available(SystemKey::Forge)?;
             Self::ensure_nexus_card_buildable(&player, card_record_id)?;
 
             let mut gear = NexusGearItems::<T>::get(gear_id).ok_or(Error::<T>::NexusGearMissing)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Gear, gear_id)?;
             ensure!(gear.owner == player, Error::<T>::NexusGearNotOwned);
             ensure!(
                 gear.equipped_card_id.is_none(),
@@ -2716,9 +2807,11 @@ pub mod pallet {
         ) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_system_available(SystemKey::Forge)?;
             Self::ensure_nexus_card_buildable(&player, card_record_id)?;
 
             let mut gear = NexusGearItems::<T>::get(gear_id).ok_or(Error::<T>::NexusGearMissing)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Gear, gear_id)?;
             ensure!(gear.owner == player, Error::<T>::NexusGearNotOwned);
             ensure!(
                 gear.equipped_card_id == Some(card_record_id),
@@ -2745,6 +2838,8 @@ pub mod pallet {
         pub fn craft_nexus_spell(origin: OriginFor<T>, recipe_id: u32) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_account_unlocked(&player)?;
+            Self::ensure_nexus_system_available(SystemKey::Forge)?;
 
             let (element, power, cost) = Self::nexus_spell_recipe(recipe_id)?;
             Self::spend_nexus_resources(&player, cost)?;
@@ -2788,10 +2883,12 @@ pub mod pallet {
         ) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_system_available(SystemKey::Forge)?;
             Self::ensure_nexus_card_buildable(&player, card_record_id)?;
 
             let mut spell =
                 NexusSpellbook::<T>::get(spell_id).ok_or(Error::<T>::NexusSpellMissing)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Spell, spell_id)?;
             ensure!(spell.owner == player, Error::<T>::NexusSpellNotOwned);
             ensure!(
                 spell.slotted_to.is_none(),
@@ -2799,6 +2896,7 @@ pub mod pallet {
             );
 
             let mut gear = NexusGearItems::<T>::get(gear_id).ok_or(Error::<T>::NexusGearMissing)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Gear, gear_id)?;
             ensure!(gear.owner == player, Error::<T>::NexusGearNotOwned);
             ensure!(
                 gear.equipped_card_id == Some(card_record_id),
@@ -2848,9 +2946,11 @@ pub mod pallet {
         ) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_system_available(SystemKey::Forge)?;
             Self::ensure_nexus_card_buildable(&player, card_record_id)?;
 
             let mut gear = NexusGearItems::<T>::get(gear_id).ok_or(Error::<T>::NexusGearMissing)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Gear, gear_id)?;
             ensure!(gear.owner == player, Error::<T>::NexusGearNotOwned);
             ensure!(
                 gear.equipped_card_id == Some(card_record_id),
@@ -2867,6 +2967,7 @@ pub mod pallet {
 
             let mut spell =
                 NexusSpellbook::<T>::get(spell_id).ok_or(Error::<T>::NexusSpellMissing)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Spell, spell_id)?;
             ensure!(spell.owner == player, Error::<T>::NexusSpellNotOwned);
             ensure!(
                 spell.slotted_to == Some((gear_id, slot_index)),
@@ -2899,8 +3000,11 @@ pub mod pallet {
         ) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_account_unlocked(&player)?;
+            Self::ensure_nexus_system_available(SystemKey::Forge)?;
 
             let mut gear = NexusGearItems::<T>::get(gear_id).ok_or(Error::<T>::NexusGearMissing)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Gear, gear_id)?;
             ensure!(gear.owner == player, Error::<T>::NexusGearNotOwned);
             ensure!(
                 gear.slot_type == GearSlotType::Weapon,
@@ -2940,6 +3044,8 @@ pub mod pallet {
         pub fn start_nexus_trial(origin: OriginFor<T>, trial_id: TrialId) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_account_unlocked(&player)?;
+            Self::ensure_nexus_system_available(SystemKey::Forge)?;
 
             let (trial_type, board_id, _) = Self::nexus_trial_spec(trial_id)?;
             if let Some(existing) = NexusTrials::<T>::get(&player, trial_id) {
@@ -2984,6 +3090,8 @@ pub mod pallet {
         ) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::ensure_nexus_account_unlocked(&player)?;
+            Self::ensure_nexus_system_available(SystemKey::Forge)?;
 
             let (_, _, rewards) = Self::nexus_trial_spec(trial_id)?;
             let mut trial =
@@ -3023,6 +3131,225 @@ pub mod pallet {
                     season: T::SeasonRules::season_id(),
                 });
             }
+            Ok(())
+        }
+
+        /// Pause a Nexus system until an admin explicitly unpauses it.
+        #[pallet::call_index(41)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn pause_nexus_system(
+            origin: OriginFor<T>,
+            system_key: SystemKey,
+            reason: Vec<u8>,
+        ) -> DispatchResult {
+            let actor = ensure_signed(origin)?;
+            Self::ensure_season_admin(&actor)?;
+            let bounded_reason = Self::bound_nexus_reason(reason)?;
+            let now = <frame_system::Pallet<T>>::block_number();
+
+            NexusSystemPauses::<T>::insert(
+                system_key,
+                NexusControlInfo {
+                    reason: bounded_reason.clone(),
+                    actor: actor.clone(),
+                    updated_at: now,
+                },
+            );
+
+            Self::deposit_event(Event::SystemPaused {
+                system_key,
+                reason: bounded_reason,
+                actor,
+                timestamp: now,
+            });
+            Ok(())
+        }
+
+        /// Remove a Nexus system pause.
+        #[pallet::call_index(42)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn unpause_nexus_system(origin: OriginFor<T>, system_key: SystemKey) -> DispatchResult {
+            let actor = ensure_signed(origin)?;
+            Self::ensure_season_admin(&actor)?;
+            let now = <frame_system::Pallet<T>>::block_number();
+
+            NexusSystemPauses::<T>::remove(system_key);
+            Self::deposit_event(Event::SystemUnpaused {
+                system_key,
+                actor,
+                timestamp: now,
+            });
+            Ok(())
+        }
+
+        /// Lock a numeric Nexus asset id with a player-safe reason.
+        #[pallet::call_index(43)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn lock_nexus_asset(
+            origin: OriginFor<T>,
+            asset_type: NexusLockTarget,
+            asset_id: u32,
+            reason: Vec<u8>,
+        ) -> DispatchResult {
+            let actor = ensure_signed(origin)?;
+            Self::ensure_season_admin(&actor)?;
+            ensure!(
+                asset_type != NexusLockTarget::Account,
+                Error::<T>::NexusLockTargetInvalid
+            );
+            let bounded_reason = Self::bound_nexus_reason(reason)?;
+            let now = <frame_system::Pallet<T>>::block_number();
+
+            NexusAssetLocks::<T>::insert(
+                asset_type,
+                asset_id,
+                NexusControlInfo {
+                    reason: bounded_reason.clone(),
+                    actor: actor.clone(),
+                    updated_at: now,
+                },
+            );
+
+            Self::deposit_event(Event::AssetLocked {
+                asset_type,
+                asset_id,
+                reason: bounded_reason,
+                actor,
+                timestamp: now,
+            });
+            Ok(())
+        }
+
+        /// Unlock a numeric Nexus asset id.
+        #[pallet::call_index(44)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn unlock_nexus_asset(
+            origin: OriginFor<T>,
+            asset_type: NexusLockTarget,
+            asset_id: u32,
+        ) -> DispatchResult {
+            let actor = ensure_signed(origin)?;
+            Self::ensure_season_admin(&actor)?;
+            ensure!(
+                asset_type != NexusLockTarget::Account,
+                Error::<T>::NexusLockTargetInvalid
+            );
+            let now = <frame_system::Pallet<T>>::block_number();
+
+            NexusAssetLocks::<T>::remove(asset_type, asset_id);
+            Self::deposit_event(Event::AssetUnlocked {
+                asset_type,
+                asset_id,
+                actor,
+                timestamp: now,
+            });
+            Ok(())
+        }
+
+        /// Lock a Nexus account with a player-safe reason.
+        #[pallet::call_index(45)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn lock_nexus_account(
+            origin: OriginFor<T>,
+            account_id: T::AccountId,
+            reason: Vec<u8>,
+        ) -> DispatchResult {
+            let actor = ensure_signed(origin)?;
+            Self::ensure_season_admin(&actor)?;
+            let bounded_reason = Self::bound_nexus_reason(reason)?;
+            let now = <frame_system::Pallet<T>>::block_number();
+
+            NexusAccountLocks::<T>::insert(
+                &account_id,
+                NexusControlInfo {
+                    reason: bounded_reason.clone(),
+                    actor: actor.clone(),
+                    updated_at: now,
+                },
+            );
+
+            Self::deposit_event(Event::AccountLocked {
+                account_id,
+                reason: bounded_reason,
+                actor,
+                timestamp: now,
+            });
+            Ok(())
+        }
+
+        /// Unlock a Nexus account.
+        #[pallet::call_index(46)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn unlock_nexus_account(
+            origin: OriginFor<T>,
+            account_id: T::AccountId,
+        ) -> DispatchResult {
+            let actor = ensure_signed(origin)?;
+            Self::ensure_season_admin(&actor)?;
+            let now = <frame_system::Pallet<T>>::block_number();
+
+            NexusAccountLocks::<T>::remove(&account_id);
+            Self::deposit_event(Event::AccountUnlocked {
+                account_id,
+                actor,
+                timestamp: now,
+            });
+            Ok(())
+        }
+
+        /// Persist a new Nexus config snapshot and emit an audit event.
+        #[pallet::call_index(47)]
+        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[transactional]
+        pub fn set_nexus_config(
+            origin: OriginFor<T>,
+            subject_copy_cap: u32,
+            overflow_total_capacity: u32,
+            overflow_per_subject_capacity: u32,
+            base_vault_capacity: u32,
+            team_size: u32,
+        ) -> DispatchResult {
+            let actor = ensure_signed(origin)?;
+            Self::ensure_season_admin(&actor)?;
+            ensure!(
+                subject_copy_cap > 0
+                    && overflow_total_capacity > 0
+                    && overflow_per_subject_capacity > 0
+                    && overflow_per_subject_capacity <= overflow_total_capacity
+                    && base_vault_capacity > 0
+                    && team_size == T::NexusTeamSize::get(),
+                Error::<T>::NexusConfigInvalid
+            );
+
+            let old_config = Self::current_nexus_config();
+            let new_version = old_config
+                .config_version
+                .checked_add(1)
+                .ok_or(Error::<T>::NexusConfigInvalid)?;
+            let now = <frame_system::Pallet<T>>::block_number();
+            NexusConfig::<T>::put(NexusConfigState {
+                config_version: new_version,
+                subject_copy_cap,
+                overflow_total_capacity,
+                overflow_per_subject_capacity,
+                base_vault_capacity,
+                team_size,
+                updated_at: now,
+            });
+
+            Self::deposit_event(Event::ConfigUpdated {
+                config_key: Self::nexus_reason(b"nexus-config")?,
+                old_version: old_config.config_version,
+                new_version,
+                actor,
+                timestamp: now,
+            });
             Ok(())
         }
 
@@ -4007,17 +4334,52 @@ pub mod pallet {
             Ok(NexusStorageLocation::Overflow)
         }
 
-        fn nexus_reason(reason: &'static [u8]) -> Result<BoundedNexusReason<T>, DispatchError> {
+        fn bound_nexus_reason(reason: Vec<u8>) -> Result<BoundedNexusReason<T>, Error<T>> {
+            ensure!(!reason.is_empty(), Error::<T>::NexusReasonRequired);
             reason
-                .to_vec()
                 .try_into()
-                .map_err(|_| Error::<T>::NexusMetadataUriTooLong.into())
+                .map_err(|_| Error::<T>::NexusReasonTooLong)
+        }
+
+        fn nexus_reason(reason: &'static [u8]) -> Result<BoundedNexusReason<T>, DispatchError> {
+            Self::bound_nexus_reason(reason.to_vec()).map_err(Into::into)
+        }
+
+        fn ensure_nexus_system_available(system_key: SystemKey) -> DispatchResult {
+            ensure!(
+                !NexusSystemPauses::<T>::contains_key(system_key),
+                Error::<T>::NexusSystemPaused
+            );
+            Ok(())
+        }
+
+        fn ensure_nexus_account_unlocked(account_id: &T::AccountId) -> DispatchResult {
+            ensure!(
+                !NexusAccountLocks::<T>::contains_key(account_id),
+                Error::<T>::NexusAccountLocked
+            );
+            Ok(())
+        }
+
+        fn ensure_nexus_asset_unlocked(
+            asset_type: NexusLockTarget,
+            asset_id: u32,
+        ) -> DispatchResult {
+            ensure!(
+                !NexusAssetLocks::<T>::contains_key(asset_type, asset_id),
+                Error::<T>::NexusAssetLocked
+            );
+            Ok(())
         }
 
         fn ensure_nexus_card_owned(
             owner: &T::AccountId,
             card_id: u32,
         ) -> Result<CollectionCardOf<T>, Error<T>> {
+            Self::ensure_nexus_account_unlocked(owner)
+                .map_err(|_| Error::<T>::NexusAccountLocked)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Card, card_id)
+                .map_err(|_| Error::<T>::NexusAssetLocked)?;
             let card =
                 NexusCollectionCards::<T>::get(card_id).ok_or(Error::<T>::UnknownNexusCard)?;
             ensure!(&card.owner == owner, Error::<T>::NotCardOwner);
@@ -4295,6 +4657,10 @@ pub mod pallet {
             owner: &T::AccountId,
             card_id: u32,
         ) -> Result<CollectionCardOf<T>, Error<T>> {
+            Self::ensure_nexus_account_unlocked(owner)
+                .map_err(|_| Error::<T>::NexusAccountLocked)?;
+            Self::ensure_nexus_asset_unlocked(NexusLockTarget::Card, card_id)
+                .map_err(|_| Error::<T>::NexusAssetLocked)?;
             let card =
                 NexusCollectionCards::<T>::get(card_id).ok_or(Error::<T>::UnknownNexusCard)?;
             ensure!(&card.owner == owner, Error::<T>::NotCardOwner);

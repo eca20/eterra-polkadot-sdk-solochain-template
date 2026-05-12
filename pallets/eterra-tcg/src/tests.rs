@@ -3,14 +3,15 @@ use crate::{
     mock::*, ActiveCard, ApexSide, CardArtworkCollectionId, CardCapacityBonus, CardPrices, Cards,
     CardsByOwner, CollectionCard, Element, ElementProfile, Error, Event, ForgeBranch, GearSlotType,
     GearTier, GeneProfile, ListedByOwner, MatchMode, MatchStatus, NextCardId, NextNexusGearId,
-    NextNexusMatchId, NextStarterGrantId, NextVaultVariantId, NexusAccountStates, NexusCardKind,
-    NexusCardOrigin, NexusCollectionCards, NexusEquippedGear, NexusGearItems, NexusMatchBoards,
-    NexusMatches, NexusOverflowCards, NexusOverflowSubjectCounts, NexusResources,
-    NexusSeasonOneRules, NexusSeasonRules, NexusSpellbook, NexusStorageLocation,
-    NexusSubjectCopyCounts, NexusTeams, NexusTrials, NexusVaultVariantsByOwner, PackCardInProgress,
+    NextNexusMatchId, NextStarterGrantId, NextVaultVariantId, NexusAccountLocks,
+    NexusAccountStates, NexusAssetLocks, NexusCardKind, NexusCardOrigin, NexusCollectionCards,
+    NexusEquippedGear, NexusGearItems, NexusLockTarget, NexusMatchBoards, NexusMatches,
+    NexusOverflowCards, NexusOverflowSubjectCounts, NexusResources, NexusSeasonOneRules,
+    NexusSeasonRules, NexusSpellbook, NexusStorageLocation, NexusSubjectCopyCounts,
+    NexusSystemPauses, NexusTeams, NexusTrials, NexusVaultVariantsByOwner, PackCardInProgress,
     PackInProgress, PlayerPacks, RankValue, ResourceKind, SeasonCollectionIds,
     SeasonCollectionStatus, SeasonCollections, SpellSlotKind, StarterGrants, StarterPath,
-    TrialStatus, TrialType, VaultVariants,
+    SystemKey, TrialStatus, TrialType, VaultVariants,
 };
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok, BoundedBTreeSet, BoundedVec};
@@ -417,6 +418,299 @@ fn season_one_rules_expose_expected_forge_and_trial_tables() {
     assert_eq!(season_trial.rewards.forge_stars, 2);
 
     assert!(NexusSeasonOneRules::trial_spec(99).is_none());
+}
+
+#[test]
+fn season_admin_can_pause_and_unpause_nexus_system() {
+    new_test_ext().execute_with(|| {
+        assert_noop!(
+            EterraSlots::pause_nexus_system(
+                RuntimeOrigin::signed(2),
+                SystemKey::Salvage,
+                b"maintenance".to_vec()
+            ),
+            Error::<Test>::NotSeasonAdmin
+        );
+
+        assert_ok!(EterraSlots::pause_nexus_system(
+            RuntimeOrigin::signed(1),
+            SystemKey::Salvage,
+            b"maintenance".to_vec()
+        ));
+        let pause = NexusSystemPauses::<Test>::get(SystemKey::Salvage).expect("pause stored");
+        assert_eq!(pause.actor, 1);
+        assert_eq!(pause.reason.to_vec(), b"maintenance".to_vec());
+        assert_eq!(pause.updated_at, System::block_number());
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::SystemPaused {
+                        system_key,
+                        reason,
+                        actor,
+                        timestamp,
+                    }) if *system_key == SystemKey::Salvage
+                        && reason.to_vec() == b"maintenance".to_vec()
+                        && *actor == 1
+                        && *timestamp == System::block_number()
+                )
+            },
+            "SystemPaused",
+        );
+
+        assert_ok!(EterraSlots::unpause_nexus_system(
+            RuntimeOrigin::signed(1),
+            SystemKey::Salvage
+        ));
+        assert!(NexusSystemPauses::<Test>::get(SystemKey::Salvage).is_none());
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::SystemUnpaused {
+                        system_key,
+                        actor,
+                        ..
+                    }) if *system_key == SystemKey::Salvage && *actor == 1
+                )
+            },
+            "SystemUnpaused",
+        );
+    });
+}
+
+#[test]
+fn paused_salvage_blocks_and_recovers() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        seed_nexus_card(
+            player,
+            100,
+            42,
+            all_number(2),
+            6,
+            NexusStorageLocation::Collection,
+            profile(Element::Fire, None),
+        );
+        NexusSubjectCopyCounts::<Test>::insert(player, 42, 1);
+
+        assert_ok!(EterraSlots::pause_nexus_system(
+            RuntimeOrigin::signed(1),
+            SystemKey::Salvage,
+            b"review".to_vec()
+        ));
+        assert_noop!(
+            EterraSlots::salvage_nexus_card(RuntimeOrigin::signed(player), 100),
+            Error::<Test>::NexusSystemPaused
+        );
+        assert_eq!(
+            NexusCollectionCards::<Test>::get(100)
+                .expect("card exists")
+                .location,
+            NexusStorageLocation::Collection
+        );
+
+        assert_ok!(EterraSlots::unpause_nexus_system(
+            RuntimeOrigin::signed(1),
+            SystemKey::Salvage
+        ));
+        assert_ok!(EterraSlots::salvage_nexus_card(
+            RuntimeOrigin::signed(player),
+            100
+        ));
+    });
+}
+
+#[test]
+fn account_lock_blocks_player_facing_nexus_actions() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+
+        assert_ok!(EterraSlots::lock_nexus_account(
+            RuntimeOrigin::signed(1),
+            player,
+            b"support-review".to_vec()
+        ));
+        let lock = NexusAccountLocks::<Test>::get(player).expect("account lock stored");
+        assert_eq!(lock.reason.to_vec(), b"support-review".to_vec());
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::AccountLocked {
+                        account_id,
+                        reason,
+                        actor,
+                        ..
+                    }) if *account_id == player
+                        && reason.to_vec() == b"support-review".to_vec()
+                        && *actor == 1
+                )
+            },
+            "AccountLocked",
+        );
+
+        assert_noop!(
+            EterraSlots::claim_starter_grant(RuntimeOrigin::signed(player), StarterPath::Fire),
+            Error::<Test>::NexusAccountLocked
+        );
+        assert_ok!(EterraSlots::unlock_nexus_account(
+            RuntimeOrigin::signed(1),
+            player
+        ));
+        assert!(NexusAccountLocks::<Test>::get(player).is_none());
+        assert_ok!(EterraSlots::claim_starter_grant(
+            RuntimeOrigin::signed(player),
+            StarterPath::Fire
+        ));
+    });
+}
+
+#[test]
+fn asset_locks_block_card_gear_spell_and_match_actions() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let opponent = 3u64;
+        let cards = seed_nexus_team(player, 100);
+        let opponent_cards = seed_nexus_team(opponent, 200);
+        save_seeded_team(player, 1, cards.clone());
+        save_seeded_team(opponent, 1, opponent_cards);
+        seed_workshop_resources(player, 200);
+
+        assert_ok!(EterraSlots::lock_nexus_asset(
+            RuntimeOrigin::signed(1),
+            NexusLockTarget::Card,
+            100,
+            b"card-review".to_vec()
+        ));
+        assert_noop!(
+            EterraSlots::salvage_nexus_card(RuntimeOrigin::signed(player), 100),
+            Error::<Test>::NexusAssetLocked
+        );
+        assert_ok!(EterraSlots::unlock_nexus_asset(
+            RuntimeOrigin::signed(1),
+            NexusLockTarget::Card,
+            100
+        ));
+
+        assert_ok!(EterraSlots::craft_nexus_gear(
+            RuntimeOrigin::signed(player),
+            1
+        ));
+        assert_ok!(EterraSlots::lock_nexus_asset(
+            RuntimeOrigin::signed(1),
+            NexusLockTarget::Gear,
+            0,
+            b"gear-review".to_vec()
+        ));
+        assert_eq!(
+            NexusAssetLocks::<Test>::get(NexusLockTarget::Gear, 0)
+                .expect("gear lock stored")
+                .reason
+                .to_vec(),
+            b"gear-review".to_vec()
+        );
+        assert_noop!(
+            EterraSlots::forge_nexus_weapon(RuntimeOrigin::signed(player), 0, ForgeBranch::Sword),
+            Error::<Test>::NexusAssetLocked
+        );
+        assert_ok!(EterraSlots::unlock_nexus_asset(
+            RuntimeOrigin::signed(1),
+            NexusLockTarget::Gear,
+            0
+        ));
+
+        assert_ok!(EterraSlots::craft_nexus_spell(
+            RuntimeOrigin::signed(player),
+            1
+        ));
+        assert_ok!(EterraSlots::lock_nexus_asset(
+            RuntimeOrigin::signed(1),
+            NexusLockTarget::Spell,
+            0,
+            b"spell-review".to_vec()
+        ));
+        assert_noop!(
+            EterraSlots::slot_nexus_spell(RuntimeOrigin::signed(player), 100, 0, 0, 0),
+            Error::<Test>::NexusAssetLocked
+        );
+        assert_ok!(EterraSlots::unlock_nexus_asset(
+            RuntimeOrigin::signed(1),
+            NexusLockTarget::Spell,
+            0
+        ));
+
+        let (match_id, first, _) = start_seeded_match(player, opponent, 0, MatchMode::Quick);
+        assert_ok!(EterraSlots::lock_nexus_asset(
+            RuntimeOrigin::signed(1),
+            NexusLockTarget::Match,
+            match_id,
+            b"match-review".to_vec()
+        ));
+        let first_card = card_for(first, player, 100, 200, 0);
+        assert_noop!(
+            EterraSlots::play_nexus_match_card(
+                RuntimeOrigin::signed(first),
+                match_id,
+                first_card,
+                0,
+                None
+            ),
+            Error::<Test>::NexusAssetLocked
+        );
+    });
+}
+
+#[test]
+fn nexus_config_update_emits_audit_event() {
+    new_test_ext().execute_with(|| {
+        let old = EterraSlots::current_nexus_config();
+
+        assert_noop!(
+            EterraSlots::set_nexus_config(RuntimeOrigin::signed(2), 5, 30, 2, 20, 5),
+            Error::<Test>::NotSeasonAdmin
+        );
+        assert_noop!(
+            EterraSlots::set_nexus_config(RuntimeOrigin::signed(1), 5, 30, 31, 20, 5),
+            Error::<Test>::NexusConfigInvalid
+        );
+
+        assert_ok!(EterraSlots::set_nexus_config(
+            RuntimeOrigin::signed(1),
+            6,
+            40,
+            3,
+            25,
+            5
+        ));
+        let config = EterraSlots::current_nexus_config();
+        assert_eq!(config.config_version, old.config_version + 1);
+        assert_eq!(config.subject_copy_cap, 6);
+        assert_eq!(config.overflow_total_capacity, 40);
+        assert_eq!(config.overflow_per_subject_capacity, 3);
+        assert_eq!(config.base_vault_capacity, 25);
+        assert_eq!(config.team_size, 5);
+
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::ConfigUpdated {
+                        config_key,
+                        old_version,
+                        new_version,
+                        actor,
+                        ..
+                    }) if config_key.to_vec() == b"nexus-config".to_vec()
+                        && *old_version == old.config_version
+                        && *new_version == old.config_version + 1
+                        && *actor == 1
+                )
+            },
+            "ConfigUpdated",
+        );
+    });
 }
 
 #[test]
