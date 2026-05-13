@@ -96,6 +96,7 @@ rsync_with_remote \
 	--exclude '.git/' \
 	--exclude 'target/' \
 	--exclude 'data/' \
+	--exclude 'deploy/alpha/macmini2010/.artifacts/' \
 	--exclude '.DS_Store' \
 	--exclude 'deploy/macmini2010.env' \
 	--exclude 'deploy/alpha/macmini2010.env' \
