@@ -9,7 +9,7 @@ usage() {
   cat <<'USAGE'
 Usage:
   scripts/deploy.sh build <default|production> [debug|release]
-  scripts/deploy.sh specs <default|production> [out_dir]
+  scripts/deploy.sh specs <default|production> [out_dir] [debug|release]
   scripts/deploy.sh verify-specs [out_dir]
   scripts/deploy.sh verify-production <production-plain.json>
   scripts/deploy.sh finalize-production-spec <default|production> <config.json> [out_dir]
@@ -97,19 +97,20 @@ build_cmd() {
 specs_cmd() {
   local mode="$1"
   local out_dir="${2:-${ROOT_DIR}/chain-specs/generated/${mode}}"
+  local profile="${3:-debug}"
   local node_bin
 
   # specs mode controls which runtime feature set is embedded in the node binary.
-  node_bin="$(node_bin_for_profile debug)"
+  node_bin="$(node_bin_for_profile "$profile")"
 
   if [[ ! -x "$node_bin" ]]; then
-    echo "[deploy] node binary not found at ${node_bin}; building debug binaries first"
-    build_cmd "$mode" debug
+    echo "[deploy] node binary not found at ${node_bin}; building ${profile} binaries first"
+    build_cmd "$mode" "$profile"
   fi
 
   mkdir -p "$out_dir"
 
-  echo "[deploy] generating specs into ${out_dir}"
+  echo "[deploy] generating specs into ${out_dir} with ${profile} node"
   for chain in dev testnet production; do
     "$node_bin" build-spec --disable-default-bootnode --chain "$chain" > "${out_dir}/${chain}-plain.json"
     "$node_bin" build-spec --disable-default-bootnode --chain "${out_dir}/${chain}-plain.json" --raw > "${out_dir}/${chain}-raw.json"

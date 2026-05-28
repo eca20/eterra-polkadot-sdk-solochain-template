@@ -74,7 +74,7 @@ if [[ "$UNSAFE_RPC" != "0" && "$UNSAFE_RPC" != "1" ]]; then
 fi
 
 "${ROOT_DIR}/scripts/deploy.sh" build "$MODE" "$PROFILE"
-"${ROOT_DIR}/scripts/deploy.sh" specs "$MODE" "$OUT_DIR"
+"${ROOT_DIR}/scripts/deploy.sh" specs "$MODE" "$OUT_DIR" "$PROFILE"
 "${ROOT_DIR}/scripts/deploy.sh" verify-specs "$OUT_DIR"
 
 if [[ "$PROFILE" == "release" ]]; then
