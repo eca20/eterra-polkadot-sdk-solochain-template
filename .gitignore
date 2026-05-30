@@ -10,3 +10,9 @@ deploy/alpha/macmini2010.env
 deploy/macmini2010/.artifacts/
 deploy/alpha/macmini2010/.artifacts/
 __pycache__/
+
+# Local workspace artifacts
+.DS_Store
+.worktrees/
+*.zip
+pallets/eterra-pallets-mvp/
