@@ -1225,7 +1225,11 @@ fn winner_receives_coin_assets_and_xp_rewards() {
         // Call `force_finish_turn` from the non-current player after the block limit passes.
         let g_now = Eterra::game_board(game_id).expect("game should exist");
         let current_player = g_now.players[g_now.player_turn as usize];
-        let caller = if current_player == creator { opponent } else { creator };
+        let caller = if current_player == creator {
+            opponent
+        } else {
+            creator
+        };
 
         let limit = <Test as crate::Config>::BlocksToPlayLimit::get() as u64;
         run_to_block(limit + 1);
@@ -1248,7 +1252,10 @@ fn winner_receives_coin_assets_and_xp_rewards() {
             Assets::balance(BetaCoinAssetIdConst::get(), creator),
             beta_before + WinRewardBetaCoinConst::get()
         );
-        assert_eq!(Gamer::exp(creator), xp_before + WinRewardExperienceConst::get());
+        assert_eq!(
+            Gamer::exp(creator),
+            xp_before + WinRewardExperienceConst::get()
+        );
 
         // Non-winner did not receive rewards.
         assert_eq!(Balances::free_balance(opponent), coin_before_opp);

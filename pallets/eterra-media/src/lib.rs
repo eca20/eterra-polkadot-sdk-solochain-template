@@ -428,8 +428,7 @@ pub mod pallet {
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
 
-            let collection_id =
-                maybe_collection_id.unwrap_or_else(|| T::DefaultCollectionId::get());
+            let collection_id = maybe_collection_id.unwrap_or_else(T::DefaultCollectionId::get);
 
             // Ensure collection exists.
             let collection_info =

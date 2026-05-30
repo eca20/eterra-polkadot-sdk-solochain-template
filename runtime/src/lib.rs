@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![recursion_limit = "512"]
 
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
@@ -20,20 +21,27 @@ use sp_runtime::{
 use sp_version::NativeVersion;
 use sp_version::RuntimeVersion;
 
-
 pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
-use pallet_node_authorization;
 
+pub use pallet_alpha_access;
 pub use pallet_eterra;
+pub use pallet_eterra_arcade_aegis_run;
+pub use pallet_eterra_arcade_core;
+pub use pallet_eterra_arcade_ouro;
+pub use pallet_eterra_authority;
+pub use pallet_eterra_card_escrow;
 pub use pallet_eterra_daily_slots;
+pub use pallet_eterra_economy;
 pub use pallet_eterra_faucet;
-pub use pallet_eterra_tcg;
-pub use pallet_eterra_simple_matchmaker;
-pub use pallet_eterra_gamer;
+pub use pallet_eterra_flow;
 pub use pallet_eterra_game_authority;
+pub use pallet_eterra_gamer;
 pub use pallet_eterra_media;
+pub use pallet_eterra_profile;
 pub use pallet_eterra_seasons;
+pub use pallet_eterra_simple_matchmaker;
+pub use pallet_eterra_tcg;
 pub use pallet_nfts;
 
 pub struct HandProviderAdapter;
@@ -272,7 +280,7 @@ mod runtime {
     pub type EterraGameAuthority = pallet_eterra_game_authority;
 
     #[runtime::pallet_index(18)]
-    pub type EterraMedia= pallet_eterra_media;
+    pub type EterraMedia = pallet_eterra_media;
 
     #[runtime::pallet_index(19)]
     pub type CouncilMembership = pallet_membership<Instance1>;
@@ -288,6 +296,33 @@ mod runtime {
 
     #[runtime::pallet_index(23)]
     pub type Nfts = pallet_nfts;
+
+    #[runtime::pallet_index(24)]
+    pub type EterraCardEscrow = pallet_eterra_card_escrow;
+
+    #[runtime::pallet_index(25)]
+    pub type AlphaAccess = pallet_alpha_access;
+
+    #[runtime::pallet_index(26)]
+    pub type EterraAuthority = pallet_eterra_authority;
+
+    #[runtime::pallet_index(27)]
+    pub type EterraEconomy = pallet_eterra_economy;
+
+    #[runtime::pallet_index(28)]
+    pub type EterraProfile = pallet_eterra_profile;
+
+    #[runtime::pallet_index(29)]
+    pub type EterraFlow = pallet_eterra_flow;
+
+    #[runtime::pallet_index(30)]
+    pub type EterraArcadeCore = pallet_eterra_arcade_core;
+
+    #[runtime::pallet_index(31)]
+    pub type EterraArcadeOuro = pallet_eterra_arcade_ouro;
+
+    #[runtime::pallet_index(32)]
+    pub type EterraArcadeAegisRun = pallet_eterra_arcade_aegis_run;
 }
 
 #[cfg(test)]

@@ -67,6 +67,15 @@ pallet-eterra-simple-matchmaker = { workspace = true }
 pallet-eterra-faucet = { workspace = true }
 pallet-eterra-monte-carlo-ai = { workspace = true }
 pallet-eterra-game-authority = { workspace = true }
+pallet-eterra-card-escrow = { workspace = true }
+pallet-eterra-authority = { workspace = true }
+pallet-eterra-economy = { workspace = true }
+pallet-eterra-flow = { workspace = true }
+pallet-eterra-profile = { workspace = true }
+pallet-eterra-arcade-core = { workspace = true }
+pallet-eterra-arcade-ouro = { workspace = true }
+pallet-eterra-arcade-aegis-run = { workspace = true }
+pallet-alpha-access = { workspace = true }
 eterra-card-ai-adapter = { path = "../crates/eterra-card-ai-adapter", default-features = false }
 
 
@@ -108,8 +117,18 @@ std = [
     "pallet-eterra-faucet/std",
    "pallet-eterra-simple-matchmaker/std",
   "pallet-eterra-game-authority/std",
+  "pallet-eterra-card-escrow/std",
+  "pallet-eterra-authority/std",
+  "pallet-eterra-economy/std",
+  "pallet-eterra-flow/std",
+  "pallet-eterra-profile/std",
+  "pallet-eterra-arcade-core/std",
+  "pallet-eterra-arcade-ouro/std",
+  "pallet-eterra-arcade-aegis-run/std",
+  "pallet-alpha-access/std",
   "pallet-eterra-media/std",
   "pallet-eterra-seasons/std",
+  "pallet-eterra-tcg/std",
   "pallet-eterra-monte-carlo-ai/std",
   "pallet-nfts/std",
 
@@ -153,6 +172,15 @@ runtime-benchmarks = [
 	"pallet-eterra-monte-carlo-ai/runtime-benchmarks",
 	"pallet-eterra-tcg/runtime-benchmarks",
 	"pallet-eterra-game-authority/runtime-benchmarks",
+	"pallet-eterra-card-escrow/runtime-benchmarks",
+	"pallet-eterra-authority/runtime-benchmarks",
+	"pallet-eterra-economy/runtime-benchmarks",
+	"pallet-eterra-flow/runtime-benchmarks",
+	"pallet-eterra-profile/runtime-benchmarks",
+	"pallet-eterra-arcade-core/runtime-benchmarks",
+	"pallet-eterra-arcade-ouro/runtime-benchmarks",
+	"pallet-eterra-arcade-aegis-run/runtime-benchmarks",
+	"pallet-alpha-access/runtime-benchmarks",
 	"pallet-nfts/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",
 ]
@@ -173,6 +201,14 @@ try-runtime = [
 	"pallet-transaction-payment/try-runtime",
 	"pallet-treasury/try-runtime",
 	"pallet-nfts/try-runtime",
+	"pallet-eterra-authority/try-runtime",
+	"pallet-eterra-economy/try-runtime",
+	"pallet-eterra-flow/try-runtime",
+	"pallet-eterra-profile/try-runtime",
+	"pallet-eterra-arcade-core/try-runtime",
+	"pallet-eterra-arcade-ouro/try-runtime",
+	"pallet-eterra-arcade-aegis-run/try-runtime",
+	"pallet-alpha-access/try-runtime",
 	"sp-runtime/try-runtime",
 ]
 

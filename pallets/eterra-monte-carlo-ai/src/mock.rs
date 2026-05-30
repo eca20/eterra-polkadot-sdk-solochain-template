@@ -149,6 +149,21 @@ impl pallet_eterra_monte_carlo_ai::Config for Test {
     type MaxPlayoutDepth = MaxPlayoutDepthConst;
 
     type WeightInfo = ();
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHelper = NimBenchmarkHelper;
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct NimBenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_eterra_monte_carlo_ai::BenchmarkHelper<NimAdapter> for NimBenchmarkHelper {
+    fn bench_state() -> NimState {
+        NimState {
+            pile: 5,
+            to_move: 0,
+        }
+    }
 }
 
 pub fn new_test_ext() -> TestExternalities {

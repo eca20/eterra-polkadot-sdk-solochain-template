@@ -6,7 +6,10 @@ pub mod eterra_adapter {
 
     // Local copies of game types so this adapter has no dependency on pallet-eterra
     #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug)]
-    pub enum Possession { PlayerOne, PlayerTwo }
+    pub enum Possession {
+        PlayerOne,
+        PlayerTwo,
+    }
 
     #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug, Default)]
     pub struct Card {
@@ -37,31 +40,17 @@ pub mod eterra_adapter {
     }
 
     /// Compact, cloneable snapshot of game state used by the AI
-    #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug)]
+    #[derive(Clone, Encode, Decode, TypeInfo, MaxEncodedLen, PartialEq, Eq, Debug, Default)]
     pub struct State {
-        pub board: Board,   // 4x4 Option<Card>
+        pub board: Board, // 4x4 Option<Card>
         /// Bitmask of locked cells on the 4x4 board (Gridlock feature).
         /// Bit i (0..15) corresponds to cell (x=i/4, y=i%4) when indexing board as [x][y].
         pub locked_mask: u16,
-        pub scores: (u8, u8),     // (p0, p1)
-        pub player_turn: u8,      // 0 or 1
+        pub scores: (u8, u8), // (p0, p1)
+        pub player_turn: u8,  // 0 or 1
         pub round: u8,
         pub max_rounds: u8,
         pub hands: [Hand; 2],
-    }
-
-    impl Default for State {
-        fn default() -> Self {
-            Self {
-                board: Default::default(),
-                locked_mask: 0,
-                scores: (0, 0),
-                player_turn: 0,
-                round: 0,
-                max_rounds: 0,
-                hands: [Hand::default(), Hand::default()],
-            }
-        }
     }
 
     /// Play a card from hand at (x,y)
@@ -76,7 +65,9 @@ pub mod eterra_adapter {
     pub struct Adapter;
 
     impl Default for Adapter {
-        fn default() -> Self { Adapter }
+        fn default() -> Self {
+            Adapter
+        }
     }
 
     impl Adapter {
@@ -104,7 +95,11 @@ pub mod eterra_adapter {
                             continue;
                         }
                         if k < MAX {
-                            out[k] = Some(Action { hand_index: idx as u8, x, y });
+                            out[k] = Some(Action {
+                                hand_index: idx as u8,
+                                x,
+                                y,
+                            });
                             k += 1;
                             if k == MAX {
                                 return k;
@@ -136,7 +131,11 @@ pub mod eterra_adapter {
                 possession: None,
             };
 
-            let placing_player = if g.player_turn == 0 { Possession::PlayerOne } else { Possession::PlayerTwo };
+            let placing_player = if g.player_turn == 0 {
+                Possession::PlayerOne
+            } else {
+                Possession::PlayerTwo
+            };
             placed.possession = Some(placing_player.clone());
 
             // Place on board
@@ -153,7 +152,7 @@ pub mod eterra_adapter {
             for &(dx, dy, opposing_rank) in &dirs {
                 let nx = a.x as i8 + dx;
                 let ny = a.y as i8 + dy;
-                if nx >= 0 && nx < 4 && ny >= 0 && ny < 4 {
+                if (0..4).contains(&nx) && (0..4).contains(&ny) {
                     if let Some(mut opp) = g.board[nx as usize][ny as usize].clone() {
                         let rank = match (dx, dy) {
                             (0, -1) => opp.bottom,
@@ -217,7 +216,9 @@ pub mod eterra_adapter {
             s.round >= s.max_rounds
         }
 
-        fn current_player(s: &<Self as pallet_eterra_monte_carlo_ai::GameAdapter>::State) -> Self::Player {
+        fn current_player(
+            s: &<Self as pallet_eterra_monte_carlo_ai::GameAdapter>::State,
+        ) -> Self::Player {
             s.player_turn
         }
 
@@ -226,7 +227,11 @@ pub mod eterra_adapter {
             for_player: Self::Player,
         ) -> i32 {
             let (a, b) = s.scores;
-            if for_player == 0 { (a as i32) - (b as i32) } else { (b as i32) - (a as i32) }
+            if for_player == 0 {
+                (a as i32) - (b as i32)
+            } else {
+                (b as i32) - (a as i32)
+            }
         }
 
         fn random_action(
@@ -234,10 +239,14 @@ pub mod eterra_adapter {
             seed: u64,
         ) -> Option<<Self as pallet_eterra_monte_carlo_ai::GameAdapter>::Action> {
             const MAX: usize = 128;
-            let mut buf: [Option<<Self as pallet_eterra_monte_carlo_ai::GameAdapter>::Action>; MAX] =
-                core::array::from_fn(|_| None);
-            let n = <Self as pallet_eterra_monte_carlo_ai::GameAdapter>::list_actions::<MAX>(s, &mut buf);
-            if n == 0 { return None; }
+            let mut buf: [Option<<Self as pallet_eterra_monte_carlo_ai::GameAdapter>::Action>;
+                MAX] = core::array::from_fn(|_| None);
+            let n = <Self as pallet_eterra_monte_carlo_ai::GameAdapter>::list_actions::<MAX>(
+                s, &mut buf,
+            );
+            if n == 0 {
+                return None;
+            }
             let idx = (seed as usize) % n;
             buf[idx].clone()
         }

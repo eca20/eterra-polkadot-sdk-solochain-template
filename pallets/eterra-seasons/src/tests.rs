@@ -1,6 +1,6 @@
 use crate::{mock::*, Error, SeasonStatus};
-use frame_support::{assert_noop, assert_ok};
 use frame_support::BoundedVec;
+use frame_support::{assert_noop, assert_ok};
 
 #[test]
 fn only_admin_can_create_and_activate() {
@@ -14,11 +14,7 @@ fn only_admin_can_create_and_activate() {
         );
 
         assert_ok!(Seasons::add_admin(RuntimeOrigin::root(), 1));
-        assert_ok!(Seasons::create_season(
-            RuntimeOrigin::signed(1),
-            name,
-            desc
-        ));
+        assert_ok!(Seasons::create_season(RuntimeOrigin::signed(1), name, desc));
         assert_ok!(Seasons::activate_season(RuntimeOrigin::signed(1), 1));
         assert_eq!(Seasons::active_season_id(), Some(1));
         let info = Seasons::seasons(1).expect("season exists");

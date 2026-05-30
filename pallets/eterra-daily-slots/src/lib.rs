@@ -1,6 +1,14 @@
 // pallets/eterra-daily-slots/src/lib.rs
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(
+    clippy::duplicated_attributes,
+    clippy::let_unit_value,
+    clippy::manual_div_ceil,
+    clippy::missing_const_for_thread_local,
+    clippy::type_complexity,
+    clippy::unnecessary_cast
+)]
 
 pub mod weights;
 pub use weights::WeightInfo;

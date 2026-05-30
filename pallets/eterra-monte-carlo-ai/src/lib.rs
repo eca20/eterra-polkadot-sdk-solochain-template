@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(clippy::needless_range_loop, clippy::unused_unit)]
 
 pub use pallet::*;
 
@@ -154,6 +155,7 @@ pub mod pallet {
         /// `difficulty` in 0..=100 scales the iterations.
         #[pallet::call_index(0)]
         #[pallet::weight(T::WeightInfo::suggest_move())]
+        #[allow(clippy::useless_conversion)]
         pub fn suggest_move(
             origin: OriginFor<T>,
             state: <T::Adapter as GameAdapter>::State,
@@ -177,7 +179,10 @@ pub mod pallet {
                 action: action.clone(),
             });
 
-            Ok(Pays::Yes.into())
+            Ok(frame_support::dispatch::PostDispatchInfo {
+                actual_weight: None,
+                pays_fee: Pays::Yes,
+            })
         }
     }
 
@@ -253,8 +258,8 @@ pub mod pallet {
             let mut best_score = i64::MIN;
             let mut best_action: Option<A::Action> = None;
 
-            for i in 0..n {
-                let Some(action) = actions[i].as_ref() else {
+            for (i, maybe_action) in actions.iter().enumerate().take(n) {
+                let Some(action) = maybe_action.as_ref() else {
                     // Defensive: tolerate malformed adapters that report `n` but leave holes.
                     continue;
                 };

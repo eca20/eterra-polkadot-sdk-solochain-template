@@ -38,4 +38,8 @@ frame_benchmarking::define_benchmarks!(
     [pallet_eterra_tcg, EterraTCG]
     [pallet_eterra_game_authority, EterraGameAuthority]
     [pallet_eterra_media, EterraMedia]
+    [pallet_eterra_authority, EterraAuthority]
+    [pallet_eterra_economy, EterraEconomy]
+    [pallet_eterra_profile, EterraProfile]
+    [pallet_eterra_flow, EterraFlow]
 );

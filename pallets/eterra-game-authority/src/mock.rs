@@ -5,12 +5,12 @@
 use crate as pallet_eterra_game_authority;
 use frame_support::{
     construct_runtime, parameter_types,
-    traits::Everything,
+    sp_runtime::traits::{BlakeTwo256, Hash as HashT, IdentityLookup},
     sp_runtime::BuildStorage,
-    sp_runtime::traits::{BlakeTwo256, IdentityLookup, Hash as HashT},
+    traits::Everything,
 };
-use sp_io::TestExternalities;
 use frame_system::EnsureRoot;
+use sp_io::TestExternalities;
 
 pub type AccountId = u64;
 
@@ -55,6 +55,7 @@ impl frame_system::Config for Test {
 
 impl pallet_eterra_game_authority::Config for Test {
     type RuntimeEvent = RuntimeEvent;
+    type AccessControl = ();
     type MaxPlayersPerGame = MaxPlayersPerGame;
     type MaxRequestIdLen = MaxRequestIdLen;
     type MaxOutcomeLen = MaxOutcomeLen;
@@ -63,6 +64,7 @@ impl pallet_eterra_game_authority::Config for Test {
     type MaxExpirationsPerBlock = frame_support::traits::ConstU32<256>;
     type MaxRoundBlocks = frame_support::traits::ConstU64<30>;
     type MaxBatchAdd = frame_support::traits::ConstU32<32>;
+    type GameLifecycleHooks = ();
     type WeightInfo = ();
 }
 
@@ -87,7 +89,9 @@ pub struct ExtBuilder {
 
 impl Default for ExtBuilder {
     fn default() -> Self {
-        Self { initial_servers: vec![] }
+        Self {
+            initial_servers: vec![],
+        }
     }
 }
 

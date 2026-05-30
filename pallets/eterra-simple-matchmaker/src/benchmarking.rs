@@ -8,6 +8,7 @@ use frame_system::RawOrigin;
 benchmarks! {
     join_queue {
         let caller: T::AccountId = whitelisted_caller();
+        T::BenchmarkHandSeeder::seed_current_hand(&caller);
     }: _(RawOrigin::Signed(caller.clone()))
     verify {
         assert!(InQueue::<T>::contains_key(&caller));
@@ -53,9 +54,5 @@ mod tests {
     use super::*;
     use frame_benchmarking::impl_benchmark_test_suite;
 
-    impl_benchmark_test_suite!(
-        Pallet,
-        crate::mock::new_test_ext(),
-        crate::mock::Test
-    );
+    impl_benchmark_test_suite!(Pallet, crate::mock::new_test_ext(), crate::mock::Test);
 }

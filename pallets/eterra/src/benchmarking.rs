@@ -5,40 +5,23 @@ use frame_benchmarking::{account, benchmarks, whitelisted_caller};
 use frame_support::{traits::Get, BoundedVec};
 use frame_system::pallet_prelude::BlockNumberFor;
 use frame_system::RawOrigin;
-use sp_runtime::traits::Saturating;
 use sp_std::vec::Vec;
 
 use pallet_eterra_tcg as cards;
 
-fn fund<T: Config>(who: &T::AccountId) {
-    let pack_price = <T as cards::pallet::Config>::PackPrice::get();
-    let pro_price = <T as cards::pallet::Config>::ProPrice::get();
-
-    // Ensure the caller can pay the mint fees and still satisfy `KeepAlive`.
-    let amount = pack_price
-        .saturating_add(pack_price)
-        .saturating_add(pro_price)
-        .saturating_add(pro_price);
-    let _ = <<T as cards::pallet::Config>::PaymentCurrency as frame_support::traits::Currency<
-        T::AccountId,
-    >>::deposit_creating(who, amount);
-}
-
-/// Mint a pack and finalize the first `count` cards, returning their IDs.
-fn seed_cards<T: Config>(owner: &T::AccountId, _start_id: u32, count: u32) -> Vec<u32> {
-    fund::<T>(owner);
-    cards::Pallet::<T>::mint_pack(RawOrigin::Signed(owner.clone()).into())
-        .expect("mint pack succeeds");
-
-    let packs = cards::PlayerPacks::<T>::get(owner);
-    let pack = packs.last().expect("pack exists");
-    let ids: Vec<u32> = pack.get_card_ids().iter().copied().take(count as usize).collect();
+/// Seed finalized cards directly so gameplay benchmarks do not depend on the
+/// full card-art season minting pipeline.
+fn seed_cards<T: Config>(owner: &T::AccountId, start_id: u32, count: u32) -> Vec<u32> {
+    let mut ids = Vec::new();
+    let mut next_candidate = start_id;
 
     for _ in 0..count {
-        cards::Pallet::<T>::generate_slot(RawOrigin::Signed(owner.clone()).into())
-            .expect("generate slot succeeds");
-        cards::Pallet::<T>::accept_slot(RawOrigin::Signed(owner.clone()).into())
-            .expect("accept slot succeeds");
+        let next_global = cards::NextCardId::<T>::get();
+        let card_id = next_candidate.max(next_global);
+        cards::Pallet::<T>::benchmark_seed_finalized_card(owner, card_id, [1, 1, 1, 1])
+            .expect("benchmark card seed succeeds");
+        ids.push(card_id);
+        next_candidate = card_id.checked_add(1).expect("benchmark card id fits");
     }
 
     ids
@@ -158,7 +141,7 @@ benchmarks! {
     }: _(RawOrigin::Signed(p1.clone()), game_id)
     verify {
         let game = GameStorage::<T>::get(&game_id).expect("game exists");
-        assert_eq!(game.player_turn, 1);
+        assert!(matches!(game.state, GameState::Finished { winner: Some(0) }));
     }
 
     set_current_hand {

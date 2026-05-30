@@ -45,6 +45,11 @@ pub trait WeightInfo {
 	fn init_card_nft_collection() -> Weight;
 	fn convert_to_nft() -> Weight;
 	fn unwrap_from_nft() -> Weight;
+	fn set_progression_tree() -> Weight;
+	fn assign_progression_tree_to_card() -> Weight;
+	fn grant_card_experience() -> Weight;
+	fn forge_progression_node() -> Weight;
+	fn set_card_magic_loadout() -> Weight;
 }
 
 impl WeightInfo for () {
@@ -112,6 +117,21 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn unwrap_from_nft() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn set_progression_tree() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn assign_progression_tree_to_card() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn grant_card_experience() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn forge_progression_node() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn set_card_magic_loadout() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 }
@@ -357,5 +377,35 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 
 	fn unwrap_from_nft() -> Weight {
 		Weight::from_parts(10_000, 0)
+	}
+
+	fn set_progression_tree() -> Weight {
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(3))
+	}
+
+	fn assign_progression_tree_to_card() -> Weight {
+		Weight::from_parts(15_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+
+	fn grant_card_experience() -> Weight {
+		Weight::from_parts(15_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+
+	fn forge_progression_node() -> Weight {
+		Weight::from_parts(35_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(7))
+			.saturating_add(T::DbWeight::get().writes(4))
+	}
+
+	fn set_card_magic_loadout() -> Weight {
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
 }

@@ -4,21 +4,21 @@ use frame_support::{
     traits::{ConstU128, ConstU16, ConstU32, ConstU64, Get},
 };
 use frame_system as system;
-use pallet_eterra_media;
 use pallet_assets;
 use pallet_balances;
 use pallet_eterra_gamer;
+use pallet_eterra_media;
 use pallet_eterra_monte_carlo_ai as mc_ai;
 use pallet_eterra_seasons;
 use pallet_eterra_tcg;
 use pallet_nfts;
-use parity_scale_codec::{Decode, Encode}; 
+use parity_scale_codec::{Decode, Encode};
 use scale_info::TypeInfo;
-use sp_core::H256; 
+use sp_core::H256;
 use sp_runtime::{
     traits::{BlakeTwo256, IdentityLookup},
     BuildStorage,
-}; 
+};
 
 type Block = frame_system::mocking::MockBlock<Test>;
 
@@ -75,6 +75,20 @@ parameter_types! {
     pub const MaxPackagingBacksConst: u32 = 16;
     pub const MaxSeasonCollectionsConst: u32 = 32;
     pub const MaxSeasonCollectionNameLenConst: u32 = 64;
+    pub const NexusTeamSizeConst: u32 = 5;
+    pub const NexusSubjectCopyCapConst: u32 = 5;
+    pub const NexusOverflowTotalCapacityConst: u32 = 30;
+    pub const NexusOverflowPerSubjectCapacityConst: u32 = 2;
+    pub const NexusBaseVaultCapacityConst: u32 = 20;
+    pub const MaxNexusMetadataUriLenConst: u32 = 256;
+    pub const MaxNexusReasonLenConst: u32 = 128;
+    pub const MaxNexusSpellSlotsPerCardConst: u32 = 3;
+    pub const MaxProgressionNodesPerTreeConst: u32 = 16;
+    pub const MaxProgressionNodesPerCardConst: u32 = 16;
+    pub const MaxMagicSlotsPerCardConst: u32 = 3;
+    pub const MaxProgressionTreesConst: u32 = 64;
+    pub const CardXpPerLevelConst: u32 = 100;
+    pub const MaxNexusMatchPlayersConst: u32 = 2;
     pub const MaxMediaUriLen: u32 = 256;
     pub const MaxMediaContentTypeLen: u32 = 64;
     pub const MaxMediaNameLen: u32 = 64;
@@ -192,10 +206,46 @@ impl pallet_assets::Config for Test {
     type CallbackHandle = ();
     type WeightInfo = ();
     type RemoveItemsLimit = ConstU32<1_000>;
+
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHelper = ();
 }
 
 parameter_types! {
     pub NftsFeatures: pallet_nfts::PalletFeatures = pallet_nfts::PalletFeatures::all_enabled();
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct NftsBenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl
+    pallet_nfts::BenchmarkHelper<
+        u32,
+        u32,
+        sp_runtime::testing::UintAuthorityId,
+        u64,
+        sp_runtime::testing::TestSignature,
+    > for NftsBenchmarkHelper
+{
+    fn collection(i: u16) -> u32 {
+        u32::from(i)
+    }
+
+    fn item(i: u16) -> u32 {
+        u32::from(i)
+    }
+
+    fn signer() -> (sp_runtime::testing::UintAuthorityId, u64) {
+        (sp_runtime::testing::UintAuthorityId(1), 1)
+    }
+
+    fn sign(
+        signer: &sp_runtime::testing::UintAuthorityId,
+        message: &[u8],
+    ) -> sp_runtime::testing::TestSignature {
+        sp_runtime::testing::TestSignature(signer.0, message.to_vec())
+    }
 }
 
 impl pallet_nfts::Config for Test {
@@ -224,7 +274,7 @@ impl pallet_nfts::Config for Test {
     type OffchainSignature = sp_runtime::testing::TestSignature;
     type OffchainPublic = sp_runtime::testing::UintAuthorityId;
     #[cfg(feature = "runtime-benchmarks")]
-    type Helper = ();
+    type Helper = NftsBenchmarkHelper;
     type WeightInfo = ();
 }
 
@@ -251,6 +301,7 @@ impl pallet_eterra_media::Config for Test {
 
 impl pallet_eterra_gamer::Config for Test {
     type Currency = Balances;
+    type AccessControl = ();
     type ExpIssuerOrigin = frame_system::EnsureRoot<u64>;
     type FaucetAccount = FaucetAccountId;
     type ChangeFee = GamerChangeFee;
@@ -262,8 +313,10 @@ impl pallet_eterra_gamer::Config for Test {
 
 impl pallet_eterra_tcg::Config for Test {
     type RuntimeEvent = RuntimeEvent;
+    type AccessControl = ();
     type PaymentCurrency = Balances;
     type HandChecker = MockHandChecker;
+    type ProgressionAuthorityProvider = ();
     type PackPrice = PackPriceConst;
     type PackPriceReceiver = PackPriceReceiverConst;
     type ProPrice = ProPriceConst;
@@ -286,6 +339,20 @@ impl pallet_eterra_tcg::Config for Test {
     type MaxPackagingBacks = MaxPackagingBacksConst;
     type MaxSeasonCollections = MaxSeasonCollectionsConst;
     type MaxSeasonCollectionNameLen = MaxSeasonCollectionNameLenConst;
+    type NexusTeamSize = NexusTeamSizeConst;
+    type NexusSubjectCopyCap = NexusSubjectCopyCapConst;
+    type NexusOverflowTotalCapacity = NexusOverflowTotalCapacityConst;
+    type NexusOverflowPerSubjectCapacity = NexusOverflowPerSubjectCapacityConst;
+    type NexusBaseVaultCapacity = NexusBaseVaultCapacityConst;
+    type MaxNexusMetadataUriLen = MaxNexusMetadataUriLenConst;
+    type MaxNexusReasonLen = MaxNexusReasonLenConst;
+    type MaxNexusSpellSlotsPerCard = MaxNexusSpellSlotsPerCardConst;
+    type MaxProgressionNodesPerTree = MaxProgressionNodesPerTreeConst;
+    type MaxProgressionNodesPerCard = MaxProgressionNodesPerCardConst;
+    type MaxMagicSlotsPerCard = MaxMagicSlotsPerCardConst;
+    type MaxProgressionTrees = MaxProgressionTreesConst;
+    type CardXpPerLevel = CardXpPerLevelConst;
+    type MaxNexusMatchPlayers = MaxNexusMatchPlayersConst;
     type WeightInfo = ();
 }
 
@@ -347,6 +414,7 @@ impl pallet_eterra::Config for Test {
     type AiAccount = FaucetAccountId;
     type AiDifficulty = AiDifficultyConst;
     type AdminOrigin = frame_system::EnsureRoot<u64>;
+    type AccessControl = ();
     type BlocksPerHour = BlocksPerHourConst;
     type BlocksPerDay = BlocksPerDayConst;
     type BlocksPerWeek = BlocksPerWeekConst;
@@ -371,6 +439,23 @@ impl mc_ai::pallet::Config for Test {
     type BaseIterations = ConstU32<100>;
     type MaxPlayoutDepth = ConstU16<16>;
     type WeightInfo = ();
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHelper = MonteCarloBenchmarkHelper;
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct MonteCarloBenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl mc_ai::BenchmarkHelper<eterra_card_ai_adapter::eterra_adapter::Adapter>
+    for MonteCarloBenchmarkHelper
+{
+    fn bench_state() -> eterra_card_ai_adapter::eterra_adapter::State {
+        eterra_card_ai_adapter::eterra_adapter::State {
+            max_rounds: 1,
+            ..Default::default()
+        }
+    }
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
@@ -421,13 +506,17 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
             1u128,
         );
 
-        let name: frame_support::BoundedVec<u8, MaxSeasonNameLen> = b"S1".to_vec().try_into().unwrap();
-        let desc: frame_support::BoundedVec<u8, MaxSeasonDescLen> = b"D1".to_vec().try_into().unwrap();
+        let name: frame_support::BoundedVec<u8, MaxSeasonNameLen> =
+            b"S1".to_vec().try_into().unwrap();
+        let desc: frame_support::BoundedVec<u8, MaxSeasonDescLen> =
+            b"D1".to_vec().try_into().unwrap();
         pallet_eterra_seasons::Pallet::<Test>::create_season(RuntimeOrigin::signed(1), name, desc)
             .expect("create season");
 
-        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> = b"ipfs://b".to_vec().try_into().unwrap();
-        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> =
+            b"ipfs://b".to_vec().try_into().unwrap();
+        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> =
+            b"image/png".to_vec().try_into().unwrap();
         pallet_eterra_media::Pallet::<Test>::register_media(
             RuntimeOrigin::signed(1),
             None,
@@ -458,8 +547,10 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
             None,
         )
         .expect("register subject");
-        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> = b"ipfs://back".to_vec().try_into().unwrap();
-        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> =
+            b"ipfs://back".to_vec().try_into().unwrap();
+        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> =
+            b"image/png".to_vec().try_into().unwrap();
         pallet_eterra_media::Pallet::<Test>::register_media(
             RuntimeOrigin::signed(1),
             None,
@@ -470,8 +561,10 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
             None,
         )
         .expect("register back");
-        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> = b"ipfs://pack-front".to_vec().try_into().unwrap();
-        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> = b"image/png".to_vec().try_into().unwrap();
+        let uri: frame_support::BoundedVec<u8, MaxMediaUriLen> =
+            b"ipfs://pack-front".to_vec().try_into().unwrap();
+        let ct: frame_support::BoundedVec<u8, MaxMediaContentTypeLen> =
+            b"image/png".to_vec().try_into().unwrap();
         pallet_eterra_media::Pallet::<Test>::register_media(
             RuntimeOrigin::signed(1),
             None,

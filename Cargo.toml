@@ -19,6 +19,15 @@ members = [
     "pallets/eterra-monte-carlo-ai",
     "pallets/eterra-media",
     "pallets/eterra-game-authority",
+    "pallets/eterra-card-escrow",
+    "pallets/eterra-authority",
+    "pallets/eterra-economy",
+    "pallets/eterra-flow",
+    "pallets/eterra-profile",
+    "pallets/eterra-arcade-core",
+    "pallets/eterra-arcade-ouro",
+    "pallets/eterra-arcade-aegis-run",
+    "pallets/alpha-access",
     "crates/eterra-card-ai-adapter",   
     "runtime",
 ]
@@ -110,6 +119,15 @@ pallet-eterra-monte-carlo-ai            = { path = "pallets/eterra-monte-carlo-a
 eterra-card-ai-adapter                  = { path = "crates/eterra-card-ai-adapter", default-features = false, features = ["std"] }
 pallet-eterra-gamer                     = { path = "pallets/eterra-gamer", default-features = false }
 pallet-eterra-game-authority            = { path = "pallets/eterra-game-authority", default-features = false }
+pallet-eterra-card-escrow               = { path = "pallets/eterra-card-escrow", default-features = false }
+pallet-eterra-authority                 = { path = "pallets/eterra-authority", default-features = false }
+pallet-eterra-economy                   = { path = "pallets/eterra-economy", default-features = false }
+pallet-eterra-flow                      = { path = "pallets/eterra-flow", default-features = false }
+pallet-eterra-profile                   = { path = "pallets/eterra-profile", default-features = false }
+pallet-eterra-arcade-core               = { path = "pallets/eterra-arcade-core", default-features = false }
+pallet-eterra-arcade-ouro               = { path = "pallets/eterra-arcade-ouro", default-features = false }
+pallet-eterra-arcade-aegis-run          = { path = "pallets/eterra-arcade-aegis-run", default-features = false }
+pallet-alpha-access                      = { path = "pallets/alpha-access", default-features = false }
 pallet-eterra-media                     = { path = "pallets/eterra-media", default-features = false }
 pallet-eterra-seasons                   = { path = "pallets/eterra-seasons", default-features = false }
 pallet-nfts                             = { version = "32.0.0", default-features = false }

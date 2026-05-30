@@ -203,9 +203,8 @@ pub fn alpha_config() -> Result<ChainSpec, String> {
     let owner = get_account_id_from_seed::<sr25519::Public>("AlphaOwner");
     let validator = get_account_id_from_seed::<sr25519::Public>("AlphaValidator");
     let media_signer = get_account_id_from_seed::<sr25519::Public>("AlphaMediaSigner");
-    let hot_admin =
-        AccountId::from_ss58check("5Dq5eLhbKhUpzcuwbsFYisiWnRQkXonTt2RTmvaiVsFwkUsY")
-            .expect("hard-coded ss58 address is valid");
+    let hot_admin = AccountId::from_ss58check("5Dq5eLhbKhUpzcuwbsFYisiWnRQkXonTt2RTmvaiVsFwkUsY")
+        .expect("hard-coded ss58 address is valid");
     let council_members = vec![owner.clone()];
     let mut season_admins = vec![hot_admin.clone(), media_signer.clone()];
     season_admins.sort();
@@ -222,7 +221,13 @@ pub fn alpha_config() -> Result<ChainSpec, String> {
     .with_genesis_config_patch(testnet_genesis(
         vec![authority_keys_from_seed("AlphaValidator")],
         Some(owner.clone()),
-        vec![owner.clone(), validator, media_signer, treasury.clone(), hot_admin],
+        vec![
+            owner.clone(),
+            validator,
+            media_signer,
+            treasury.clone(),
+            hot_admin,
+        ],
         true,
         owner,
         1_000_000_000_000_000u128,

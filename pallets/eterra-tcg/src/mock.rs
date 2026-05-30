@@ -59,6 +59,11 @@ parameter_types! {
     pub const MaxNexusReasonLen: u32 = 128;
     pub const MaxNexusSpellSlotsPerCard: u32 = 3;
     pub const MaxNexusMatchPlayers: u32 = 2;
+    pub const MaxProgressionNodesPerTree: u32 = 16;
+    pub const MaxProgressionNodesPerCard: u32 = 16;
+    pub const MaxMagicSlotsPerCard: u32 = 3;
+    pub const MaxProgressionTrees: u32 = 64;
+    pub const CardXpPerLevel: u32 = 100;
 
     pub const MaxMediaUriLen: u32 = 256;
     pub const MaxMediaContentTypeLen: u32 = 64;
@@ -76,6 +81,23 @@ pub struct TcgSeasonActivationValidator;
 impl pallet_eterra_seasons::SeasonActivationValidator<u32> for TcgSeasonActivationValidator {
     fn ensure_can_activate(season_id: u32) -> DispatchResult {
         pallet_eterra_slots::Pallet::<Test>::ensure_season_ready_for_activation(season_id)
+    }
+}
+
+pub struct MockProgressionAuthorityProvider;
+
+impl pallet_eterra_slots::ProgressionAuthorityProvider<u64> for MockProgressionAuthorityProvider {
+    fn resolve_authority(
+        _account: &u64,
+        game_id: pallet_eterra_slots::ProgressionGameId,
+        version_id: Option<pallet_eterra_slots::ProgressionVersionId>,
+        event_type: pallet_eterra_slots::ProgressionEventTypeId,
+    ) -> Option<pallet_eterra_slots::ProgressionAuthorityId> {
+        if game_id == 10 && version_id == Some(7) && event_type == 8 {
+            Some(99)
+        } else {
+            None
+        }
     }
 }
 
@@ -132,6 +154,39 @@ parameter_types! {
     pub NftsFeatures: pallet_nfts::PalletFeatures = pallet_nfts::PalletFeatures::all_enabled();
 }
 
+#[cfg(feature = "runtime-benchmarks")]
+pub struct NftsBenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl
+    pallet_nfts::BenchmarkHelper<
+        u32,
+        u32,
+        sp_runtime::testing::UintAuthorityId,
+        u64,
+        sp_runtime::testing::TestSignature,
+    > for NftsBenchmarkHelper
+{
+    fn collection(i: u16) -> u32 {
+        u32::from(i)
+    }
+
+    fn item(i: u16) -> u32 {
+        u32::from(i)
+    }
+
+    fn signer() -> (sp_runtime::testing::UintAuthorityId, u64) {
+        (sp_runtime::testing::UintAuthorityId(1), 1)
+    }
+
+    fn sign(
+        signer: &sp_runtime::testing::UintAuthorityId,
+        message: &[u8],
+    ) -> sp_runtime::testing::TestSignature {
+        sp_runtime::testing::TestSignature(signer.0, message.to_vec())
+    }
+}
+
 impl pallet_nfts::Config for Test {
     type RuntimeEvent = RuntimeEvent;
 
@@ -166,7 +221,7 @@ impl pallet_nfts::Config for Test {
     type OffchainPublic = sp_runtime::testing::UintAuthorityId;
 
     #[cfg(feature = "runtime-benchmarks")]
-    type Helper = ();
+    type Helper = NftsBenchmarkHelper;
 
     type WeightInfo = ();
 }
@@ -197,6 +252,7 @@ impl pallet_eterra_slots::Config for Test {
     type PaymentCurrency = Balances;
     type AccessControl = ();
     type HandChecker = ();
+    type ProgressionAuthorityProvider = MockProgressionAuthorityProvider;
     type PackPrice = PackPrice;
     type PackPriceReceiver = PackPriceReceiver;
     type ProPrice = ProPrice;
@@ -227,6 +283,11 @@ impl pallet_eterra_slots::Config for Test {
     type MaxNexusMetadataUriLen = MaxNexusMetadataUriLen;
     type MaxNexusReasonLen = MaxNexusReasonLen;
     type MaxNexusSpellSlotsPerCard = MaxNexusSpellSlotsPerCard;
+    type MaxProgressionNodesPerTree = MaxProgressionNodesPerTree;
+    type MaxProgressionNodesPerCard = MaxProgressionNodesPerCard;
+    type MaxMagicSlotsPerCard = MaxMagicSlotsPerCard;
+    type MaxProgressionTrees = MaxProgressionTrees;
+    type CardXpPerLevel = CardXpPerLevel;
     type MaxNexusMatchPlayers = MaxNexusMatchPlayers;
 
     type WeightInfo = ();

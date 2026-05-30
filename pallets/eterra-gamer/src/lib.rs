@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(clippy::duplicated_attributes)]
 pub use pallet::*;
 
 pub mod weights;
@@ -17,6 +18,7 @@ use frame_support::{
     traits::{Currency, ExistenceRequirement},
 };
 use frame_system::pallet_prelude::*;
+use pallet_alpha_access::AccessControl;
 use sp_std::vec::Vec;
 
 /// Minimal interface for other pallets to grant experience to an account.
@@ -40,6 +42,9 @@ pub mod pallet {
     pub trait Config: frame_system::Config {
         /// Runtime currency (native token).
         type Currency: Currency<Self::AccountId>;
+
+        /// Canonical Alpha access gate for player-facing calls.
+        type AccessControl: AccessControl<Self::AccountId>;
 
         /// Origin allowed to mint/grant XP (e.g., Root or a custom EnsureOrigin).
         type ExpIssuerOrigin: EnsureOrigin<Self::RuntimeOrigin>;
@@ -183,7 +188,7 @@ pub mod pallet {
         fn redeem_all_levels(mut lvl: u8, mut xp: u128) -> (u8, u128, u8) {
             let mut gained = 0u8;
             while lvl < 99 {
-                let need = Self::exp_required_for_level((lvl + 1) as u8);
+                let need = Self::exp_required_for_level(lvl + 1);
                 if xp < need {
                     break;
                 }
@@ -223,7 +228,8 @@ pub mod pallet {
             tag: BoundedVec<u8, T::MaxTagLen>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            ensure!(tag.len() >= 1, Error::<T>::TagTooShort);
+            T::AccessControl::ensure_whitelisted(&who)?;
+            ensure!(!tag.is_empty(), Error::<T>::TagTooShort);
             let tag_raw = tag.to_vec();
 
             let already = <GamerTag<T>>::contains_key(&who);
@@ -247,6 +253,7 @@ pub mod pallet {
             cid: BoundedVec<u8, T::MaxAvatarCidLen>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
             ensure!(
                 Self::validate_ascii_cid(&cid),
                 Error::<T>::AvatarCidInvalidAscii
@@ -284,6 +291,7 @@ pub mod pallet {
         #[pallet::weight(T::WeightInfo::redeem_levels())]
         pub fn redeem_levels(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
             let current = Level::<T>::get(&who);
             ensure!(current <= 99, Error::<T>::InvalidLevelRequest);
             ensure!(current < 99, Error::<T>::AlreadyMaxLevel);

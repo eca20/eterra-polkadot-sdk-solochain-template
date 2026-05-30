@@ -49,7 +49,11 @@ fn join_queue_emits_event_and_persists() {
                 RuntimeEvent::Matchmaker(Event::<Test>::Joined { who }) if *who == 1
             )
         });
-        assert!(joined_seen, "expected Joined event for who=1, got: {:?}", evs);
+        assert!(
+            joined_seen,
+            "expected Joined event for who=1, got: {:?}",
+            evs
+        );
 
         // Also assert the state persisted: live size should be 1.
         assert_eq!(LiveSize::<Test>::get(), 1);
@@ -131,7 +135,7 @@ fn join_queue_requires_current_hand() {
     });
 }
 
-#[cfg(any(feature = "dev_tests_with_try_match"))]
+#[cfg(feature = "dev_tests_with_try_match")]
 #[test]
 fn try_match_noop_with_fewer_than_two() {
     new_test_ext().execute_with(|| {
@@ -151,7 +155,7 @@ fn try_match_noop_with_fewer_than_two() {
     });
 }
 
-#[cfg(any(feature = "dev_tests_with_try_match"))]
+#[cfg(feature = "dev_tests_with_try_match")]
 #[test]
 fn try_match_forms_two_and_removes_from_head_fifo() {
     new_test_ext().execute_with(|| {
@@ -179,7 +183,7 @@ fn try_match_forms_two_and_removes_from_head_fifo() {
     });
 }
 
-#[cfg(any(feature = "dev_tests_with_try_match"))]
+#[cfg(feature = "dev_tests_with_try_match")]
 #[test]
 fn multiple_try_match_calls_form_multiple_pairs_in_fifo_order() {
     new_test_ext().execute_with(|| {
@@ -214,7 +218,7 @@ fn multiple_try_match_calls_form_multiple_pairs_in_fifo_order() {
     });
 }
 
-#[cfg(any(feature = "dev_tests_with_try_match"))]
+#[cfg(feature = "dev_tests_with_try_match")]
 #[test]
 fn leaving_middle_preserves_order() {
     new_test_ext().execute_with(|| {

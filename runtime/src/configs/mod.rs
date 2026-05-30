@@ -26,8 +26,9 @@
 // Substrate and Polkadot dependencies
 use frame_support::PalletId;
 use frame_support::{
+    derive_impl,
     dispatch::DispatchResult,
-    derive_impl, parameter_types,
+    parameter_types,
     traits::{ConstBool, ConstU128, ConstU16, ConstU32, ConstU64, ConstU8, VariantCountOf},
     weights::{
         constants::{RocksDbWeight, WEIGHT_REF_TIME_PER_SECOND},
@@ -49,8 +50,10 @@ use super::{HandProviderAdapter, UNIT};
 
 // Bring in the pallets re-exported in lib.rs
 use super::{
-    pallet_alpha_access, pallet_eterra, pallet_eterra_card_escrow, pallet_eterra_daily_slots,
-    pallet_eterra_faucet, pallet_eterra_game_authority, pallet_eterra_gamer, pallet_eterra_media,
+    pallet_alpha_access, pallet_eterra, pallet_eterra_arcade_aegis_run, pallet_eterra_arcade_core,
+    pallet_eterra_arcade_ouro, pallet_eterra_authority, pallet_eterra_card_escrow,
+    pallet_eterra_daily_slots, pallet_eterra_economy, pallet_eterra_faucet, pallet_eterra_flow,
+    pallet_eterra_game_authority, pallet_eterra_gamer, pallet_eterra_media, pallet_eterra_profile,
     pallet_eterra_seasons, pallet_eterra_simple_matchmaker, pallet_eterra_tcg, pallet_nfts,
 };
 // Monte Carlo AI pallet lives at the crate root; bring it in explicitly.
@@ -70,13 +73,228 @@ const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 // This alias can be switched to governance origins when governance is introduced.
 type PrivilegedControlOrigin = frame_system::EnsureRoot<AccountId>;
 
+pub struct EterraFlowAuthorityProvider;
+
+impl pallet_eterra_flow::AuthorityProvider<AccountId> for EterraFlowAuthorityProvider {
+    fn resolve_authority(
+        account: &AccountId,
+        game_id: pallet_eterra_flow::GameId,
+        version_id: Option<pallet_eterra_flow::VersionId>,
+        event_type: pallet_eterra_flow::EventTypeId,
+    ) -> Option<pallet_eterra_flow::AuthorityId> {
+        pallet_eterra_authority::Pallet::<Runtime>::resolve_authority(
+            account, game_id, version_id, event_type,
+        )
+    }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct EterraFlowBenchmarkAuthorityProvider;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_eterra_flow::BenchmarkAuthorityProvider<AccountId>
+    for EterraFlowBenchmarkAuthorityProvider
+{
+    fn authorize(
+        account: &AccountId,
+        game_id: pallet_eterra_flow::GameId,
+        version_id: pallet_eterra_flow::VersionId,
+        event_type: pallet_eterra_flow::EventTypeId,
+    ) -> DispatchResult {
+        let mut allowed_events: frame_support::BoundedVec<
+            _,
+            EterraAuthorityMaxAllowedEventsPerAuthority,
+        > = frame_support::BoundedVec::default();
+        allowed_events
+            .try_push(event_type)
+            .expect("benchmark event list fits");
+        pallet_eterra_authority::Pallet::<Runtime>::authorize_authority(
+            RuntimeOrigin::root(),
+            game_id,
+            1,
+            account.clone(),
+            pallet_eterra_authority::AuthorityKind::GameServer,
+            Some(version_id),
+            allowed_events,
+            None,
+            <<Runtime as frame_system::Config>::Hashing as sp_runtime::traits::Hash>::hash(
+                b"eterra-flow-benchmark-authority",
+            ),
+        )
+    }
+}
+
+pub struct EterraFlowEconomyProvider;
+
+impl pallet_eterra_flow::EconomyProvider<AccountId> for EterraFlowEconomyProvider {
+    fn has_entitlement(
+        account: &AccountId,
+        game_id: pallet_eterra_flow::GameId,
+        entitlement_id: pallet_eterra_flow::EntitlementId,
+    ) -> bool {
+        pallet_eterra_economy::Pallet::<Runtime>::has_entitlement(account, game_id, entitlement_id)
+    }
+
+    fn credit_balance(
+        account: &AccountId,
+        game_id: pallet_eterra_flow::GameId,
+        credit_type: pallet_eterra_flow::CreditTypeId,
+    ) -> u64 {
+        pallet_eterra_economy::Pallet::<Runtime>::credit_balance(account, game_id, credit_type)
+    }
+
+    fn consume_credit(
+        account: &AccountId,
+        game_id: pallet_eterra_flow::GameId,
+        credit_type: pallet_eterra_flow::CreditTypeId,
+        amount: u64,
+    ) -> DispatchResult {
+        pallet_eterra_economy::Pallet::<Runtime>::try_consume_credit(
+            account,
+            game_id,
+            credit_type,
+            amount,
+        )
+    }
+
+    fn grant_credit(
+        account: &AccountId,
+        game_id: pallet_eterra_flow::GameId,
+        credit_type: pallet_eterra_flow::CreditTypeId,
+        amount: u64,
+    ) -> DispatchResult {
+        pallet_eterra_economy::Pallet::<Runtime>::try_grant_credit(
+            account,
+            game_id,
+            credit_type,
+            amount,
+        )
+    }
+
+    fn grant_entitlement(
+        account: &AccountId,
+        game_id: pallet_eterra_flow::GameId,
+        entitlement_id: pallet_eterra_flow::EntitlementId,
+    ) -> DispatchResult {
+        pallet_eterra_economy::Pallet::<Runtime>::try_grant_entitlement(
+            account,
+            game_id,
+            entitlement_id,
+        )
+    }
+
+    fn revoke_entitlement(
+        account: &AccountId,
+        game_id: pallet_eterra_flow::GameId,
+        entitlement_id: pallet_eterra_flow::EntitlementId,
+    ) -> DispatchResult {
+        pallet_eterra_economy::Pallet::<Runtime>::try_revoke_entitlement(
+            account,
+            game_id,
+            entitlement_id,
+        )
+    }
+
+    fn spend_sponsor_funds(game_id: pallet_eterra_flow::GameId, amount: u128) -> DispatchResult {
+        pallet_eterra_economy::Pallet::<Runtime>::try_spend_sponsor_funds(game_id, amount)
+    }
+}
+
+pub struct EterraArcadeEconomyProvider;
+
+impl pallet_eterra_arcade_core::EconomyProvider<AccountId> for EterraArcadeEconomyProvider {
+    fn consume_credit(
+        account: &AccountId,
+        game_id: pallet_eterra_arcade_core::GameId,
+        credit_type: pallet_eterra_arcade_core::CreditTypeId,
+        amount: u64,
+    ) -> DispatchResult {
+        pallet_eterra_economy::Pallet::<Runtime>::try_consume_credit(
+            account,
+            game_id,
+            credit_type,
+            amount,
+        )
+    }
+
+    fn credit_balance(
+        account: &AccountId,
+        game_id: pallet_eterra_arcade_core::GameId,
+        credit_type: pallet_eterra_arcade_core::CreditTypeId,
+    ) -> u64 {
+        pallet_eterra_economy::Pallet::<Runtime>::credit_balance(account, game_id, credit_type)
+    }
+}
+
+pub struct EterraArcadeAuthorityProvider;
+
+impl pallet_eterra_arcade_core::AuthorityProvider<AccountId> for EterraArcadeAuthorityProvider {
+    fn can_submit(
+        account: &AccountId,
+        game_id: pallet_eterra_arcade_core::GameId,
+        ruleset_version: pallet_eterra_arcade_core::RulesetVersion,
+        event_type: pallet_eterra_arcade_core::AuthorityEventTypeId,
+    ) -> bool {
+        pallet_eterra_authority::Pallet::<Runtime>::resolve_authority(
+            account,
+            game_id,
+            Some(ruleset_version),
+            event_type,
+        )
+        .is_some()
+    }
+}
+
+pub struct EterraFlowProfileProvider;
+
+impl pallet_eterra_flow::ProfileProvider<AccountId> for EterraFlowProfileProvider {
+    fn update_passport_counter(
+        account: &AccountId,
+        field_id: pallet_eterra_flow::PassportFieldId,
+        amount: u64,
+    ) -> DispatchResult {
+        pallet_eterra_profile::Pallet::<Runtime>::try_increment_counter(account, field_id, amount)
+    }
+
+    fn grant_passport_badge(
+        account: &AccountId,
+        badge_id: pallet_eterra_flow::PassportBadgeId,
+    ) -> DispatchResult {
+        pallet_eterra_profile::Pallet::<Runtime>::try_grant_badge(account, badge_id)
+    }
+
+    fn revoke_passport_badge(
+        account: &AccountId,
+        badge_id: pallet_eterra_flow::PassportBadgeId,
+    ) -> DispatchResult {
+        pallet_eterra_profile::Pallet::<Runtime>::try_revoke_badge(account, badge_id)
+    }
+}
+
 pub struct TcgHandChecker;
 
 impl pallet_eterra_tcg::HandChecker<AccountId> for TcgHandChecker {
     fn is_card_in_current_hand(owner: &AccountId, card_id: u32) -> bool {
         pallet_eterra::CurrentHandOf::<Runtime>::get(owner)
-            .map(|hand| hand.iter().any(|&id| id == card_id))
+            .map(|hand| hand.contains(&card_id))
             .unwrap_or(false)
+    }
+}
+
+pub struct TcgProgressionAuthorityProvider;
+
+impl pallet_eterra_tcg::ProgressionAuthorityProvider<AccountId>
+    for TcgProgressionAuthorityProvider
+{
+    fn resolve_authority(
+        account: &AccountId,
+        game_id: pallet_eterra_tcg::ProgressionGameId,
+        version_id: Option<pallet_eterra_tcg::ProgressionVersionId>,
+        event_type: pallet_eterra_tcg::ProgressionEventTypeId,
+    ) -> Option<pallet_eterra_tcg::ProgressionAuthorityId> {
+        pallet_eterra_authority::Pallet::<Runtime>::resolve_authority(
+            account, game_id, version_id, event_type,
+        )
     }
 }
 
@@ -124,7 +342,9 @@ impl pallet_eterra_card_escrow::GameAuthority<AccountId> for EscrowGameAuthority
     }
 
     fn ensure_active_game_owned_by(game_id: u64, caller: &AccountId) -> DispatchResult {
-        pallet_eterra_game_authority::Pallet::<Runtime>::ensure_active_game_owned_by(game_id, caller)
+        pallet_eterra_game_authority::Pallet::<Runtime>::ensure_active_game_owned_by(
+            game_id, caller,
+        )
     }
 
     fn ensure_player_in_game(game_id: u64, player: &AccountId) -> DispatchResult {
@@ -684,6 +904,117 @@ impl pallet_alpha_access::Config for Runtime {
     type WeightInfo = ();
 }
 
+parameter_types! {
+    pub const EterraAuthorityMaxAllowedEventsPerAuthority: u32 = 32;
+}
+
+impl pallet_eterra_authority::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = pallet_eterra_authority::weights::SubstrateWeight<Runtime>;
+    type AdminOrigin = PrivilegedControlOrigin;
+    type MaxAllowedEventsPerAuthority = EterraAuthorityMaxAllowedEventsPerAuthority;
+}
+
+impl pallet_eterra_economy::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = pallet_eterra_economy::weights::SubstrateWeight<Runtime>;
+    type AdminOrigin = PrivilegedControlOrigin;
+}
+
+impl pallet_eterra_profile::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = pallet_eterra_profile::weights::SubstrateWeight<Runtime>;
+    type AdminOrigin = PrivilegedControlOrigin;
+}
+
+parameter_types! {
+    pub const EterraArcadeMaxSlugLen: u32 = 32;
+    pub const EterraArcadeMaxClientRunIdLen: u32 = 128;
+    pub const EterraArcadeMaxResultIdLen: u32 = 128;
+    pub const EterraArcadeMaxProgressLabelLen: u32 = 128;
+    pub const EterraArcadeMaxLeaderboardEntries: u32 = 32;
+    pub const EterraArcadeMaxOuroRoomsPerRun: u32 = 256;
+    pub const EterraArcadeMaxOuroBossesPerRun: u32 = 64;
+    pub const EterraArcadeMaxAegisStagesPerRun: u32 = 32;
+    pub const EterraArcadeMaxAegisCheckpointsPerRun: u32 = 256;
+}
+
+impl pallet_eterra_arcade_core::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = pallet_eterra_arcade_core::weights::SubstrateWeight<Runtime>;
+    type AdminOrigin = PrivilegedControlOrigin;
+    type EconomyProvider = EterraArcadeEconomyProvider;
+    type AuthorityProvider = EterraArcadeAuthorityProvider;
+    type MaxSlugLen = EterraArcadeMaxSlugLen;
+    type MaxClientRunIdLen = EterraArcadeMaxClientRunIdLen;
+    type MaxResultIdLen = EterraArcadeMaxResultIdLen;
+    type MaxProgressLabelLen = EterraArcadeMaxProgressLabelLen;
+    type MaxLeaderboardEntries = EterraArcadeMaxLeaderboardEntries;
+}
+
+impl pallet_eterra_arcade_ouro::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = pallet_eterra_arcade_ouro::weights::SubstrateWeight<Runtime>;
+    type MaxOuroRoomsPerRun = EterraArcadeMaxOuroRoomsPerRun;
+    type MaxOuroBossesPerRun = EterraArcadeMaxOuroBossesPerRun;
+}
+
+impl pallet_eterra_arcade_aegis_run::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = pallet_eterra_arcade_aegis_run::weights::SubstrateWeight<Runtime>;
+    type MaxAegisStagesPerRun = EterraArcadeMaxAegisStagesPerRun;
+    type MaxAegisCheckpointsPerRun = EterraArcadeMaxAegisCheckpointsPerRun;
+}
+
+parameter_types! {
+    pub const EterraFlowMaxUriBytes: u32 = 256;
+    pub const EterraFlowMaxManifestChunkBytes: u32 = 64 * 1024;
+    pub const EterraFlowMaxManifestChunks: u32 = 64;
+    pub const EterraFlowMaxManifestBytes: u32 = 4 * 1024 * 1024;
+    pub const EterraFlowMaxActionPayloadBytes: u32 = 1024;
+    pub const EterraFlowMaxAttestedPayloadBytes: u32 = 4096;
+    pub const EterraFlowMaxMachinesPerManifest: u32 = 256;
+    pub const EterraFlowMaxStatesPerMachine: u32 = 1024;
+    pub const EterraFlowMaxVariablesPerManifest: u32 = 4096;
+    pub const EterraFlowMaxActionsPerManifest: u32 = 4096;
+    pub const EterraFlowMaxTransitionsPerManifest: u32 = 20_000;
+    pub const EterraFlowMaxConditionsPerTransition: u32 = 64;
+    pub const EterraFlowMaxConditionClauses: u32 = 64;
+    pub const EterraFlowMaxEconomyGateClauses: u32 = 16;
+    pub const EterraFlowMaxEffectsPerTransition: u32 = 64;
+    pub const EterraFlowMaxEventsPerManifest: u32 = 256;
+    pub const EterraFlowMaxAttestedEffectsPerEvent: u32 = 32;
+    pub const EterraFlowMaxEventEffectPolicies: u32 = 64;
+}
+
+impl pallet_eterra_flow::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = pallet_eterra_flow::weights::SubstrateWeight<Runtime>;
+    type AuthorityProvider = EterraFlowAuthorityProvider;
+    type EconomyProvider = EterraFlowEconomyProvider;
+    type ProfileProvider = EterraFlowProfileProvider;
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkAuthorityProvider = EterraFlowBenchmarkAuthorityProvider;
+    type MaxUriBytes = EterraFlowMaxUriBytes;
+    type MaxManifestChunkBytes = EterraFlowMaxManifestChunkBytes;
+    type MaxManifestChunks = EterraFlowMaxManifestChunks;
+    type MaxManifestBytes = EterraFlowMaxManifestBytes;
+    type MaxActionPayloadBytes = EterraFlowMaxActionPayloadBytes;
+    type MaxAttestedPayloadBytes = EterraFlowMaxAttestedPayloadBytes;
+    type MaxMachinesPerManifest = EterraFlowMaxMachinesPerManifest;
+    type MaxStatesPerMachine = EterraFlowMaxStatesPerMachine;
+    type MaxVariablesPerManifest = EterraFlowMaxVariablesPerManifest;
+    type MaxActionsPerManifest = EterraFlowMaxActionsPerManifest;
+    type MaxTransitionsPerManifest = EterraFlowMaxTransitionsPerManifest;
+    type MaxConditionsPerTransition = EterraFlowMaxConditionsPerTransition;
+    type MaxConditionClauses = EterraFlowMaxConditionClauses;
+    type MaxEconomyGateClauses = EterraFlowMaxEconomyGateClauses;
+    type MaxEffectsPerTransition = EterraFlowMaxEffectsPerTransition;
+    type MaxEventsPerManifest = EterraFlowMaxEventsPerManifest;
+    type MaxAttestedEffectsPerEvent = EterraFlowMaxAttestedEffectsPerEvent;
+    type MaxEventEffectPolicies = EterraFlowMaxEventEffectPolicies;
+}
+
 impl pallet_eterra_daily_slots::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type TimeProvider = pallet_timestamp::Pallet<Runtime>;
@@ -704,6 +1035,8 @@ impl pallet_eterra_simple_matchmaker::Config for Runtime {
     type PlayersPerMatch = PlayersPerMatchConst;
     type QueueCapacity = QueueCapacityConst;
     type HandProvider = MatchmakerHandProvider;
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHandSeeder = ();
     type GameCreator = pallet_eterra::Pallet<Runtime>;
     type WeightInfo = pallet_eterra_simple_matchmaker::weights::SubstrateWeight<Runtime>;
 }
@@ -738,6 +1071,7 @@ impl pallet_eterra_tcg::Config for Runtime {
 
     type PaymentCurrency = Balances;
     type HandChecker = TcgHandChecker;
+    type ProgressionAuthorityProvider = TcgProgressionAuthorityProvider;
     type PackPrice = ConstU128<{ 500 * UNIT }>;
     type PackPriceReceiver = TreasuryAccount;
     type ProPrice = ConstU128<{ 200 * UNIT }>;
@@ -768,6 +1102,11 @@ impl pallet_eterra_tcg::Config for Runtime {
     type MaxNexusMetadataUriLen = ConstU32<256>;
     type MaxNexusReasonLen = ConstU32<128>;
     type MaxNexusSpellSlotsPerCard = ConstU32<3>;
+    type MaxProgressionNodesPerTree = ConstU32<16>;
+    type MaxProgressionNodesPerCard = ConstU32<16>;
+    type MaxMagicSlotsPerCard = ConstU32<3>;
+    type MaxProgressionTrees = ConstU32<64>;
+    type CardXpPerLevel = ConstU32<100>;
     type MaxNexusMatchPlayers = ConstU32<2>;
     type WeightInfo = pallet_eterra_tcg::weights::SubstrateWeight<Runtime>;
 }
@@ -874,7 +1213,8 @@ impl pallet_nfts::Config for Runtime {
 
     type Currency = Balances;
     type ForceOrigin = PrivilegedControlOrigin;
-    type CreateOrigin = frame_support::traits::AsEnsureOriginWithArg<frame_system::EnsureSigned<AccountId>>;
+    type CreateOrigin =
+        frame_support::traits::AsEnsureOriginWithArg<frame_system::EnsureSigned<AccountId>>;
     type Locker = ();
 
     type CollectionDeposit = ConstU128<0>;

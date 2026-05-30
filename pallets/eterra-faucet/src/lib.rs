@@ -115,7 +115,7 @@ pub mod pallet {
             if let Some(ref acc) = self.faucet_account {
                 FaucetAccount::<T>::put(acc);
             }
-            PayoutAmount::<T>::put(&self.payout_amount);
+            PayoutAmount::<T>::put(self.payout_amount);
         }
     }
 
@@ -123,9 +123,7 @@ pub mod pallet {
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
         /// Transaction fee sponsorship was applied for this account's faucet claim.
-        FeeSponsorshipApplied {
-            who: T::AccountId,
-        },
+        FeeSponsorshipApplied { who: T::AccountId },
         /// A faucet claim was paid.
         /// (who, amount)
         Claimed {

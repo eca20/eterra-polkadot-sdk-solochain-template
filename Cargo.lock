@@ -1952,6 +1952,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "eterra-manifest-builder"
+version = "0.1.0"
+dependencies = [
+ "parity-scale-codec",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "event-listener"
 version = "2.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5173,6 +5182,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "pallet-alpha-access"
+version = "0.1.0"
+dependencies = [
+ "frame-support",
+ "frame-system",
+ "pallet-balances",
+ "pallet-timestamp",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
 name = "pallet-assets"
 version = "40.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5264,6 +5289,7 @@ dependencies = [
  "frame-system-benchmarking",
  "hex",
  "log",
+ "pallet-alpha-access",
  "pallet-assets",
  "pallet-balances",
  "pallet-eterra-gamer",
@@ -5279,6 +5305,83 @@ dependencies = [
  "sp-io",
  "sp-runtime",
  "sp-std 8.0.0",
+]
+
+[[package]]
+name = "pallet-eterra-arcade-aegis-run"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "pallet-eterra-arcade-core",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
+name = "pallet-eterra-arcade-core"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
+name = "pallet-eterra-arcade-ouro"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "pallet-eterra-arcade-core",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
+name = "pallet-eterra-authority"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
+name = "pallet-eterra-card-escrow"
+version = "0.1.0"
+dependencies = [
+ "frame-support",
+ "frame-system",
+ "pallet-alpha-access",
+ "pallet-balances",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
 ]
 
 [[package]]
@@ -5298,6 +5401,21 @@ dependencies = [
  "rand_chacha 0.3.1",
  "scale-info",
  "schnorrkel",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
+name = "pallet-eterra-economy"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "parity-scale-codec",
+ "scale-info",
  "sp-core",
  "sp-io",
  "sp-runtime",
@@ -5325,6 +5443,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-eterra-flow"
+version = "0.1.0"
+dependencies = [
+ "eterra-manifest-builder",
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "pallet-eterra-authority",
+ "pallet-eterra-economy",
+ "pallet-eterra-profile",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
 name = "pallet-eterra-game-authority"
 version = "0.1.0"
 dependencies = [
@@ -5332,6 +5469,7 @@ dependencies = [
  "frame-support",
  "frame-system",
  "frame-system-benchmarking",
+ "pallet-alpha-access",
  "parity-scale-codec",
  "scale-info",
  "sp-core",
@@ -5348,6 +5486,7 @@ dependencies = [
  "frame-support",
  "frame-system",
  "frame-system-benchmarking",
+ "pallet-alpha-access",
  "pallet-balances",
  "parity-scale-codec",
  "scale-info",
@@ -5392,6 +5531,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-eterra-profile"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
 name = "pallet-eterra-seasons"
 version = "0.1.0"
 dependencies = [
@@ -5415,6 +5569,7 @@ dependencies = [
  "frame-support",
  "frame-system",
  "frame-system-benchmarking",
+ "pallet-alpha-access",
  "parity-scale-codec",
  "scale-info",
  "sp-core",
@@ -5453,6 +5608,7 @@ dependencies = [
  "frame-system-benchmarking",
  "hex",
  "log",
+ "pallet-alpha-access",
  "pallet-balances",
  "pallet-eterra-media",
  "pallet-eterra-seasons",
@@ -8650,17 +8806,26 @@ dependencies = [
  "frame-system-benchmarking",
  "frame-system-rpc-runtime-api",
  "frame-try-runtime",
+ "pallet-alpha-access",
  "pallet-assets",
  "pallet-aura",
  "pallet-balances",
  "pallet-collective",
  "pallet-eterra",
+ "pallet-eterra-arcade-aegis-run",
+ "pallet-eterra-arcade-core",
+ "pallet-eterra-arcade-ouro",
+ "pallet-eterra-authority",
+ "pallet-eterra-card-escrow",
  "pallet-eterra-daily-slots",
+ "pallet-eterra-economy",
  "pallet-eterra-faucet",
+ "pallet-eterra-flow",
  "pallet-eterra-game-authority",
  "pallet-eterra-gamer",
  "pallet-eterra-media",
  "pallet-eterra-monte-carlo-ai",
+ "pallet-eterra-profile",
  "pallet-eterra-seasons",
  "pallet-eterra-simple-matchmaker",
  "pallet-eterra-tcg",

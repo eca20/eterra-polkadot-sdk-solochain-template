@@ -1,10 +1,15 @@
 use crate::pallet::Config as EterraSlotsConfig;
 use crate::{
-    mock::*, ActiveCard, CardArtworkCollectionId, CardCapacityBonus, CardPrices, Cards,
-    CardsByOwner, Error, Event, ListedByOwner, NextCardId, NextStarterGrantId, NexusAccountStates,
-    NexusOverflowCards, NexusOverflowSubjectCounts, NexusStorageLocation, NexusSubjectCopyCounts,
-    PackCardInProgress, PackInProgress, PlayerPacks, SeasonCollectionIds, SeasonCollectionStatus,
-    SeasonCollections, StarterGrants, StarterPath,
+    mock::*, ActiveCard, CardArtworkCollectionId, CardCapacityBonus, CardEquipmentAttachments,
+    CardMagicLoadouts, CardPrices, CardProgressions, Cards, CardsByOwner, CollectionCard, Element,
+    ElementProfile, Error, Event, GearItem, GearItemTemplates, GearSlotType, GearTier,
+    ListedByOwner, NextCardId, NextStarterGrantId, NexusAccountStates, NexusCardKind,
+    NexusCardOrigin, NexusCollectionCards, NexusGearItems, NexusOverflowCards,
+    NexusOverflowSubjectCounts, NexusSpellbook, NexusStorageLocation, NexusSubjectCopyCounts,
+    PackCardInProgress, PackInProgress, PlayerPacks, ProgressionNode, ProgressionNodeKind,
+    ProgressionNodeStatus, ProgressionTreeBySubject, ProgressionTreeIds, ProgressionTrees,
+    RankValue, SeasonCollectionIds, SeasonCollectionStatus, SeasonCollections, SpellEntry,
+    SpellSlotEntry, StarterGrants, StarterPath,
 };
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok, BoundedBTreeSet, BoundedVec};
@@ -81,6 +86,99 @@ fn seed_owned_card_index(owner: u64, count: u32, id_offset: u32) {
         assert!(ids.try_insert(id).is_ok());
     }
     CardsByOwner::<Test>::insert(owner, ids);
+}
+
+fn progression_node(
+    node_id: u32,
+    required_level: u16,
+    required_item_template_id: u32,
+    power_delta: u16,
+) -> ProgressionNode {
+    ProgressionNode {
+        node_id,
+        node_kind: ProgressionNodeKind::Weapon,
+        required_level,
+        required_item_template_id,
+        gear_slot_type: Some(GearSlotType::Weapon),
+        power_delta,
+        config_version: 1,
+    }
+}
+
+fn set_default_progression_tree() {
+    assert_ok!(EterraSlots::set_progression_tree(
+        RuntimeOrigin::root(),
+        1,
+        2,
+        None,
+        vec![progression_node(1, 1, 77, 5)],
+        1
+    ));
+}
+
+fn mint_progression_card(owner: u64) -> u32 {
+    set_default_progression_tree();
+    let card_id = NextCardId::<Test>::get();
+    assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(owner)));
+    card_id
+}
+
+fn seed_progression_gear(owner: u64, gear_id: u32, item_template_id: u32) {
+    NexusGearItems::<Test>::insert(
+        gear_id,
+        GearItem {
+            owner,
+            gear_id,
+            slot_type: GearSlotType::Weapon,
+            tier: GearTier::Basic,
+            power: 1,
+            spell_slots: BoundedVec::<SpellSlotEntry, MaxNexusSpellSlotsPerCard>::default(),
+            equipped_card_id: None,
+            season_id: 1,
+            config_version: 1,
+        },
+    );
+    GearItemTemplates::<Test>::insert(gear_id, item_template_id);
+}
+
+fn seed_spell(owner: u64, spell_id: u32, power: u16) {
+    NexusSpellbook::<Test>::insert(
+        spell_id,
+        SpellEntry {
+            owner,
+            spell_id,
+            element: Element::Fire,
+            power,
+            slotted_to: None,
+            config_version: 1,
+        },
+    );
+}
+
+fn seed_collection_card(owner: u64, card_id: u32, power: u16) {
+    NexusCollectionCards::<Test>::insert(
+        card_id,
+        CollectionCard {
+            owner,
+            subject_id: 2,
+            kind: NexusCardKind::Echo,
+            origin: NexusCardOrigin::Pull,
+            base_ranks: [RankValue::Number(1); 4],
+            apex_side: None,
+            genes: Default::default(),
+            element_profile: ElementProfile {
+                main: Element::Fire,
+                minor: None,
+                resistance: None,
+                weakness: None,
+            },
+            card_power: power,
+            location: NexusStorageLocation::Collection,
+            account_bound: false,
+            acquired_at: System::block_number(),
+            config_version: 1,
+        },
+    );
 }
 
 #[test]
@@ -216,6 +314,323 @@ fn nexus_team_validation_requires_exactly_five_cards() {
             EterraSlots::validate_nexus_team_size(6),
             Error::<Test>::NexusTeamSizeInvalid
         );
+    });
+}
+
+#[test]
+fn admin_can_set_valid_progression_tree() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraSlots::set_progression_tree(
+            RuntimeOrigin::root(),
+            1,
+            2,
+            None,
+            vec![progression_node(1, 1, 77, 5)],
+            1
+        ));
+
+        let tree = ProgressionTrees::<Test>::get(1).expect("tree should be stored");
+        assert_eq!(tree.tree_id, 1);
+        assert_eq!(tree.subject_id, 2);
+        assert_eq!(tree.nodes.len(), 1);
+        assert_eq!(
+            ProgressionTreeBySubject::<Test>::get(2, None::<u8>),
+            Some(1)
+        );
+        assert_eq!(ProgressionTreeIds::<Test>::get().to_vec(), vec![1]);
+    });
+}
+
+#[test]
+fn progression_tree_rejects_signed_empty_oversized_duplicate_and_bad_version() {
+    new_test_ext().execute_with(|| {
+        assert_noop!(
+            EterraSlots::set_progression_tree(
+                RuntimeOrigin::signed(1),
+                1,
+                2,
+                None,
+                vec![progression_node(1, 1, 77, 5)],
+                1
+            ),
+            sp_runtime::DispatchError::BadOrigin
+        );
+
+        assert_noop!(
+            EterraSlots::set_progression_tree(RuntimeOrigin::root(), 1, 2, None, vec![], 1),
+            Error::<Test>::InvalidProgressionTree
+        );
+
+        let oversized = (0..=MaxProgressionNodesPerTree::get())
+            .map(|id| progression_node(id, 1, 77 + id, 1))
+            .collect::<Vec<_>>();
+        assert_noop!(
+            EterraSlots::set_progression_tree(RuntimeOrigin::root(), 1, 2, None, oversized, 1),
+            Error::<Test>::InvalidProgressionTree
+        );
+
+        assert_noop!(
+            EterraSlots::set_progression_tree(
+                RuntimeOrigin::root(),
+                1,
+                2,
+                None,
+                vec![progression_node(1, 1, 77, 5), progression_node(1, 2, 78, 5)],
+                1
+            ),
+            Error::<Test>::InvalidProgressionTree
+        );
+
+        let mut bad_version = progression_node(1, 1, 77, 5);
+        bad_version.config_version = 2;
+        assert_noop!(
+            EterraSlots::set_progression_tree(
+                RuntimeOrigin::root(),
+                1,
+                2,
+                None,
+                vec![bad_version],
+                1
+            ),
+            Error::<Test>::InvalidProgressionTree
+        );
+    });
+}
+
+#[test]
+fn new_minted_card_gets_matching_progression_tree_assigned() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let card_id = mint_progression_card(player);
+
+        let progression =
+            CardProgressions::<Test>::get(card_id).expect("progression should be initialized");
+        assert_eq!(progression.card_id, card_id);
+        assert_eq!(progression.tree_id, 1);
+        assert_eq!(progression.level, 1);
+        assert_eq!(progression.experience, 0);
+    });
+}
+
+#[test]
+fn authorized_card_xp_grant_updates_level_deterministically() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let issuer = 1u64;
+        let card_id = mint_progression_card(player);
+
+        assert_ok!(EterraSlots::grant_card_experience(
+            RuntimeOrigin::signed(issuer),
+            10,
+            7,
+            8,
+            card_id,
+            250
+        ));
+
+        let progression = CardProgressions::<Test>::get(card_id).expect("progression exists");
+        assert_eq!(progression.experience, 250);
+        assert_eq!(progression.level, 3);
+    });
+}
+
+#[test]
+fn unauthorized_card_xp_grant_is_rejected() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let card_id = mint_progression_card(player);
+
+        assert_noop!(
+            EterraSlots::grant_card_experience(RuntimeOrigin::signed(1), 10, 7, 9, card_id, 100),
+            Error::<Test>::NotAuthorizedProgressionIssuer
+        );
+    });
+}
+
+#[test]
+fn owner_can_forge_unlocked_progression_node_with_matching_item() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let card_id = mint_progression_card(player);
+        seed_progression_gear(player, 100, 77);
+
+        assert_ok!(EterraSlots::forge_progression_node(
+            RuntimeOrigin::signed(player),
+            card_id,
+            1,
+            100
+        ));
+
+        let progression = CardProgressions::<Test>::get(card_id).expect("progression exists");
+        assert_eq!(progression.completed_nodes.to_vec(), vec![1]);
+        assert!(CardEquipmentAttachments::<Test>::get(card_id, 1).is_some());
+        assert_eq!(
+            EterraSlots::progression_node_status(card_id, 1).unwrap(),
+            ProgressionNodeStatus::Completed
+        );
+        assert_eq!(
+            NexusGearItems::<Test>::get(100)
+                .expect("gear exists")
+                .equipped_card_id,
+            Some(card_id)
+        );
+    });
+}
+
+#[test]
+fn owner_cannot_forge_locked_progression_node() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        assert_ok!(EterraSlots::set_progression_tree(
+            RuntimeOrigin::root(),
+            1,
+            2,
+            None,
+            vec![progression_node(1, 2, 77, 5)],
+            1
+        ));
+        let card_id = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(player)));
+        seed_progression_gear(player, 100, 77);
+
+        assert_noop!(
+            EterraSlots::forge_progression_node(RuntimeOrigin::signed(player), card_id, 1, 100),
+            Error::<Test>::ProgressionNodeLocked
+        );
+    });
+}
+
+#[test]
+fn owner_cannot_forge_completed_progression_node_twice() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let card_id = mint_progression_card(player);
+        seed_progression_gear(player, 100, 77);
+
+        assert_ok!(EterraSlots::forge_progression_node(
+            RuntimeOrigin::signed(player),
+            card_id,
+            1,
+            100
+        ));
+        assert_noop!(
+            EterraSlots::forge_progression_node(RuntimeOrigin::signed(player), card_id, 1, 100),
+            Error::<Test>::ProgressionNodeAlreadyCompleted
+        );
+    });
+}
+
+#[test]
+fn owner_cannot_forge_with_wrong_item_template() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let card_id = mint_progression_card(player);
+        seed_progression_gear(player, 100, 999);
+
+        assert_noop!(
+            EterraSlots::forge_progression_node(RuntimeOrigin::signed(player), card_id, 1, 100),
+            Error::<Test>::RequiredItemMismatch
+        );
+    });
+}
+
+#[test]
+fn non_owner_cannot_forge_another_players_card() {
+    new_test_ext().execute_with(|| {
+        let owner = 2u64;
+        let other = 3u64;
+        let card_id = mint_progression_card(owner);
+        seed_progression_gear(other, 100, 77);
+
+        assert_noop!(
+            EterraSlots::forge_progression_node(RuntimeOrigin::signed(other), card_id, 1, 100),
+            Error::<Test>::NotCardOwner
+        );
+    });
+}
+
+#[test]
+fn magic_loadout_can_change_without_changing_completed_nodes() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let card_id = mint_progression_card(player);
+        seed_progression_gear(player, 100, 77);
+        seed_spell(player, 200, 3);
+        seed_spell(player, 201, 4);
+
+        assert_ok!(EterraSlots::forge_progression_node(
+            RuntimeOrigin::signed(player),
+            card_id,
+            1,
+            100
+        ));
+        let before = CardProgressions::<Test>::get(card_id)
+            .expect("progression exists")
+            .completed_nodes
+            .to_vec();
+
+        assert_ok!(EterraSlots::set_card_magic_loadout(
+            RuntimeOrigin::signed(player),
+            card_id,
+            vec![200]
+        ));
+        assert_ok!(EterraSlots::set_card_magic_loadout(
+            RuntimeOrigin::signed(player),
+            card_id,
+            vec![201]
+        ));
+
+        let after = CardProgressions::<Test>::get(card_id)
+            .expect("progression exists")
+            .completed_nodes
+            .to_vec();
+        assert_eq!(before, after);
+        assert_eq!(
+            CardMagicLoadouts::<Test>::get(card_id)
+                .expect("loadout exists")
+                .spells
+                .to_vec(),
+            vec![201]
+        );
+    });
+}
+
+#[test]
+fn magic_loadout_rejects_spell_not_owned() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let card_id = mint_progression_card(player);
+        seed_spell(3, 200, 3);
+
+        assert_noop!(
+            EterraSlots::set_card_magic_loadout(RuntimeOrigin::signed(player), card_id, vec![200]),
+            Error::<Test>::SpellNotOwned
+        );
+    });
+}
+
+#[test]
+fn total_card_power_includes_base_progression_and_magic_power() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let card_id = mint_progression_card(player);
+        seed_collection_card(player, card_id, 7);
+        seed_progression_gear(player, 100, 77);
+        seed_spell(player, 200, 3);
+
+        assert_ok!(EterraSlots::forge_progression_node(
+            RuntimeOrigin::signed(player),
+            card_id,
+            1,
+            100
+        ));
+        assert_ok!(EterraSlots::set_card_magic_loadout(
+            RuntimeOrigin::signed(player),
+            card_id,
+            vec![200]
+        ));
+
+        assert_eq!(EterraSlots::nexus_card_total_power(card_id), 15);
     });
 }
 

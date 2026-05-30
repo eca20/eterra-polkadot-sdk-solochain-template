@@ -2,10 +2,81 @@
 
 use super::*;
 use frame_benchmarking::{account, benchmarks, whitelisted_caller};
+use frame_support::BoundedVec;
 use frame_system::RawOrigin;
 use sp_runtime::traits::Saturating;
 
+const BENCHMARK_SEASON_ID: SeasonId = 1;
+const BENCHMARK_COLLECTION_ID: SeasonCollectionId = 0;
+
+fn ensure_benchmark_season<T: Config>() {
+    let now = <frame_system::Pallet<T>>::block_number();
+    let season_name: BoundedVec<u8, <T as pallet_eterra_seasons::Config>::MaxSeasonNameLen> =
+        b"Benchmark Season"
+            .to_vec()
+            .try_into()
+            .expect("benchmark season name fits");
+    let season_desc: BoundedVec<u8, <T as pallet_eterra_seasons::Config>::MaxSeasonDescLen> =
+        b"Benchmark"
+            .to_vec()
+            .try_into()
+            .expect("benchmark season description fits");
+
+    pallet_eterra_seasons::Seasons::<T>::insert(
+        BENCHMARK_SEASON_ID,
+        pallet_eterra_seasons::SeasonInfo {
+            name: season_name,
+            description: season_desc,
+            status: pallet_eterra_seasons::SeasonStatus::Active,
+            created_at: now,
+            activated_at: Some(now),
+            closed_at: None,
+        },
+    );
+    pallet_eterra_seasons::ActiveSeasonId::<T>::put(Some(BENCHMARK_SEASON_ID));
+    pallet_eterra_seasons::NextSeasonId::<T>::mutate(|next| {
+        if *next <= BENCHMARK_SEASON_ID {
+            *next = BENCHMARK_SEASON_ID.saturating_add(1);
+        }
+    });
+
+    let mut collection_ids: BoundedVec<SeasonCollectionId, T::MaxSeasonCollections> =
+        BoundedVec::default();
+    collection_ids
+        .try_push(BENCHMARK_COLLECTION_ID)
+        .expect("benchmark collection id fits");
+    SeasonCollectionIds::<T>::insert(BENCHMARK_SEASON_ID, collection_ids);
+
+    let collection_name: BoundedVec<u8, T::MaxSeasonCollectionNameLen> = b"Benchmark Set"
+        .to_vec()
+        .try_into()
+        .expect("benchmark collection name fits");
+    SeasonCollections::<T>::insert(
+        BENCHMARK_SEASON_ID,
+        BENCHMARK_COLLECTION_ID,
+        SeasonCollectionInfo {
+            name: collection_name,
+            status: SeasonCollectionStatus::Published,
+            created_at: now,
+            published_at: Some(now),
+        },
+    );
+
+    let mut assets = SeasonCollectionAssets::<T>::get(BENCHMARK_SEASON_ID, BENCHMARK_COLLECTION_ID);
+    assets.borders = BoundedVec::try_from(sp_std::vec![0]).expect("benchmark border fits");
+    assets.backgrounds = BoundedVec::try_from(sp_std::vec![1]).expect("benchmark background fits");
+    assets.subjects = BoundedVec::try_from(sp_std::vec![2]).expect("benchmark subject fits");
+    assets.backs = BoundedVec::try_from(sp_std::vec![3]).expect("benchmark back fits");
+    assets.packaging_fronts =
+        BoundedVec::try_from(sp_std::vec![4]).expect("benchmark packaging front fits");
+    assets.packaging_backs =
+        BoundedVec::try_from(sp_std::vec![5]).expect("benchmark packaging back fits");
+    SeasonCollectionAssets::<T>::insert(BENCHMARK_SEASON_ID, BENCHMARK_COLLECTION_ID, assets);
+}
+
 fn fund<T: Config>(who: &T::AccountId) {
+    ensure_benchmark_season::<T>();
+
     // Ensure the caller can pay either price and still satisfy `KeepAlive`.
     let pack_price = T::PackPrice::get();
     let pro_price = T::ProPrice::get();
@@ -56,6 +127,72 @@ fn setup_pro<T: Config>(player: &T::AccountId) -> u32 {
     fund::<T>(player);
     Pallet::<T>::mint_pro(RawOrigin::Signed(player.clone()).into()).expect("mint pro succeeds");
     ProInProgress::<T>::get(player).expect("pro in progress")
+}
+
+fn sample_progression_node() -> ProgressionNode {
+    ProgressionNode {
+        node_id: 1,
+        node_kind: ProgressionNodeKind::Weapon,
+        required_level: 1,
+        required_item_template_id: 77,
+        gear_slot_type: Some(GearSlotType::Weapon),
+        power_delta: 5,
+        config_version: 1,
+    }
+}
+
+fn setup_progression_tree<T: Config>() {
+    Pallet::<T>::set_progression_tree(
+        RawOrigin::Root.into(),
+        1,
+        2,
+        None,
+        sp_std::vec![sample_progression_node()],
+        1,
+    )
+    .expect("set progression tree succeeds");
+}
+
+fn setup_progression_card<T: Config>(player: &T::AccountId) -> u32 {
+    setup_progression_tree::<T>();
+    let card_id = setup_finalized_card::<T>(player);
+    if CardProgressions::<T>::get(card_id).is_none() {
+        Pallet::<T>::assign_progression_tree_to_card(RawOrigin::Root.into(), card_id, 1)
+            .expect("assign progression succeeds");
+    }
+    card_id
+}
+
+fn setup_progression_gear<T: Config>(owner: &T::AccountId, gear_id: GearId) {
+    NexusGearItems::<T>::insert(
+        gear_id,
+        GearItem {
+            owner: owner.clone(),
+            gear_id,
+            slot_type: GearSlotType::Weapon,
+            tier: GearTier::Basic,
+            power: 1,
+            spell_slots: BoundedVec::<SpellSlotEntry, T::MaxNexusSpellSlotsPerCard>::default(),
+            equipped_card_id: None,
+            season_id: BENCHMARK_SEASON_ID,
+            config_version: 1,
+        },
+    );
+    GearItemTemplates::<T>::insert(gear_id, 77);
+}
+
+fn setup_progression_spell<T: Config>(owner: &T::AccountId, spell_id: SpellId) {
+    NexusSpellbook::<T>::insert(
+        spell_id,
+        SpellEntry {
+            owner: owner.clone(),
+            spell_id,
+            element: Element::Fire,
+            power: 3,
+            slotted_to: None,
+            config_version: 1,
+        },
+    );
 }
 
 benchmarks! {
@@ -202,6 +339,51 @@ benchmarks! {
         let card = Cards::<T>::get(card_id).expect("card exists");
         assert_eq!(card.get_owner(), &buyer);
         assert!(CardPrices::<T>::get(card_id).is_none());
+    }
+
+    set_progression_tree {
+        let node = sample_progression_node();
+    }: _(RawOrigin::Root, 1, 2, None, sp_std::vec![node], 1)
+    verify {
+        assert!(ProgressionTrees::<T>::get(1).is_some());
+    }
+
+    assign_progression_tree_to_card {
+        let caller: T::AccountId = whitelisted_caller();
+        setup_progression_tree::<T>();
+        let card_id = setup_finalized_card::<T>(&caller);
+    }: _(RawOrigin::Root, card_id, 1)
+    verify {
+        assert!(CardProgressions::<T>::get(card_id).is_some());
+    }
+
+    grant_card_experience {
+        let caller: T::AccountId = whitelisted_caller();
+        let card_id = setup_progression_card::<T>(&caller);
+    }: _(RawOrigin::Signed(caller.clone()), 10, 7, 8, card_id, 100)
+    verify {
+        let progression = CardProgressions::<T>::get(card_id).expect("progression exists");
+        assert!(progression.experience >= 100);
+        assert!(progression.level >= 2);
+    }
+
+    forge_progression_node {
+        let caller: T::AccountId = whitelisted_caller();
+        let card_id = setup_progression_card::<T>(&caller);
+        setup_progression_gear::<T>(&caller, 100);
+    }: _(RawOrigin::Signed(caller.clone()), card_id, 1, 100)
+    verify {
+        assert!(CardEquipmentAttachments::<T>::get(card_id, 1).is_some());
+    }
+
+    set_card_magic_loadout {
+        let caller: T::AccountId = whitelisted_caller();
+        let card_id = setup_progression_card::<T>(&caller);
+        setup_progression_spell::<T>(&caller, 200);
+    }: _(RawOrigin::Signed(caller.clone()), card_id, sp_std::vec![200])
+    verify {
+        let loadout = CardMagicLoadouts::<T>::get(card_id).expect("loadout exists");
+        assert_eq!(loadout.spells.len(), 1);
     }
 }
 

@@ -11,7 +11,7 @@ use sp_runtime::{
 };
 
 fn account_id_from_pair(pair: &sr25519::Pair) -> AccountId {
-    sp_runtime::AccountId32::from(pair.public()).into()
+    sp_runtime::AccountId32::from(pair.public())
 }
 
 fn new_test_ext_with_faucet(faucet: &AccountId, faucet_balance: Balance) -> TestExternalities {
@@ -96,8 +96,9 @@ fn faucet_claim_from_zero_balance_is_valid_transaction() {
         // Sanity: this account truly has no funds in our genesis.
         assert_eq!(Balances::free_balance(&claimant), 0);
 
-        let call =
-            RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { dest: claimant.clone() });
+        let call = RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim {
+            dest: claimant.clone(),
+        });
         let xt = signed_extrinsic(call, &claimant_pair, 0, genesis_hash, genesis_hash);
 
         // This mirrors what the node does when a transaction is submitted to the pool.
@@ -158,7 +159,9 @@ fn non_faucet_call_from_zero_balance_is_rejected_for_payment() {
 
         assert_eq!(
             validity,
-            Err(TransactionValidityError::Invalid(InvalidTransaction::Payment)),
+            Err(TransactionValidityError::Invalid(
+                InvalidTransaction::Payment
+            )),
             "expected zero-balance account to be rejected for non-faucet call, got: {validity:?}"
         );
     });

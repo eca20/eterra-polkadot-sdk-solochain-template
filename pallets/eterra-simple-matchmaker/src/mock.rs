@@ -85,6 +85,16 @@ impl pallet_matchmaker::CurrentHandProvider<AccountId> for MockHandProvider {
     }
 }
 
+#[cfg(feature = "runtime-benchmarks")]
+pub struct MockBenchmarkHandSeeder;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_matchmaker::BenchmarkHandSeeder<AccountId> for MockBenchmarkHandSeeder {
+    fn seed_current_hand(who: &AccountId) {
+        set_has_hand(*who, true);
+    }
+}
+
 /// Helper: mark/unmark an account as having a hand in this test thread.
 pub fn set_has_hand(who: AccountId, has: bool) {
     TL_HAND_SET.with(|s| {
@@ -104,10 +114,7 @@ pub fn clear_all_hands() {
 
 // --- Test-only GameCreator implementation for () ---
 impl pallet_matchmaker::GameCreator<AccountId> for () {
-    fn create_from_matchmaking(
-        a: &AccountId,
-        b: &AccountId,
-    ) -> Result<(), DispatchError> {
+    fn create_from_matchmaking(a: &AccountId, b: &AccountId) -> Result<(), DispatchError> {
         // Record the created game pair for assertions.
         CREATED_GAMES.with(|v| v.borrow_mut().push((*a, *b)));
         // Bump a simple counter for the returned GameId.
@@ -126,6 +133,9 @@ impl pallet_matchmaker::Config for Test {
     type PlayersPerMatch = PlayersPerMatchConst;
     type QueueCapacity = QueueCapacityConst;
     type HandProvider = MockHandProvider;
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHandSeeder = MockBenchmarkHandSeeder;
+    type AccessControl = ();
     type GameCreator = ();
     type WeightInfo = ();
 }

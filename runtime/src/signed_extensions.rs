@@ -91,7 +91,7 @@ where
                 priority: 0,
                 requires: vec![],
                 provides,
-                longevity: TransactionLongevity::max_value(),
+                longevity: TransactionLongevity::MAX,
                 propagate: true,
             });
         }
@@ -112,7 +112,7 @@ where
             priority: 0,
             requires,
             provides,
-            longevity: TransactionLongevity::max_value(),
+            longevity: TransactionLongevity::MAX,
             propagate: true,
         })
     }

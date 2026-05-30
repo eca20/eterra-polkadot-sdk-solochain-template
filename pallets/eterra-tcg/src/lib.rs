@@ -1,4 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+#![allow(clippy::needless_borrows_for_generic_args, clippy::useless_conversion)]
 
 pub use pallet::*;
 
@@ -18,7 +19,7 @@ use frame_support::{
     traits::{Currency, ExistenceRequirement, Get},
     BoundedBTreeSet, BoundedVec, PalletId,
 };
-use frame_system::{ensure_signed, pallet_prelude::OriginFor};
+use frame_system::{ensure_root, ensure_signed, pallet_prelude::OriginFor};
 use parity_scale_codec::{Decode, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 use sp_runtime::traits::{AccountIdConversion, Hash, SaturatedConversion};
@@ -37,6 +38,13 @@ pub type MatchId = u32;
 pub type TrialId = u32;
 pub type BoardId = u32;
 pub type NexusConfigVersion = u32;
+pub type ProgressionTreeId = u32;
+pub type ProgressionNodeId = u32;
+pub type ItemTemplateId = u32;
+pub type ProgressionGameId = u64;
+pub type ProgressionVersionId = u32;
+pub type ProgressionEventTypeId = u32;
+pub type ProgressionAuthorityId = u64;
 
 /// Provides a runtime-defined view of whether a given `card_id` is currently included
 /// in `owner`'s configured "current hand".
@@ -51,6 +59,28 @@ pub trait HandChecker<AccountId> {
 impl<AccountId> HandChecker<AccountId> for () {
     fn is_card_in_current_hand(_owner: &AccountId, _card_id: u32) -> bool {
         false
+    }
+}
+
+/// Runtime-provided authority resolver for game/reward systems that can grant
+/// card progression XP.
+pub trait ProgressionAuthorityProvider<AccountId> {
+    fn resolve_authority(
+        account: &AccountId,
+        game_id: ProgressionGameId,
+        version_id: Option<ProgressionVersionId>,
+        event_type: ProgressionEventTypeId,
+    ) -> Option<ProgressionAuthorityId>;
+}
+
+impl<AccountId> ProgressionAuthorityProvider<AccountId> for () {
+    fn resolve_authority(
+        _account: &AccountId,
+        _game_id: ProgressionGameId,
+        _version_id: Option<ProgressionVersionId>,
+        _event_type: ProgressionEventTypeId,
+    ) -> Option<ProgressionAuthorityId> {
+        None
     }
 }
 
@@ -257,6 +287,9 @@ pub enum ResourceKind {
     ElementShards,
     EchoCoreFragments,
     EchoCores,
+    #[deprecated(
+        note = "Seasonal forge-star progression is superseded by card progression trees."
+    )]
     ForgeStars,
     MakeUpStamps,
 }
@@ -311,18 +344,73 @@ pub enum GearTier {
 }
 
 #[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum ProgressionNodeKind {
+    Weapon,
+    Armor,
+    Accessory,
+    Relic,
+    Mastery,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum ProgressionNodeStatus {
+    Locked,
+    Unlocked,
+    Completed,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct ProgressionNode {
+    pub node_id: ProgressionNodeId,
+    pub node_kind: ProgressionNodeKind,
+    pub required_level: u16,
+    pub required_item_template_id: ItemTemplateId,
+    pub gear_slot_type: Option<GearSlotType>,
+    pub power_delta: u16,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct ProgressionTree<BNodes> {
+    pub tree_id: ProgressionTreeId,
+    pub subject_id: SubjectId,
+    pub rarity: Option<u8>,
+    pub nodes: BNodes,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct CardProgression<BCompletedNodes> {
+    pub card_id: u32,
+    pub tree_id: ProgressionTreeId,
+    pub level: u16,
+    pub experience: u32,
+    pub completed_nodes: BCompletedNodes,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct CardEquipmentAttachment<BlockNumber> {
+    pub card_id: u32,
+    pub node_id: ProgressionNodeId,
+    pub gear_id: GearId,
+    pub item_template_id: ItemTemplateId,
+    pub attached_at: BlockNumber,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct CardMagicLoadout<BSpells> {
+    pub card_id: u32,
+    pub spells: BSpells,
+    pub config_version: NexusConfigVersion,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
 pub enum SpellSlotKind {
     Open,
     Element(Element),
     Locked,
-}
-
-#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
-pub enum ForgeBranch {
-    Sword,
-    Staff,
-    Claw,
-    Crossbow,
 }
 
 #[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
@@ -364,7 +452,9 @@ pub enum SystemKey {
     Pulls,
     Seal,
     Salvage,
+    #[deprecated(note = "Seasonal forge paths are superseded by card progression trees.")]
     Forge,
+    Progression,
     RankedRewards,
     VaultExpansion,
     Trading,
@@ -461,6 +551,8 @@ pub struct GearItem<AccountId, BSpellSlots> {
     pub slot_type: GearSlotType,
     pub tier: GearTier,
     pub power: u16,
+    /// Deprecated compatibility field. Active Nexus magic is stored in
+    /// `CardMagicLoadouts`, not embedded permanently in gear.
     pub spell_slots: BSpellSlots,
     pub equipped_card_id: Option<u32>,
     pub season_id: SeasonId,
@@ -530,7 +622,7 @@ pub mod pallet {
     use pallet_alpha_access::AccessControl;
     use sp_runtime::traits::StaticLookup;
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(12);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(13);
     const ESCROW_PALLET_ID: PalletId = PalletId(*b"et/tcgsc");
     const WEIGHT_TOTAL_PERCENT: u32 = 100;
     const DEFAULT_WEIGHT_MULTIPLIER: WeightMultiplier = 100;
@@ -576,6 +668,13 @@ pub mod pallet {
     type BoundedNexusOverflowCards<T> = BoundedVec<u32, <T as Config>::NexusOverflowTotalCapacity>;
     type BoundedNexusSpellSlots<T> =
         BoundedVec<SpellSlotEntry, <T as Config>::MaxNexusSpellSlotsPerCard>;
+    type BoundedProgressionNodes<T> =
+        BoundedVec<ProgressionNode, <T as Config>::MaxProgressionNodesPerTree>;
+    type BoundedProgressionNodeIds<T> =
+        BoundedVec<ProgressionNodeId, <T as Config>::MaxProgressionNodesPerCard>;
+    type BoundedProgressionTreeIds<T> =
+        BoundedVec<ProgressionTreeId, <T as Config>::MaxProgressionTrees>;
+    type BoundedMagicSpells<T> = BoundedVec<SpellId, <T as Config>::MaxMagicSlotsPerCard>;
     type BoundedNexusMatchPlayers<T> =
         BoundedVec<<T as frame_system::Config>::AccountId, <T as Config>::MaxNexusMatchPlayers>;
     type SeasonAssetsInfoOf<T> = SeasonAssetsInfo<
@@ -601,6 +700,10 @@ pub mod pallet {
     type GearItemOf<T> =
         GearItem<<T as frame_system::Config>::AccountId, BoundedNexusSpellSlots<T>>;
     type SpellEntryOf<T> = SpellEntry<<T as frame_system::Config>::AccountId>;
+    type ProgressionTreeOf<T> = ProgressionTree<BoundedProgressionNodes<T>>;
+    type CardProgressionOf<T> = CardProgression<BoundedProgressionNodeIds<T>>;
+    type CardEquipmentAttachmentOf<T> = CardEquipmentAttachment<BlockNumberFor<T>>;
+    type CardMagicLoadoutOf<T> = CardMagicLoadout<BoundedMagicSpells<T>>;
     type TeamOf<T> = Team<<T as frame_system::Config>::AccountId, BoundedNexusTeamCardIds<T>>;
     type MatchStateOf<T> =
         MatchState<<T as frame_system::Config>::AccountId, BoundedNexusMatchPlayers<T>>;
@@ -659,6 +762,9 @@ pub mod pallet {
         /// A runtime-provided hook for checking whether a card is currently part of the owner's
         /// gameplay "current hand".
         type HandChecker: crate::HandChecker<Self::AccountId>;
+
+        /// Runtime-provided authority resolver for game/reward progression XP issuers.
+        type ProgressionAuthorityProvider: crate::ProgressionAuthorityProvider<Self::AccountId>;
 
         /// Fixed pack mint price (in native `COIN` base units).
         #[pallet::constant]
@@ -781,6 +887,26 @@ pub mod pallet {
         /// Maximum number of spell slots a card build can use in Season 1.
         #[pallet::constant]
         type MaxNexusSpellSlotsPerCard: Get<u32>;
+
+        /// Maximum nodes in a configured card progression tree.
+        #[pallet::constant]
+        type MaxProgressionNodesPerTree: Get<u32>;
+
+        /// Maximum completed progression nodes tracked per card.
+        #[pallet::constant]
+        type MaxProgressionNodesPerCard: Get<u32>;
+
+        /// Maximum removable magic spells in one card loadout.
+        #[pallet::constant]
+        type MaxMagicSlotsPerCard: Get<u32>;
+
+        /// Maximum configured progression trees tracked by this pallet.
+        #[pallet::constant]
+        type MaxProgressionTrees: Get<u32>;
+
+        /// XP required for each deterministic card level step.
+        #[pallet::constant]
+        type CardXpPerLevel: Get<u32>;
 
         /// Maximum players tracked by a Nexus match state.
         #[pallet::constant]
@@ -1118,6 +1244,62 @@ pub mod pallet {
     pub type NexusSpellbook<T: Config> =
         StorageMap<_, Blake2_128Concat, SpellId, SpellEntryOf<T>, OptionQuery>;
 
+    /// Configured card-specific progression trees.
+    #[pallet::storage]
+    #[pallet::getter(fn progression_tree)]
+    pub type ProgressionTrees<T: Config> =
+        StorageMap<_, Blake2_128Concat, ProgressionTreeId, ProgressionTreeOf<T>, OptionQuery>;
+
+    /// Bounded index of configured progression tree ids.
+    #[pallet::storage]
+    #[pallet::getter(fn progression_tree_ids)]
+    pub type ProgressionTreeIds<T: Config> =
+        StorageValue<_, BoundedProgressionTreeIds<T>, ValueQuery>;
+
+    /// Subject/rarity lookup for automatic card progression-tree assignment.
+    #[pallet::storage]
+    #[pallet::getter(fn progression_tree_by_subject)]
+    pub type ProgressionTreeBySubject<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        SubjectId,
+        Blake2_128Concat,
+        Option<u8>,
+        ProgressionTreeId,
+        OptionQuery,
+    >;
+
+    /// Per-card progression state.
+    #[pallet::storage]
+    #[pallet::getter(fn card_progression)]
+    pub type CardProgressions<T: Config> =
+        StorageMap<_, Blake2_128Concat, u32, CardProgressionOf<T>, OptionQuery>;
+
+    /// Permanent equipment attachments by card and progression node.
+    #[pallet::storage]
+    #[pallet::getter(fn card_equipment_attachment)]
+    pub type CardEquipmentAttachments<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        u32,
+        Blake2_128Concat,
+        ProgressionNodeId,
+        CardEquipmentAttachmentOf<T>,
+        OptionQuery,
+    >;
+
+    /// Removable magic loadout by card.
+    #[pallet::storage]
+    #[pallet::getter(fn card_magic_loadout)]
+    pub type CardMagicLoadouts<T: Config> =
+        StorageMap<_, Blake2_128Concat, u32, CardMagicLoadoutOf<T>, OptionQuery>;
+
+    /// Item-template sidecar for gear records, preserving existing gear encoding.
+    #[pallet::storage]
+    #[pallet::getter(fn gear_item_template)]
+    pub type GearItemTemplates<T: Config> =
+        StorageMap<_, Blake2_128Concat, GearId, ItemTemplateId, OptionQuery>;
+
     /// Saved Nexus teams by owner and team id.
     #[pallet::storage]
     #[pallet::getter(fn nexus_team)]
@@ -1347,65 +1529,51 @@ pub mod pallet {
             cost: ResourceBundle,
             config_version: NexusConfigVersion,
         },
-        /// Nexus gear was equipped.
-        GearEquipped {
-            account_id: T::AccountId,
-            card_id: u32,
-            gear_id: GearId,
-            slot_type: GearSlotType,
-        },
-        /// Nexus gear was unequipped.
-        GearUnequipped {
-            account_id: T::AccountId,
-            card_id: u32,
-            gear_id: GearId,
-            slot_type: GearSlotType,
-        },
-        /// A Nexus weapon advanced through a Forge path.
-        WeaponForged {
-            account_id: T::AccountId,
-            gear_id: GearId,
-            old_tier: GearTier,
-            new_tier: GearTier,
-            branch: ForgeBranch,
-            cost: ResourceBundle,
-            forge_table_version: NexusConfigVersion,
-        },
-        /// A Nexus seasonal weapon was reforged into a later season path.
-        WeaponReforged {
-            account_id: T::AccountId,
-            old_gear_id: GearId,
-            new_gear_id: GearId,
-            season_from: SeasonId,
-            season_to: SeasonId,
-        },
-        /// Legacy gear was attuned to a sealed Vault Variant.
-        LegacyGearAttuned {
-            account_id: T::AccountId,
-            variant_id: VaultVariantId,
-            gear_id: GearId,
-        },
         /// A Nexus spell was crafted.
         SpellCrafted {
             account_id: T::AccountId,
             spell_id: SpellId,
             cost: ResourceBundle,
         },
-        /// A Nexus spell was slotted into gear.
-        SpellSlotted {
-            account_id: T::AccountId,
-            card_id: u32,
-            gear_id: GearId,
-            slot_index: u8,
-            spell_id: SpellId,
+        /// A card progression tree was configured.
+        ProgressionTreeSet {
+            tree_id: ProgressionTreeId,
+            subject_id: SubjectId,
+            rarity: Option<u8>,
+            node_count: u32,
+            config_version: NexusConfigVersion,
         },
-        /// A Nexus spell was removed from a gear slot.
-        SpellUnslotted {
+        /// A card received its progression record.
+        CardProgressionInitialized {
+            card_id: u32,
+            tree_id: ProgressionTreeId,
+            config_version: NexusConfigVersion,
+        },
+        /// Authorized game/reward logic granted card XP.
+        CardExperienceGranted {
+            issuer: T::AccountId,
+            card_id: u32,
+            amount: u32,
+            experience: u32,
+            level: u16,
+            config_version: NexusConfigVersion,
+        },
+        /// A required inventory item was forged into a card progression node.
+        ProgressionNodeForged {
             account_id: T::AccountId,
             card_id: u32,
+            node_id: ProgressionNodeId,
             gear_id: GearId,
-            slot_index: u8,
-            spell_id: SpellId,
+            item_template_id: ItemTemplateId,
+            power_delta: u16,
+            config_version: NexusConfigVersion,
+        },
+        /// A card's removable magic loadout was replaced.
+        CardMagicLoadoutUpdated {
+            account_id: T::AccountId,
+            card_id: u32,
+            spells: BoundedMagicSpells<T>,
+            config_version: NexusConfigVersion,
         },
         /// A Nexus team was saved.
         TeamSaved {
@@ -1493,13 +1661,6 @@ pub mod pallet {
             trial_id: TrialId,
             result: TrialStatus,
             rewards: ResourceBundle,
-        },
-        /// Forge Stars were granted.
-        ForgeStarsGranted {
-            account_id: T::AccountId,
-            amount: u32,
-            reason: BoundedNexusReason<T>,
-            season: SeasonId,
         },
         /// A Nexus system was paused.
         SystemPaused {
@@ -1660,6 +1821,31 @@ pub mod pallet {
         /// Caller does not own the NFT item.
         NotNftOwner,
 
+        /// Progression tree does not exist.
+        ProgressionTreeMissing,
+        /// Progression node does not exist in the card's tree.
+        ProgressionNodeMissing,
+        /// Card level does not satisfy the progression node gate.
+        ProgressionNodeLocked,
+        /// Progression node is already completed for this card.
+        ProgressionNodeAlreadyCompleted,
+        /// Card has no progression record.
+        CardProgressionMissing,
+        /// Required inventory item is missing or not owned by the caller.
+        RequiredItemMissing,
+        /// Required inventory item does not match the progression node.
+        RequiredItemMismatch,
+        /// Magic loadout exceeds the configured slot limit.
+        MagicSlotLimitExceeded,
+        /// Spell is missing or not owned by the caller.
+        SpellNotOwned,
+        /// Gear item is already attached to a card.
+        GearAlreadyAttached,
+        /// Progression tree input is invalid.
+        InvalidProgressionTree,
+        /// Caller is not authorized to issue card progression XP.
+        NotAuthorizedProgressionIssuer,
+
         /// A "pro" mint is already in progress for this account.
         ProMintAlreadyInProgress,
         /// No "pro" mint is currently in progress for this account.
@@ -1715,7 +1901,7 @@ pub mod pallet {
                     .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
             }
 
-            let first_card_id = card_ids.get(0).copied();
+            let first_card_id = card_ids.first().copied();
 
             let new_pack = Pack {
                 id: pack_id,
@@ -2750,6 +2936,248 @@ pub mod pallet {
             Self::deposit_event(Event::CardUnwrappedFromNft { card_id });
             Ok(())
         }
+
+        /// Create or replace a card-specific progression tree.
+        #[pallet::call_index(27)]
+        #[pallet::weight(<T as Config>::WeightInfo::set_progression_tree())]
+        #[transactional]
+        pub fn set_progression_tree(
+            origin: OriginFor<T>,
+            tree_id: ProgressionTreeId,
+            subject_id: SubjectId,
+            rarity: Option<u8>,
+            nodes: Vec<ProgressionNode>,
+            config_version: NexusConfigVersion,
+        ) -> DispatchResult {
+            ensure_root(origin)?;
+            let bounded_nodes = Self::validated_progression_nodes(nodes, config_version)?;
+
+            if let Some(old_tree) = ProgressionTrees::<T>::get(tree_id) {
+                if old_tree.subject_id != subject_id || old_tree.rarity != rarity {
+                    ProgressionTreeBySubject::<T>::remove(old_tree.subject_id, old_tree.rarity);
+                }
+            } else {
+                ProgressionTreeIds::<T>::try_mutate(|ids| -> DispatchResult {
+                    ids.try_push(tree_id)
+                        .map_err(|_| Error::<T>::InvalidProgressionTree)?;
+                    Ok(())
+                })?;
+            }
+
+            let node_count = bounded_nodes.len().saturated_into::<u32>();
+            ProgressionTrees::<T>::insert(
+                tree_id,
+                ProgressionTree {
+                    tree_id,
+                    subject_id,
+                    rarity,
+                    nodes: bounded_nodes,
+                    config_version,
+                },
+            );
+            ProgressionTreeBySubject::<T>::insert(subject_id, rarity, tree_id);
+
+            Self::deposit_event(Event::ProgressionTreeSet {
+                tree_id,
+                subject_id,
+                rarity,
+                node_count,
+                config_version,
+            });
+            Ok(())
+        }
+
+        /// Root repair path to initialize progression for an existing card.
+        #[pallet::call_index(28)]
+        #[pallet::weight(<T as Config>::WeightInfo::assign_progression_tree_to_card())]
+        #[transactional]
+        pub fn assign_progression_tree_to_card(
+            origin: OriginFor<T>,
+            card_id: u32,
+            tree_id: ProgressionTreeId,
+        ) -> DispatchResult {
+            ensure_root(origin)?;
+            Self::ensure_card_exists(card_id)?;
+            let tree =
+                ProgressionTrees::<T>::get(tree_id).ok_or(Error::<T>::ProgressionTreeMissing)?;
+            if CardProgressions::<T>::contains_key(card_id) {
+                return Ok(());
+            }
+            Self::initialize_card_progression(card_id, tree_id, tree.config_version)
+        }
+
+        /// Grant XP to a card from an authorized game/reward issuer.
+        #[pallet::call_index(29)]
+        #[pallet::weight(<T as Config>::WeightInfo::grant_card_experience())]
+        #[transactional]
+        pub fn grant_card_experience(
+            origin: OriginFor<T>,
+            game_id: ProgressionGameId,
+            version_id: ProgressionVersionId,
+            event_type_id: ProgressionEventTypeId,
+            card_id: u32,
+            amount: u32,
+        ) -> DispatchResult {
+            let issuer = ensure_signed(origin)?;
+            ensure!(
+                T::ProgressionAuthorityProvider::resolve_authority(
+                    &issuer,
+                    game_id,
+                    Some(version_id),
+                    event_type_id,
+                )
+                .is_some(),
+                Error::<T>::NotAuthorizedProgressionIssuer
+            );
+
+            CardProgressions::<T>::try_mutate(card_id, |maybe_progression| -> DispatchResult {
+                let progression = maybe_progression
+                    .as_mut()
+                    .ok_or(Error::<T>::CardProgressionMissing)?;
+                progression.experience = progression.experience.saturating_add(amount);
+                progression.level = Self::level_for_experience(progression.experience);
+
+                Self::deposit_event(Event::CardExperienceGranted {
+                    issuer: issuer.clone(),
+                    card_id,
+                    amount,
+                    experience: progression.experience,
+                    level: progression.level,
+                    config_version: progression.config_version,
+                });
+                Ok(())
+            })
+        }
+
+        /// Permanently attach a required inventory item to an unlocked card progression node.
+        #[pallet::call_index(30)]
+        #[pallet::weight(<T as Config>::WeightInfo::forge_progression_node())]
+        #[transactional]
+        pub fn forge_progression_node(
+            origin: OriginFor<T>,
+            card_id: u32,
+            node_id: ProgressionNodeId,
+            gear_id: GearId,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
+            Self::ensure_card_owner(card_id, &who)?;
+
+            let progression =
+                CardProgressions::<T>::get(card_id).ok_or(Error::<T>::CardProgressionMissing)?;
+            ensure!(
+                !progression.completed_nodes.contains(&node_id),
+                Error::<T>::ProgressionNodeAlreadyCompleted
+            );
+            let tree = ProgressionTrees::<T>::get(progression.tree_id)
+                .ok_or(Error::<T>::ProgressionTreeMissing)?;
+            let node = tree
+                .nodes
+                .iter()
+                .find(|candidate| candidate.node_id == node_id)
+                .copied()
+                .ok_or(Error::<T>::ProgressionNodeMissing)?;
+            ensure!(
+                progression.level >= node.required_level,
+                Error::<T>::ProgressionNodeLocked
+            );
+
+            let item_template_id =
+                GearItemTemplates::<T>::get(gear_id).ok_or(Error::<T>::RequiredItemMissing)?;
+            ensure!(
+                item_template_id == node.required_item_template_id,
+                Error::<T>::RequiredItemMismatch
+            );
+
+            NexusGearItems::<T>::try_mutate(gear_id, |maybe_gear| -> DispatchResult {
+                let gear = maybe_gear.as_mut().ok_or(Error::<T>::RequiredItemMissing)?;
+                ensure!(gear.owner == who, Error::<T>::RequiredItemMissing);
+                if let Some(slot_type) = node.gear_slot_type {
+                    ensure!(
+                        gear.slot_type == slot_type,
+                        Error::<T>::RequiredItemMismatch
+                    );
+                }
+                ensure!(
+                    gear.equipped_card_id.is_none(),
+                    Error::<T>::GearAlreadyAttached
+                );
+                gear.equipped_card_id = Some(card_id);
+                Ok(())
+            })?;
+
+            CardProgressions::<T>::try_mutate(card_id, |maybe_progression| -> DispatchResult {
+                let progression = maybe_progression
+                    .as_mut()
+                    .ok_or(Error::<T>::CardProgressionMissing)?;
+                progression
+                    .completed_nodes
+                    .try_push(node_id)
+                    .map_err(|_| Error::<T>::InvalidProgressionTree)?;
+                Ok(())
+            })?;
+
+            let attachment = CardEquipmentAttachment {
+                card_id,
+                node_id,
+                gear_id,
+                item_template_id,
+                attached_at: <frame_system::Pallet<T>>::block_number(),
+                config_version: progression.config_version,
+            };
+            CardEquipmentAttachments::<T>::insert(card_id, node_id, attachment);
+
+            Self::deposit_event(Event::ProgressionNodeForged {
+                account_id: who,
+                card_id,
+                node_id,
+                gear_id,
+                item_template_id,
+                power_delta: node.power_delta,
+                config_version: progression.config_version,
+            });
+            Ok(())
+        }
+
+        /// Replace a card's removable magic loadout.
+        #[pallet::call_index(31)]
+        #[pallet::weight(<T as Config>::WeightInfo::set_card_magic_loadout())]
+        #[transactional]
+        pub fn set_card_magic_loadout(
+            origin: OriginFor<T>,
+            card_id: u32,
+            spells: Vec<SpellId>,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&who)?;
+            Self::ensure_card_owner(card_id, &who)?;
+
+            let bounded_spells: BoundedMagicSpells<T> = spells
+                .try_into()
+                .map_err(|_| Error::<T>::MagicSlotLimitExceeded)?;
+            for spell_id in bounded_spells.iter() {
+                let spell = NexusSpellbook::<T>::get(spell_id).ok_or(Error::<T>::SpellNotOwned)?;
+                ensure!(spell.owner == who, Error::<T>::SpellNotOwned);
+            }
+
+            let config_version = CardProgressions::<T>::get(card_id)
+                .map(|progression| progression.config_version)
+                .unwrap_or_else(|| Self::current_nexus_config().config_version);
+            let loadout = CardMagicLoadout {
+                card_id,
+                spells: bounded_spells.clone(),
+                config_version,
+            };
+            CardMagicLoadouts::<T>::insert(card_id, loadout);
+
+            Self::deposit_event(Event::CardMagicLoadoutUpdated {
+                account_id: who,
+                card_id,
+                spells: bounded_spells,
+                config_version,
+            });
+            Ok(())
+        }
     }
 
     // ------------------
@@ -2767,6 +3195,193 @@ pub mod pallet {
                 team_size: T::NexusTeamSize::get(),
                 updated_at: <frame_system::Pallet<T>>::block_number(),
             })
+        }
+
+        fn validated_progression_nodes(
+            nodes: Vec<ProgressionNode>,
+            config_version: NexusConfigVersion,
+        ) -> Result<BoundedProgressionNodes<T>, DispatchError> {
+            ensure!(!nodes.is_empty(), Error::<T>::InvalidProgressionTree);
+            let mut seen =
+                BoundedBTreeSet::<ProgressionNodeId, T::MaxProgressionNodesPerTree>::new();
+            for node in nodes.iter() {
+                ensure!(
+                    node.config_version == config_version,
+                    Error::<T>::InvalidProgressionTree
+                );
+                let inserted = seen
+                    .try_insert(node.node_id)
+                    .map_err(|_| Error::<T>::InvalidProgressionTree)?;
+                ensure!(inserted, Error::<T>::InvalidProgressionTree);
+            }
+
+            nodes
+                .try_into()
+                .map_err(|_| Error::<T>::InvalidProgressionTree.into())
+        }
+
+        fn ensure_card_exists(card_id: u32) -> DispatchResult {
+            ensure!(Cards::<T>::contains_key(card_id), Error::<T>::NoSuchCard);
+            Ok(())
+        }
+
+        fn ensure_card_owner(
+            card_id: u32,
+            owner: &T::AccountId,
+        ) -> Result<CardInfo<T::AccountId>, DispatchError> {
+            let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
+            ensure!(card_info.owner == *owner, Error::<T>::NotCardOwner);
+            Ok(card_info)
+        }
+
+        fn initialize_card_progression(
+            card_id: u32,
+            tree_id: ProgressionTreeId,
+            config_version: NexusConfigVersion,
+        ) -> DispatchResult {
+            let progression = CardProgression {
+                card_id,
+                tree_id,
+                level: 1,
+                experience: 0,
+                completed_nodes: BoundedProgressionNodeIds::<T>::default(),
+                config_version,
+            };
+            CardProgressions::<T>::insert(card_id, progression);
+            Self::deposit_event(Event::CardProgressionInitialized {
+                card_id,
+                tree_id,
+                config_version,
+            });
+            Ok(())
+        }
+
+        fn level_for_experience(experience: u32) -> u16 {
+            let xp_per_level = T::CardXpPerLevel::get().max(1);
+            let level = 1u32.saturating_add(experience / xp_per_level);
+            level.min(u16::MAX as u32) as u16
+        }
+
+        fn progression_subject_for_card(card_id: u32) -> Option<SubjectId> {
+            if let Some(card) = NexusCollectionCards::<T>::get(card_id) {
+                return Some(card.subject_id);
+            }
+            CardArtwork::<T>::get(card_id)
+                .map(|artwork| artwork.subject_media_id.saturated_into::<SubjectId>())
+        }
+
+        fn try_assign_progression_tree_for_card(card_id: u32) -> DispatchResult {
+            if CardProgressions::<T>::contains_key(card_id) {
+                return Ok(());
+            }
+            let Some(subject_id) = Self::progression_subject_for_card(card_id) else {
+                return Ok(());
+            };
+            let Some(tree_id) = ProgressionTreeBySubject::<T>::get(subject_id, None::<u8>) else {
+                return Ok(());
+            };
+            let Some(tree) = ProgressionTrees::<T>::get(tree_id) else {
+                return Ok(());
+            };
+            Self::initialize_card_progression(card_id, tree_id, tree.config_version)
+        }
+
+        pub fn progression_node_status(
+            card_id: u32,
+            node_id: ProgressionNodeId,
+        ) -> Result<ProgressionNodeStatus, DispatchError> {
+            let progression =
+                CardProgressions::<T>::get(card_id).ok_or(Error::<T>::CardProgressionMissing)?;
+            if progression.completed_nodes.contains(&node_id) {
+                return Ok(ProgressionNodeStatus::Completed);
+            }
+            let tree = ProgressionTrees::<T>::get(progression.tree_id)
+                .ok_or(Error::<T>::ProgressionTreeMissing)?;
+            let node = tree
+                .nodes
+                .iter()
+                .find(|candidate| candidate.node_id == node_id)
+                .ok_or(Error::<T>::ProgressionNodeMissing)?;
+            if progression.level >= node.required_level {
+                Ok(ProgressionNodeStatus::Unlocked)
+            } else {
+                Ok(ProgressionNodeStatus::Locked)
+            }
+        }
+
+        pub fn nexus_card_total_power(card_id: u32) -> u16 {
+            let base_power = NexusCollectionCards::<T>::get(card_id)
+                .map(|card| card.card_power as u32)
+                .unwrap_or(0);
+            let progression_power = Self::completed_progression_power(card_id);
+            let magic_power = Self::current_magic_power(card_id);
+
+            base_power
+                .saturating_add(progression_power)
+                .saturating_add(magic_power)
+                .min(u16::MAX as u32) as u16
+        }
+
+        fn completed_progression_power(card_id: u32) -> u32 {
+            let Some(progression) = CardProgressions::<T>::get(card_id) else {
+                return 0;
+            };
+            let Some(tree) = ProgressionTrees::<T>::get(progression.tree_id) else {
+                return 0;
+            };
+            progression
+                .completed_nodes
+                .iter()
+                .filter_map(|completed_id| {
+                    tree.nodes
+                        .iter()
+                        .find(|node| node.node_id == *completed_id)
+                        .map(|node| node.power_delta as u32)
+                })
+                .fold(0u32, |sum, power| sum.saturating_add(power))
+        }
+
+        fn current_magic_power(card_id: u32) -> u32 {
+            let Some(loadout) = CardMagicLoadouts::<T>::get(card_id) else {
+                return 0;
+            };
+            loadout
+                .spells
+                .iter()
+                .filter_map(|spell_id| NexusSpellbook::<T>::get(*spell_id))
+                .fold(0u32, |sum, spell| sum.saturating_add(spell.power as u32))
+        }
+
+        #[cfg(feature = "runtime-benchmarks")]
+        pub fn benchmark_seed_finalized_card(
+            owner: &T::AccountId,
+            card_id: u32,
+            slot_values: [u8; 4],
+        ) -> DispatchResult {
+            ensure!(!Cards::<T>::contains_key(card_id), Error::<T>::NoSuchCard);
+            let next_card_id = card_id.checked_add(1).ok_or(Error::<T>::CardIdExhausted)?;
+
+            Cards::<T>::insert(
+                card_id,
+                CardInfo {
+                    owner: owner.clone(),
+                    finalized: true,
+                    slot_values: Some(slot_values),
+                },
+            );
+            Self::record_card_mint(card_id, owner);
+            CardsByOwner::<T>::try_mutate(owner, |set| -> DispatchResult {
+                set.try_insert(card_id)
+                    .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
+                Ok(())
+            })?;
+            NextCardId::<T>::mutate(|next| {
+                if *next < next_card_id {
+                    *next = next_card_id;
+                }
+            });
+            let _ = Self::try_assign_progression_tree_for_card(card_id);
+            Ok(())
         }
 
         pub fn validate_nexus_team_size(card_count: u32) -> DispatchResult {
@@ -3447,6 +4062,7 @@ pub mod pallet {
 
             Self::assign_artwork_from_active_season(card_id)?;
             let _ = Self::ensure_card_genome(card_id)?;
+            Self::try_assign_progression_tree_for_card(card_id)?;
             Ok(card_id)
         }
 
@@ -3474,6 +4090,7 @@ pub mod pallet {
 
             Self::assign_artwork_from_active_season(card_id)?;
             let _ = Self::ensure_card_genome(card_id)?;
+            Self::try_assign_progression_tree_for_card(card_id)?;
             Ok(card_id)
         }
 
@@ -3599,7 +4216,7 @@ pub mod pallet {
             // Map bytes into a small "rank" range (1..=9) for game-friendly stats.
             let to_rank = |b: u8| -> u8 { (b % 9).saturating_add(1) };
             [
-                to_rank(bytes.get(0).copied().unwrap_or(0)),
+                to_rank(bytes.first().copied().unwrap_or(0)),
                 to_rank(bytes.get(1).copied().unwrap_or(0)),
                 to_rank(bytes.get(2).copied().unwrap_or(0)),
                 to_rank(bytes.get(3).copied().unwrap_or(0)),
