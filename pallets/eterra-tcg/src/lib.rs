@@ -1546,12 +1546,32 @@ pub mod pallet {
             spell_id: SpellId,
             cost: ResourceBundle,
         },
+        /// Internal-alpha operator inventory seed for progression-node forge testing.
+        AlphaProgressionGearSeeded {
+            account_id: T::AccountId,
+            gear_id: GearId,
+            item_template_id: ItemTemplateId,
+            slot_type: GearSlotType,
+            tier: GearTier,
+            power: u16,
+            season_id: SeasonId,
+            config_version: NexusConfigVersion,
+        },
+        /// Internal-alpha operator spell seed for removable magic testing.
+        AlphaSpellSeeded {
+            account_id: T::AccountId,
+            spell_id: SpellId,
+            element: Element,
+            power: u16,
+            config_version: NexusConfigVersion,
+        },
         /// A card progression tree was configured.
         ProgressionTreeSet {
             tree_id: ProgressionTreeId,
             subject_id: SubjectId,
             rarity: Option<u8>,
             node_count: u32,
+            nodes: BoundedProgressionNodes<T>,
             config_version: NexusConfigVersion,
         },
         /// A card received its progression record.
@@ -1877,6 +1897,10 @@ pub mod pallet {
         NotAuthorizedProgressionIssuer,
         /// Requested XP grant exceeds the configured per-call cap.
         CardXpGrantTooLarge,
+        /// Internal-alpha gear seed would overwrite existing gear/template state.
+        AlphaGearAlreadyExists,
+        /// Internal-alpha spell seed would overwrite an existing spellbook entry.
+        AlphaSpellAlreadyExists,
 
         /// A "pro" mint is already in progress for this account.
         ProMintAlreadyInProgress,
@@ -3008,7 +3032,7 @@ pub mod pallet {
                     tree_id,
                     subject_id,
                     rarity,
-                    nodes: bounded_nodes,
+                    nodes: bounded_nodes.clone(),
                     config_version,
                 },
             );
@@ -3019,6 +3043,7 @@ pub mod pallet {
                 subject_id,
                 rarity,
                 node_count,
+                nodes: bounded_nodes,
                 config_version,
             });
             Ok(())
@@ -3226,6 +3251,103 @@ pub mod pallet {
                 account_id: who,
                 card_id,
                 spells: bounded_spells,
+                config_version,
+            });
+            Ok(())
+        }
+
+        /// Root-only internal-alpha helper to seed template-backed progression gear.
+        ///
+        /// This is not the public Craft Items loop. It exists so alpha operators can seed
+        /// required inventory items that can be consumed by `forge_progression_node`.
+        #[pallet::call_index(32)]
+        #[pallet::weight(<T as Config>::WeightInfo::seed_alpha_progression_gear())]
+        #[transactional]
+        pub fn seed_alpha_progression_gear(
+            origin: OriginFor<T>,
+            owner: T::AccountId,
+            gear_id: GearId,
+            item_template_id: ItemTemplateId,
+            slot_type: GearSlotType,
+            tier: GearTier,
+            power: u16,
+            season_id: SeasonId,
+            config_version: NexusConfigVersion,
+        ) -> DispatchResult {
+            ensure_root(origin)?;
+            ensure!(
+                !NexusGearItems::<T>::contains_key(gear_id)
+                    && !GearItemTemplates::<T>::contains_key(gear_id),
+                Error::<T>::AlphaGearAlreadyExists
+            );
+
+            NexusGearItems::<T>::insert(
+                gear_id,
+                GearItem {
+                    owner: owner.clone(),
+                    gear_id,
+                    slot_type,
+                    tier,
+                    power,
+                    spell_slots: BoundedNexusSpellSlots::<T>::default(),
+                    equipped_card_id: None,
+                    season_id,
+                    config_version,
+                },
+            );
+            GearItemTemplates::<T>::insert(gear_id, item_template_id);
+
+            Self::deposit_event(Event::AlphaProgressionGearSeeded {
+                account_id: owner,
+                gear_id,
+                item_template_id,
+                slot_type,
+                tier,
+                power,
+                season_id,
+                config_version,
+            });
+            Ok(())
+        }
+
+        /// Root-only internal-alpha helper to seed removable magic spells.
+        ///
+        /// This is not the public Craft Items loop. It exists so alpha operators can seed
+        /// spellbook entries that can be selected by `set_card_magic_loadout`.
+        #[pallet::call_index(33)]
+        #[pallet::weight(<T as Config>::WeightInfo::seed_alpha_spell())]
+        #[transactional]
+        pub fn seed_alpha_spell(
+            origin: OriginFor<T>,
+            owner: T::AccountId,
+            spell_id: SpellId,
+            element: Element,
+            power: u16,
+            config_version: NexusConfigVersion,
+        ) -> DispatchResult {
+            ensure_root(origin)?;
+            ensure!(
+                !NexusSpellbook::<T>::contains_key(spell_id),
+                Error::<T>::AlphaSpellAlreadyExists
+            );
+
+            NexusSpellbook::<T>::insert(
+                spell_id,
+                SpellEntry {
+                    owner: owner.clone(),
+                    spell_id,
+                    element,
+                    power,
+                    slotted_to: None,
+                    config_version,
+                },
+            );
+
+            Self::deposit_event(Event::AlphaSpellSeeded {
+                account_id: owner,
+                spell_id,
+                element,
+                power,
                 config_version,
             });
             Ok(())

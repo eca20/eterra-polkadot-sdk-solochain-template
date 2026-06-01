@@ -387,6 +387,31 @@ benchmarks! {
         let loadout = CardMagicLoadouts::<T>::get(card_id).expect("loadout exists");
         assert_eq!(loadout.spells.len(), 1);
     }
+
+    seed_alpha_progression_gear {
+        let caller: T::AccountId = whitelisted_caller();
+    }: _(
+        RawOrigin::Root,
+        caller.clone(),
+        100,
+        77,
+        GearSlotType::Weapon,
+        GearTier::Basic,
+        1,
+        BENCHMARK_SEASON_ID,
+        1
+    )
+    verify {
+        assert!(NexusGearItems::<T>::get(100).is_some());
+        assert_eq!(GearItemTemplates::<T>::get(100), Some(77));
+    }
+
+    seed_alpha_spell {
+        let caller: T::AccountId = whitelisted_caller();
+    }: _(RawOrigin::Root, caller.clone(), 200, Element::Fire, 3, 1)
+    verify {
+        assert!(NexusSpellbook::<T>::get(200).is_some());
+    }
 }
 
 #[cfg(test)]

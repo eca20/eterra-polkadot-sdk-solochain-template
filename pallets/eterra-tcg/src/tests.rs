@@ -584,6 +584,128 @@ fn owner_can_forge_unlocked_progression_node_with_matching_item() {
 }
 
 #[test]
+fn alpha_seeded_progression_gear_can_be_forged_into_node() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let card_id = mint_progression_card(player);
+
+        assert_ok!(EterraSlots::seed_alpha_progression_gear(
+            RuntimeOrigin::root(),
+            player,
+            200,
+            77,
+            GearSlotType::Weapon,
+            GearTier::Basic,
+            2,
+            1,
+            1
+        ));
+        assert_eq!(GearItemTemplates::<Test>::get(200), Some(77));
+        assert!(NexusGearItems::<Test>::get(200).is_some());
+
+        assert_ok!(EterraSlots::forge_progression_node(
+            RuntimeOrigin::signed(player),
+            card_id,
+            1,
+            200
+        ));
+
+        assert!(CardEquipmentAttachments::<Test>::get(card_id, 1).is_some());
+        assert!(NexusGearItems::<Test>::get(200).is_none());
+        assert!(GearItemTemplates::<Test>::get(200).is_none());
+    });
+}
+
+#[test]
+fn alpha_seeded_spell_can_be_used_as_removable_magic() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let card_id = mint_progression_card(player);
+
+        assert_ok!(EterraSlots::seed_alpha_spell(
+            RuntimeOrigin::root(),
+            player,
+            201,
+            Element::Fire,
+            4,
+            1
+        ));
+        assert!(NexusSpellbook::<Test>::get(201).is_some());
+
+        assert_ok!(EterraSlots::set_card_magic_loadout(
+            RuntimeOrigin::signed(player),
+            card_id,
+            vec![201]
+        ));
+
+        let loadout = CardMagicLoadouts::<Test>::get(card_id).expect("loadout exists");
+        assert_eq!(loadout.spells.to_vec(), vec![201]);
+        assert_eq!(EterraSlots::nexus_card_total_power(card_id), 4);
+    });
+}
+
+#[test]
+fn alpha_seed_helpers_reject_signed_origin_and_duplicates() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+
+        assert_noop!(
+            EterraSlots::seed_alpha_progression_gear(
+                RuntimeOrigin::signed(player),
+                player,
+                200,
+                77,
+                GearSlotType::Weapon,
+                GearTier::Basic,
+                2,
+                1,
+                1
+            ),
+            sp_runtime::DispatchError::BadOrigin
+        );
+
+        assert_ok!(EterraSlots::seed_alpha_progression_gear(
+            RuntimeOrigin::root(),
+            player,
+            200,
+            77,
+            GearSlotType::Weapon,
+            GearTier::Basic,
+            2,
+            1,
+            1
+        ));
+        assert_noop!(
+            EterraSlots::seed_alpha_progression_gear(
+                RuntimeOrigin::root(),
+                player,
+                200,
+                77,
+                GearSlotType::Weapon,
+                GearTier::Basic,
+                2,
+                1,
+                1
+            ),
+            Error::<Test>::AlphaGearAlreadyExists
+        );
+
+        assert_ok!(EterraSlots::seed_alpha_spell(
+            RuntimeOrigin::root(),
+            player,
+            201,
+            Element::Fire,
+            4,
+            1
+        ));
+        assert_noop!(
+            EterraSlots::seed_alpha_spell(RuntimeOrigin::root(), player, 201, Element::Fire, 4, 1),
+            Error::<Test>::AlphaSpellAlreadyExists
+        );
+    });
+}
+
+#[test]
 fn owner_cannot_forge_locked_progression_node() {
     new_test_ext().execute_with(|| {
         let player = 2u64;

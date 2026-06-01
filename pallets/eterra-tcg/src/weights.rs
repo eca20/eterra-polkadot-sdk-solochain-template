@@ -50,6 +50,8 @@ pub trait WeightInfo {
 	fn grant_card_experience() -> Weight;
 	fn forge_progression_node() -> Weight;
 	fn set_card_magic_loadout() -> Weight;
+	fn seed_alpha_progression_gear() -> Weight;
+	fn seed_alpha_spell() -> Weight;
 }
 
 impl WeightInfo for () {
@@ -132,6 +134,12 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn set_card_magic_loadout() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn seed_alpha_progression_gear() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn seed_alpha_spell() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 }
@@ -406,6 +414,18 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 	fn set_card_magic_loadout() -> Weight {
 		Weight::from_parts(20_000_000, 0)
 			.saturating_add(T::DbWeight::get().reads(7))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+
+	fn seed_alpha_progression_gear() -> Weight {
+		Weight::from_parts(15_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+
+	fn seed_alpha_spell() -> Weight {
+		Weight::from_parts(12_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
 }
