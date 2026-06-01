@@ -11,6 +11,7 @@ use sp_runtime::{
     traits::{BlakeTwo256, IdentityLookup},
     BuildStorage,
 };
+use std::{cell::RefCell, collections::BTreeSet};
 
 type Block = frame_system::mocking::MockBlock<Test>;
 
@@ -64,6 +65,7 @@ parameter_types! {
     pub const MaxMagicSlotsPerCard: u32 = 3;
     pub const MaxProgressionTrees: u32 = 64;
     pub const CardXpPerLevel: u32 = 100;
+    pub const MaxCardXpGrantAmount: u32 = 500;
 
     pub const MaxMediaUriLen: u32 = 256;
     pub const MaxMediaContentTypeLen: u32 = 64;
@@ -98,6 +100,28 @@ impl pallet_eterra_slots::ProgressionAuthorityProvider<u64> for MockProgressionA
         } else {
             None
         }
+    }
+}
+
+std::thread_local! {
+    static MOCK_CURRENT_HAND: RefCell<BTreeSet<(u64, u32)>> = RefCell::new(BTreeSet::new());
+}
+
+pub fn set_mock_current_hand(owner: u64, card_id: u32) {
+    MOCK_CURRENT_HAND.with(|hand| {
+        hand.borrow_mut().insert((owner, card_id));
+    });
+}
+
+pub fn clear_mock_current_hands() {
+    MOCK_CURRENT_HAND.with(|hand| hand.borrow_mut().clear());
+}
+
+pub struct MockHandChecker;
+
+impl pallet_eterra_slots::HandChecker<u64> for MockHandChecker {
+    fn is_card_in_current_hand(owner: &u64, card_id: u32) -> bool {
+        MOCK_CURRENT_HAND.with(|hand| hand.borrow().contains(&(*owner, card_id)))
     }
 }
 
@@ -251,7 +275,7 @@ impl pallet_eterra_slots::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type PaymentCurrency = Balances;
     type AccessControl = ();
-    type HandChecker = ();
+    type HandChecker = MockHandChecker;
     type ProgressionAuthorityProvider = MockProgressionAuthorityProvider;
     type PackPrice = PackPrice;
     type PackPriceReceiver = PackPriceReceiver;
@@ -288,12 +312,14 @@ impl pallet_eterra_slots::Config for Test {
     type MaxMagicSlotsPerCard = MaxMagicSlotsPerCard;
     type MaxProgressionTrees = MaxProgressionTrees;
     type CardXpPerLevel = CardXpPerLevel;
+    type MaxCardXpGrantAmount = MaxCardXpGrantAmount;
     type MaxNexusMatchPlayers = MaxNexusMatchPlayers;
 
     type WeightInfo = ();
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
+    clear_mock_current_hands();
     let mut storage = system::GenesisConfig::<Test>::default()
         .build_storage()
         .expect("system genesis builds");

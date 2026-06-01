@@ -108,6 +108,7 @@ pub mod pallet {
     #[pallet::error]
     pub enum Error<T> {
         AuthorityAlreadyExists,
+        AuthorityAccountAlreadyAuthorized,
         AuthorityNotFound,
         EventListTooLarge,
         AuthorityExpired,
@@ -134,6 +135,10 @@ pub mod pallet {
             ensure!(
                 !Authorities::<T>::contains_key(game_id, authority_id),
                 Error::<T>::AuthorityAlreadyExists
+            );
+            ensure!(
+                !AuthorityByAccount::<T>::contains_key(game_id, &account),
+                Error::<T>::AuthorityAccountAlreadyAuthorized
             );
             Authorities::<T>::insert(
                 game_id,
@@ -193,7 +198,9 @@ pub mod pallet {
             T::AdminOrigin::ensure_origin(origin)?;
             let record = Authorities::<T>::take(game_id, authority_id)
                 .ok_or(Error::<T>::AuthorityNotFound)?;
-            AuthorityByAccount::<T>::remove(game_id, record.account);
+            if AuthorityByAccount::<T>::get(game_id, &record.account) == Some(authority_id) {
+                AuthorityByAccount::<T>::remove(game_id, record.account);
+            }
             Self::deposit_event(Event::AuthorityRevoked {
                 game_id,
                 authority_id,
@@ -475,6 +482,80 @@ mod tests {
                     AuthorityStatus::Active,
                 ),
                 Error::<Test>::AuthorityNotFound
+            );
+        });
+    }
+
+    #[test]
+    fn duplicate_authority_account_is_rejected() {
+        new_test_ext().execute_with(|| {
+            assert_ok!(EterraAuthority::authorize_authority(
+                RuntimeOrigin::root(),
+                10,
+                500,
+                42,
+                AuthorityKind::GameServer,
+                Some(7),
+                allowed(&[8]),
+                None,
+                H256::repeat_byte(1),
+            ));
+
+            assert_noop!(
+                EterraAuthority::authorize_authority(
+                    RuntimeOrigin::root(),
+                    10,
+                    501,
+                    42,
+                    AuthorityKind::ReplayVerifier,
+                    Some(7),
+                    allowed(&[8]),
+                    None,
+                    H256::repeat_byte(2),
+                ),
+                Error::<Test>::AuthorityAccountAlreadyAuthorized
+            );
+            assert_eq!(AuthorityByAccount::<Test>::get(10, 42), Some(500));
+        });
+    }
+
+    #[test]
+    fn revoking_authority_does_not_corrupt_other_authority_account_mapping() {
+        new_test_ext().execute_with(|| {
+            assert_ok!(EterraAuthority::authorize_authority(
+                RuntimeOrigin::root(),
+                10,
+                500,
+                42,
+                AuthorityKind::GameServer,
+                Some(7),
+                allowed(&[8]),
+                None,
+                H256::repeat_byte(1),
+            ));
+            assert_ok!(EterraAuthority::authorize_authority(
+                RuntimeOrigin::root(),
+                10,
+                501,
+                43,
+                AuthorityKind::ReplayVerifier,
+                Some(7),
+                allowed(&[8]),
+                None,
+                H256::repeat_byte(2),
+            ));
+
+            assert_ok!(EterraAuthority::revoke_authority(
+                RuntimeOrigin::root(),
+                10,
+                500,
+            ));
+
+            assert_eq!(AuthorityByAccount::<Test>::get(10, 42), None);
+            assert_eq!(AuthorityByAccount::<Test>::get(10, 43), Some(501));
+            assert_eq!(
+                EterraAuthority::resolve_authority(&43, 10, Some(7), 8),
+                Some(501)
             );
         });
     }

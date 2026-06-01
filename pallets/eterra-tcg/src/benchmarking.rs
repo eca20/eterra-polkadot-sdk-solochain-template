@@ -374,6 +374,8 @@ benchmarks! {
     }: _(RawOrigin::Signed(caller.clone()), card_id, 1, 100)
     verify {
         assert!(CardEquipmentAttachments::<T>::get(card_id, 1).is_some());
+        assert!(NexusGearItems::<T>::get(100).is_none());
+        assert!(GearItemTemplates::<T>::get(100).is_none());
     }
 
     set_card_magic_loadout {

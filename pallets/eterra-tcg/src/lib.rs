@@ -622,7 +622,7 @@ pub mod pallet {
     use pallet_alpha_access::AccessControl;
     use sp_runtime::traits::StaticLookup;
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(13);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(14);
     const ESCROW_PALLET_ID: PalletId = PalletId(*b"et/tcgsc");
     const WEIGHT_TOTAL_PERCENT: u32 = 100;
     const DEFAULT_WEIGHT_MULTIPLIER: WeightMultiplier = 100;
@@ -675,6 +675,7 @@ pub mod pallet {
     type BoundedProgressionTreeIds<T> =
         BoundedVec<ProgressionTreeId, <T as Config>::MaxProgressionTrees>;
     type BoundedMagicSpells<T> = BoundedVec<SpellId, <T as Config>::MaxMagicSlotsPerCard>;
+    type BoundedMagicSpellSet<T> = BoundedBTreeSet<SpellId, <T as Config>::MaxMagicSlotsPerCard>;
     type BoundedNexusMatchPlayers<T> =
         BoundedVec<<T as frame_system::Config>::AccountId, <T as Config>::MaxNexusMatchPlayers>;
     type SeasonAssetsInfoOf<T> = SeasonAssetsInfo<
@@ -907,6 +908,10 @@ pub mod pallet {
         /// XP required for each deterministic card level step.
         #[pallet::constant]
         type CardXpPerLevel: Get<u32>;
+
+        /// Maximum XP that can be granted to one card in a single authorized call.
+        #[pallet::constant]
+        type MaxCardXpGrantAmount: Get<u32>;
 
         /// Maximum players tracked by a Nexus match state.
         #[pallet::constant]
@@ -1256,6 +1261,12 @@ pub mod pallet {
     pub type ProgressionTreeIds<T: Config> =
         StorageValue<_, BoundedProgressionTreeIds<T>, ValueQuery>;
 
+    /// Number of cards initialized against a progression tree.
+    #[pallet::storage]
+    #[pallet::getter(fn progression_tree_use_count)]
+    pub type ProgressionTreeUseCounts<T: Config> =
+        StorageMap<_, Blake2_128Concat, ProgressionTreeId, u32, ValueQuery>;
+
     /// Subject/rarity lookup for automatic card progression-tree assignment.
     #[pallet::storage]
     #[pallet::getter(fn progression_tree_by_subject)]
@@ -1552,6 +1563,10 @@ pub mod pallet {
         /// Authorized game/reward logic granted card XP.
         CardExperienceGranted {
             issuer: T::AccountId,
+            authority_id: ProgressionAuthorityId,
+            game_id: ProgressionGameId,
+            version_id: ProgressionVersionId,
+            event_type_id: ProgressionEventTypeId,
             card_id: u32,
             amount: u32,
             experience: u32,
@@ -1573,6 +1588,13 @@ pub mod pallet {
             account_id: T::AccountId,
             card_id: u32,
             spells: BoundedMagicSpells<T>,
+            config_version: NexusConfigVersion,
+        },
+        /// A card's removable magic loadout was cleared because ownership changed.
+        CardMagicLoadoutCleared {
+            card_id: u32,
+            old_owner: T::AccountId,
+            new_owner: T::AccountId,
             config_version: NexusConfigVersion,
         },
         /// A Nexus team was saved.
@@ -1837,14 +1859,24 @@ pub mod pallet {
         RequiredItemMismatch,
         /// Magic loadout exceeds the configured slot limit.
         MagicSlotLimitExceeded,
+        /// The same spell appears more than once in a removable magic loadout.
+        DuplicateSpellInLoadout,
         /// Spell is missing or not owned by the caller.
         SpellNotOwned,
         /// Gear item is already attached to a card.
         GearAlreadyAttached,
+        /// Card build cannot be changed while listed, locked, or otherwise not safely mutable.
+        CardBuildLocked,
+        /// Converted NFT cards cannot be modified until unwrapped.
+        CardConvertedBuildLocked,
         /// Progression tree input is invalid.
         InvalidProgressionTree,
+        /// Progression tree has already been assigned to one or more cards.
+        ProgressionTreeAlreadyInUse,
         /// Caller is not authorized to issue card progression XP.
         NotAuthorizedProgressionIssuer,
+        /// Requested XP grant exceeds the configured per-call cap.
+        CardXpGrantTooLarge,
 
         /// A "pro" mint is already in progress for this account.
         ProMintAlreadyInProgress,
@@ -2950,9 +2982,14 @@ pub mod pallet {
             config_version: NexusConfigVersion,
         ) -> DispatchResult {
             ensure_root(origin)?;
+            ensure!(rarity.is_none(), Error::<T>::InvalidProgressionTree);
             let bounded_nodes = Self::validated_progression_nodes(nodes, config_version)?;
 
             if let Some(old_tree) = ProgressionTrees::<T>::get(tree_id) {
+                ensure!(
+                    ProgressionTreeUseCounts::<T>::get(tree_id) == 0,
+                    Error::<T>::ProgressionTreeAlreadyInUse
+                );
                 if old_tree.subject_id != subject_id || old_tree.rarity != rarity {
                     ProgressionTreeBySubject::<T>::remove(old_tree.subject_id, old_tree.rarity);
                 }
@@ -3020,14 +3057,19 @@ pub mod pallet {
         ) -> DispatchResult {
             let issuer = ensure_signed(origin)?;
             ensure!(
-                T::ProgressionAuthorityProvider::resolve_authority(
-                    &issuer,
-                    game_id,
-                    Some(version_id),
-                    event_type_id,
-                )
-                .is_some(),
-                Error::<T>::NotAuthorizedProgressionIssuer
+                amount <= T::MaxCardXpGrantAmount::get(),
+                Error::<T>::CardXpGrantTooLarge
+            );
+            let authority_id = T::ProgressionAuthorityProvider::resolve_authority(
+                &issuer,
+                game_id,
+                Some(version_id),
+                event_type_id,
+            )
+            .ok_or(Error::<T>::NotAuthorizedProgressionIssuer)?;
+            ensure!(
+                CardProgressions::<T>::contains_key(card_id),
+                Error::<T>::CardProgressionMissing
             );
 
             CardProgressions::<T>::try_mutate(card_id, |maybe_progression| -> DispatchResult {
@@ -3039,6 +3081,10 @@ pub mod pallet {
 
                 Self::deposit_event(Event::CardExperienceGranted {
                     issuer: issuer.clone(),
+                    authority_id,
+                    game_id,
+                    version_id,
+                    event_type_id,
                     card_id,
                     amount,
                     experience: progression.experience,
@@ -3061,7 +3107,7 @@ pub mod pallet {
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&who)?;
-            Self::ensure_card_owner(card_id, &who)?;
+            Self::ensure_card_build_mutable(card_id, &who)?;
 
             let progression =
                 CardProgressions::<T>::get(card_id).ok_or(Error::<T>::CardProgressionMissing)?;
@@ -3089,8 +3135,8 @@ pub mod pallet {
                 Error::<T>::RequiredItemMismatch
             );
 
-            NexusGearItems::<T>::try_mutate(gear_id, |maybe_gear| -> DispatchResult {
-                let gear = maybe_gear.as_mut().ok_or(Error::<T>::RequiredItemMissing)?;
+            NexusGearItems::<T>::try_mutate_exists(gear_id, |maybe_gear| -> DispatchResult {
+                let gear = maybe_gear.as_ref().ok_or(Error::<T>::RequiredItemMissing)?;
                 ensure!(gear.owner == who, Error::<T>::RequiredItemMissing);
                 if let Some(slot_type) = node.gear_slot_type {
                     ensure!(
@@ -3102,9 +3148,10 @@ pub mod pallet {
                     gear.equipped_card_id.is_none(),
                     Error::<T>::GearAlreadyAttached
                 );
-                gear.equipped_card_id = Some(card_id);
+                *maybe_gear = None;
                 Ok(())
             })?;
+            GearItemTemplates::<T>::remove(gear_id);
 
             CardProgressions::<T>::try_mutate(card_id, |maybe_progression| -> DispatchResult {
                 let progression = maybe_progression
@@ -3150,12 +3197,17 @@ pub mod pallet {
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&who)?;
-            Self::ensure_card_owner(card_id, &who)?;
+            Self::ensure_card_build_mutable(card_id, &who)?;
 
             let bounded_spells: BoundedMagicSpells<T> = spells
                 .try_into()
                 .map_err(|_| Error::<T>::MagicSlotLimitExceeded)?;
+            let mut seen = BoundedMagicSpellSet::<T>::new();
             for spell_id in bounded_spells.iter() {
+                let inserted = seen
+                    .try_insert(*spell_id)
+                    .map_err(|_| Error::<T>::MagicSlotLimitExceeded)?;
+                ensure!(inserted, Error::<T>::DuplicateSpellInLoadout);
                 let spell = NexusSpellbook::<T>::get(spell_id).ok_or(Error::<T>::SpellNotOwned)?;
                 ensure!(spell.owner == who, Error::<T>::SpellNotOwned);
             }
@@ -3234,6 +3286,45 @@ pub mod pallet {
             Ok(card_info)
         }
 
+        fn ensure_card_build_mutable(
+            card_id: u32,
+            owner: &T::AccountId,
+        ) -> Result<CardInfo<T::AccountId>, DispatchError> {
+            let card_info = Self::ensure_card_owner(card_id, owner)?;
+            ensure!(card_info.finalized, Error::<T>::CardNotFinalized);
+            ensure!(
+                !Converted::<T>::contains_key(card_id),
+                Error::<T>::CardConvertedBuildLocked
+            );
+            ensure!(
+                !T::HandChecker::is_card_in_current_hand(owner, card_id),
+                Error::<T>::CardInCurrentHand
+            );
+            ensure!(
+                !CardPrices::<T>::contains_key(card_id),
+                Error::<T>::CardBuildLocked
+            );
+            Ok(card_info)
+        }
+
+        fn clear_magic_loadout_on_owner_change(
+            card_id: u32,
+            old_owner: &T::AccountId,
+            new_owner: &T::AccountId,
+        ) {
+            if old_owner == new_owner {
+                return;
+            }
+            if let Some(loadout) = CardMagicLoadouts::<T>::take(card_id) {
+                Self::deposit_event(Event::CardMagicLoadoutCleared {
+                    card_id,
+                    old_owner: old_owner.clone(),
+                    new_owner: new_owner.clone(),
+                    config_version: loadout.config_version,
+                });
+            }
+        }
+
         fn initialize_card_progression(
             card_id: u32,
             tree_id: ProgressionTreeId,
@@ -3248,6 +3339,9 @@ pub mod pallet {
                 config_version,
             };
             CardProgressions::<T>::insert(card_id, progression);
+            ProgressionTreeUseCounts::<T>::mutate(tree_id, |count| {
+                *count = count.saturating_add(1);
+            });
             Self::deposit_event(Event::CardProgressionInitialized {
                 card_id,
                 tree_id,
@@ -3342,13 +3436,26 @@ pub mod pallet {
         }
 
         fn current_magic_power(card_id: u32) -> u32 {
+            let Some(card) = Cards::<T>::get(card_id) else {
+                return 0;
+            };
             let Some(loadout) = CardMagicLoadouts::<T>::get(card_id) else {
                 return 0;
             };
+            let mut seen = BoundedMagicSpellSet::<T>::new();
             loadout
                 .spells
                 .iter()
-                .filter_map(|spell_id| NexusSpellbook::<T>::get(*spell_id))
+                .filter_map(|spell_id| {
+                    let inserted = match seen.try_insert(*spell_id) {
+                        Ok(inserted) => inserted,
+                        Err(_) => false,
+                    };
+                    if !inserted {
+                        return None;
+                    }
+                    NexusSpellbook::<T>::get(*spell_id).filter(|spell| spell.owner == card.owner)
+                })
                 .fold(0u32, |sum, spell| sum.saturating_add(spell.power as u32))
         }
 
@@ -4145,6 +4252,8 @@ pub mod pallet {
                     .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
                 Ok(())
             })?;
+
+            Self::clear_magic_loadout_on_owner_change(card_id, from, to);
 
             Ok(())
         }

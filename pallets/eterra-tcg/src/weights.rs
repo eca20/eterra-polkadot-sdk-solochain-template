@@ -286,8 +286,8 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		// Minimum execution time: 22_000_000 picoseconds.
 		Weight::from_parts(23_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 14232))
-			.saturating_add(T::DbWeight::get().reads(3))
-			.saturating_add(T::DbWeight::get().writes(3))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(4))
 	}
 
 	/// Storage: `EterraTCG::Cards` (r:1 w:0)
@@ -315,8 +315,8 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 	/// Storage: `System::Account` (r:1 w:1)
 	fn buy_card() -> Weight {
 		Weight::from_parts(55_000_000, 0)
-			.saturating_add(T::DbWeight::get().reads(6))
-			.saturating_add(T::DbWeight::get().writes(6))
+			.saturating_add(T::DbWeight::get().reads(7))
+			.saturating_add(T::DbWeight::get().writes(7))
 	}
 
 	fn create_season_collection() -> Weight {
@@ -381,31 +381,31 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 
 	fn set_progression_tree() -> Weight {
 		Weight::from_parts(20_000_000, 0)
-			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
 
 	fn assign_progression_tree_to_card() -> Weight {
 		Weight::from_parts(15_000_000, 0)
-			.saturating_add(T::DbWeight::get().reads(3))
-			.saturating_add(T::DbWeight::get().writes(1))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(2))
 	}
 
 	fn grant_card_experience() -> Weight {
 		Weight::from_parts(15_000_000, 0)
-			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
 
 	fn forge_progression_node() -> Weight {
 		Weight::from_parts(35_000_000, 0)
-			.saturating_add(T::DbWeight::get().reads(7))
+			.saturating_add(T::DbWeight::get().reads(8))
 			.saturating_add(T::DbWeight::get().writes(4))
 	}
 
 	fn set_card_magic_loadout() -> Weight {
 		Weight::from_parts(20_000_000, 0)
-			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().reads(7))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
 }

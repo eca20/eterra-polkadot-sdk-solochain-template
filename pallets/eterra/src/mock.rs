@@ -88,6 +88,7 @@ parameter_types! {
     pub const MaxMagicSlotsPerCardConst: u32 = 3;
     pub const MaxProgressionTreesConst: u32 = 64;
     pub const CardXpPerLevelConst: u32 = 100;
+    pub const MaxCardXpGrantAmountConst: u32 = 500;
     pub const MaxNexusMatchPlayersConst: u32 = 2;
     pub const MaxMediaUriLen: u32 = 256;
     pub const MaxMediaContentTypeLen: u32 = 64;
@@ -352,6 +353,7 @@ impl pallet_eterra_tcg::Config for Test {
     type MaxMagicSlotsPerCard = MaxMagicSlotsPerCardConst;
     type MaxProgressionTrees = MaxProgressionTreesConst;
     type CardXpPerLevel = CardXpPerLevelConst;
+    type MaxCardXpGrantAmount = MaxCardXpGrantAmountConst;
     type MaxNexusMatchPlayers = MaxNexusMatchPlayersConst;
     type WeightInfo = ();
 }

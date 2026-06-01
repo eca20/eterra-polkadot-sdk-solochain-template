@@ -1107,6 +1107,7 @@ impl pallet_eterra_tcg::Config for Runtime {
     type MaxMagicSlotsPerCard = ConstU32<3>;
     type MaxProgressionTrees = ConstU32<64>;
     type CardXpPerLevel = ConstU32<100>;
+    type MaxCardXpGrantAmount = ConstU32<500>;
     type MaxNexusMatchPlayers = ConstU32<2>;
     type WeightInfo = pallet_eterra_tcg::weights::SubstrateWeight<Runtime>;
 }
