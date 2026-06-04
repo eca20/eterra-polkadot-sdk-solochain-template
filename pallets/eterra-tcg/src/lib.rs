@@ -510,6 +510,18 @@ pub struct StarterGrantState<BlockNumber> {
     pub config_version: NexusConfigVersion,
 }
 
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct StarterCardTemplate {
+    pub subject_id: SubjectId,
+    pub base_ranks: [RankValue; 4],
+    pub apex_side: Option<ApexSide>,
+    pub style_label: RankStyleLabel,
+    pub genes: GeneProfile,
+    pub element_profile: ElementProfile,
+    pub card_power: u16,
+    pub config_version: NexusConfigVersion,
+}
+
 #[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
 pub struct CollectionCard<AccountId, BlockNumber> {
     pub owner: AccountId,
@@ -695,6 +707,7 @@ pub mod pallet {
         SeasonCollectionInfo<BoundedSeasonCollectionName<T>, BlockNumberFor<T>>;
     type NexusAccountStateOf<T> = NexusAccountState<BlockNumberFor<T>>;
     type StarterGrantStateOf<T> = StarterGrantState<BlockNumberFor<T>>;
+    type BoundedStarterTeamCards<T> = BoundedVec<StarterCardTemplate, <T as Config>::NexusTeamSize>;
     type CollectionCardOf<T> =
         CollectionCard<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>;
     type VaultVariantOf<T> = VaultVariant<BlockNumberFor<T>, BoundedNexusMetadataUri<T>>;
@@ -1175,6 +1188,12 @@ pub mod pallet {
     #[pallet::getter(fn next_starter_grant_id)]
     pub type NextStarterGrantId<T: Config> = StorageValue<_, u32, ValueQuery>;
 
+    /// Root-configured internal-alpha starter team templates by path.
+    #[pallet::storage]
+    #[pallet::getter(fn starter_team_config)]
+    pub type StarterTeamConfigs<T: Config> =
+        StorageMap<_, Blake2_128Concat, StarterPath, BoundedStarterTeamCards<T>, OptionQuery>;
+
     /// Nexus Collection card records keyed by runtime card id.
     #[pallet::storage]
     #[pallet::getter(fn nexus_collection_card)]
@@ -1458,6 +1477,12 @@ pub mod pallet {
             account_id: T::AccountId,
             path: StarterPath,
             grant_id: u32,
+            config_version: NexusConfigVersion,
+        },
+        /// Internal-alpha starter team templates were configured for a path.
+        StarterTeamConfigSet {
+            path: StarterPath,
+            card_count: u32,
             config_version: NexusConfigVersion,
         },
         /// Nexus Starter path was swapped before grant finalization.
@@ -1794,6 +1819,12 @@ pub mod pallet {
         CardCapacityExceeded,
         /// Starter Grant state already exists for this account.
         NexusStarterGrantAlreadyClaimed,
+        /// Starter team config is missing for the requested path.
+        StarterTeamConfigMissing,
+        /// Starter team config must contain exactly one valid fixed-rank template per team slot.
+        InvalidStarterTeamConfig,
+        /// Account-bound starter cards cannot be listed, transferred, converted, or escrowed.
+        AccountBoundCardLocked,
         /// Nexus team must contain exactly the configured Season 1 team size.
         NexusTeamSizeInvalid,
         /// Nexus subject copy cap has been reached for Collection + Vault.
@@ -2010,21 +2041,24 @@ pub mod pallet {
             Ok(())
         }
 
-        /// Record Nexus Starter Grant state for the caller.
+        /// Claim the configured internal-alpha starter team for the caller.
         ///
-        /// PI-01 only initializes the account/grant state skeleton. Starter card, gear,
-        /// spell, and badge issuance must be implemented by later acquisition/workshop PIs
-        /// once starter subject IDs and loadouts are locked in config.
+        /// This cards-first alpha grant mints five account-bound starter cards. Starter
+        /// weapon, spell, and badge issuance remain follow-up item/profile PIs.
         #[pallet::call_index(26)]
-        #[pallet::weight(Weight::from_parts(10_000, 0))]
+        #[pallet::weight(<T as Config>::WeightInfo::claim_starter_grant())]
         #[transactional]
         pub fn claim_starter_grant(origin: OriginFor<T>, path: StarterPath) -> DispatchResult {
             let player = ensure_signed(origin)?;
             T::AccessControl::ensure_whitelisted(&player)?;
+            Self::note_minter(&player);
             ensure!(
                 !StarterGrants::<T>::contains_key(&player),
                 Error::<T>::NexusStarterGrantAlreadyClaimed
             );
+            let starter_cards =
+                StarterTeamConfigs::<T>::get(path).ok_or(Error::<T>::StarterTeamConfigMissing)?;
+            Self::ensure_can_receive_cards(&player, starter_cards.len().saturated_into::<u32>())?;
 
             let grant_id = NextStarterGrantId::<T>::get();
             let next_grant_id = grant_id.checked_add(1).ok_or(Error::<T>::CardIdExhausted)?;
@@ -2052,11 +2086,41 @@ pub mod pallet {
             );
             NextStarterGrantId::<T>::put(next_grant_id);
 
+            for template in starter_cards.iter() {
+                let card_id = Self::create_starter_card_from_template(&player, template)?;
+                Self::deposit_event(Event::CardMinted {
+                    player: player.clone(),
+                    card_id,
+                });
+            }
+
             Self::deposit_event(Event::StarterGrantClaimed {
                 account_id: player,
                 path,
                 grant_id,
                 config_version: config.config_version,
+            });
+            Ok(())
+        }
+
+        /// Configure one internal-alpha starter team path.
+        #[pallet::call_index(34)]
+        #[pallet::weight(<T as Config>::WeightInfo::set_starter_team_config())]
+        #[transactional]
+        pub fn set_starter_team_config(
+            origin: OriginFor<T>,
+            path: StarterPath,
+            cards: Vec<StarterCardTemplate>,
+            config_version: NexusConfigVersion,
+        ) -> DispatchResult {
+            ensure_root(origin)?;
+            let starter_cards = Self::validated_starter_team_cards(cards, config_version)?;
+            let card_count = starter_cards.len().saturated_into::<u32>();
+            StarterTeamConfigs::<T>::insert(path, starter_cards);
+            Self::deposit_event(Event::StarterTeamConfigSet {
+                path,
+                card_count,
+                config_version,
             });
             Ok(())
         }
@@ -2189,6 +2253,7 @@ pub mod pallet {
                 !T::HandChecker::is_card_in_current_hand(&from, card_id),
                 Error::<T>::CardInCurrentHand
             );
+            Self::ensure_card_not_account_bound(card_id)?;
 
             // If listed, unlist first so indices remain consistent.
             if CardPrices::<T>::contains_key(card_id) {
@@ -2307,6 +2372,7 @@ pub mod pallet {
             let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
             ensure!(card_info.owner == who, Error::<T>::NotCardOwner);
             ensure!(card_info.finalized, Error::<T>::CardNotFinalized);
+            Self::ensure_card_not_account_bound(card_id)?;
             ensure!(
                 !T::HandChecker::is_card_in_current_hand(&who, card_id),
                 Error::<T>::CardInCurrentHand
@@ -2359,6 +2425,7 @@ pub mod pallet {
                 .ok_or(Error::<T>::NoSuchCard)?;
 
             ensure!(seller != buyer, Error::<T>::CannotBuyOwnCard);
+            Self::ensure_card_not_account_bound(card_id)?;
             ensure!(
                 !T::HandChecker::is_card_in_current_hand(&seller, card_id),
                 Error::<T>::CardInCurrentHand
@@ -2923,6 +2990,7 @@ pub mod pallet {
             let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
             ensure!(card_info.owner == who, Error::<T>::NotCardOwner);
             ensure!(card_info.finalized, Error::<T>::CardNotFinalized);
+            Self::ensure_card_not_account_bound(card_id)?;
             ensure!(
                 !T::HandChecker::is_card_in_current_hand(&who, card_id),
                 Error::<T>::CardInCurrentHand
@@ -3369,6 +3437,52 @@ pub mod pallet {
                 team_size: T::NexusTeamSize::get(),
                 updated_at: <frame_system::Pallet<T>>::block_number(),
             })
+        }
+
+        fn validated_starter_team_cards(
+            cards: Vec<StarterCardTemplate>,
+            config_version: NexusConfigVersion,
+        ) -> Result<BoundedStarterTeamCards<T>, DispatchError> {
+            ensure!(
+                cards.len().saturated_into::<u32>() == T::NexusTeamSize::get(),
+                Error::<T>::InvalidStarterTeamConfig
+            );
+
+            for template in cards.iter() {
+                ensure!(
+                    template.config_version == config_version,
+                    Error::<T>::InvalidStarterTeamConfig
+                );
+                ensure!(
+                    template.apex_side.is_none(),
+                    Error::<T>::InvalidStarterTeamConfig
+                );
+                let _ = Self::starter_slot_values(template.base_ranks)?;
+            }
+
+            cards
+                .try_into()
+                .map_err(|_| Error::<T>::InvalidStarterTeamConfig.into())
+        }
+
+        fn starter_slot_values(base_ranks: [RankValue; 4]) -> Result<[u8; 4], DispatchError> {
+            let mut values = [0u8; 4];
+            for (idx, rank) in base_ranks.iter().enumerate() {
+                match rank {
+                    RankValue::Number(value) if *value >= 1 && *value <= 9 => {
+                        values[idx] = *value;
+                    }
+                    _ => return Err(Error::<T>::InvalidStarterTeamConfig.into()),
+                }
+            }
+            Ok(values)
+        }
+
+        fn ensure_card_not_account_bound(card_id: u32) -> DispatchResult {
+            if let Some(card) = NexusCollectionCards::<T>::get(card_id) {
+                ensure!(!card.account_bound, Error::<T>::AccountBoundCardLocked);
+            }
+            Ok(())
         }
 
         fn validated_progression_nodes(
@@ -4221,6 +4335,20 @@ pub mod pallet {
             Self::assign_artwork_for_card(card_id, season_id, b"eterra-tcg/art")
         }
 
+        fn assign_starter_artwork_from_active_season(
+            card_id: u32,
+            subject_media_id: MediaId,
+        ) -> DispatchResult {
+            let season_id = pallet_eterra_seasons::ActiveSeasonId::<T>::get()
+                .ok_or(Error::<T>::NoActiveSeason)?;
+            Self::assign_artwork_for_card_with_subject(
+                card_id,
+                season_id,
+                b"eterra-tcg/starter-art",
+                subject_media_id,
+            )
+        }
+
         fn assign_artwork_for_card(
             card_id: u32,
             season_id: SeasonId,
@@ -4269,6 +4397,56 @@ pub mod pallet {
             Ok(())
         }
 
+        fn assign_artwork_for_card_with_subject(
+            card_id: u32,
+            season_id: SeasonId,
+            domain: &'static [u8],
+            subject_media_id: MediaId,
+        ) -> DispatchResult {
+            let parent_hash = <frame_system::Pallet<T>>::parent_hash();
+            let ext_index = <frame_system::Pallet<T>>::extrinsic_index().unwrap_or(0);
+            let now = <frame_system::Pallet<T>>::block_number();
+
+            let subject = (domain, season_id, card_id, now, parent_hash, ext_index).encode();
+            let hash = T::Hashing::hash(&subject);
+            let bytes = hash.as_ref();
+
+            let pools = Self::published_season_asset_pools(season_id)?;
+            Self::ensure_required_card_art_pools(&pools)?;
+
+            let border_selection =
+                *Self::select_weighted_item(&pools.borders, Self::random_u32(bytes, 0), |item| {
+                    item.selection_weight
+                })?;
+            let background_selection = *Self::select_weighted_item(
+                &pools.backgrounds,
+                Self::random_u32(bytes, 4),
+                |item| item.selection_weight,
+            )?;
+            let subject_selection = *pools
+                .subjects
+                .iter()
+                .find(|item| item.media_id == subject_media_id)
+                .ok_or(Error::<T>::AssetNotFound)?;
+            let back_selection =
+                *Self::select_weighted_item(&pools.backs, Self::random_u32(bytes, 12), |item| {
+                    item.selection_weight
+                })?;
+
+            CardArtwork::<T>::insert(
+                card_id,
+                CardArtworkInfo {
+                    season_id,
+                    border_media_id: border_selection.media_id,
+                    background_media_id: background_selection.media_id,
+                    subject_media_id: subject_selection.media_id,
+                    back_media_id: back_selection.media_id,
+                },
+            );
+            CardArtworkCollectionId::<T>::insert(card_id, subject_selection.collection_id);
+            Ok(())
+        }
+
         /// Create a brand-new card with `owner`.
         fn create_new_card(owner: &T::AccountId) -> Result<u32, DispatchError> {
             Self::ensure_can_receive_cards(owner, 1)?;
@@ -4292,6 +4470,83 @@ pub mod pallet {
             Self::assign_artwork_from_active_season(card_id)?;
             let _ = Self::ensure_card_genome(card_id)?;
             Self::try_assign_progression_tree_for_card(card_id)?;
+            Ok(card_id)
+        }
+
+        /// Create a brand-new, immediately-finalized starter card with fixed template ranks.
+        fn create_starter_card_from_template(
+            owner: &T::AccountId,
+            template: &StarterCardTemplate,
+        ) -> Result<u32, DispatchError> {
+            let values = Self::starter_slot_values(template.base_ranks)?;
+            let card_id = NextCardId::<T>::get();
+            let next_card_id = card_id.checked_add(1).ok_or(Error::<T>::CardIdExhausted)?;
+            let now = <frame_system::Pallet<T>>::block_number();
+
+            Cards::<T>::insert(
+                card_id,
+                CardInfo {
+                    owner: owner.clone(),
+                    finalized: true,
+                    slot_values: Some(values),
+                },
+            );
+            Self::record_card_mint(card_id, owner);
+            CardsByOwner::<T>::try_mutate(owner, |set| -> Result<(), DispatchError> {
+                set.try_insert(card_id)
+                    .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
+                Ok(())
+            })?;
+            NextCardId::<T>::put(next_card_id);
+
+            Self::assign_starter_artwork_from_active_season(
+                card_id,
+                template.subject_id.saturated_into::<MediaId>(),
+            )?;
+            let _ = Self::ensure_card_genome(card_id)?;
+
+            NexusCollectionCards::<T>::insert(
+                card_id,
+                CollectionCard {
+                    owner: owner.clone(),
+                    subject_id: template.subject_id,
+                    kind: NexusCardKind::Echo,
+                    origin: NexusCardOrigin::StarterGrant,
+                    base_ranks: template.base_ranks,
+                    apex_side: template.apex_side,
+                    genes: template.genes,
+                    element_profile: template.element_profile,
+                    card_power: template.card_power,
+                    location: NexusStorageLocation::Collection,
+                    account_bound: true,
+                    acquired_at: now,
+                    config_version: template.config_version,
+                },
+            );
+            Self::try_assign_progression_tree_for_card(card_id)?;
+
+            Self::deposit_event(Event::NexusCardClaimed {
+                account_id: owner.clone(),
+                card_record_id: card_id,
+                subject_id: template.subject_id,
+                source: NexusCardOrigin::StarterGrant,
+                config_version: template.config_version,
+            });
+            Self::deposit_event(Event::RankSlotResolved {
+                card_record_id: card_id,
+                base_ranks: template.base_ranks,
+                apex_side: template.apex_side,
+                style_label: template.style_label,
+                card_power: template.card_power,
+                config_version: template.config_version,
+            });
+            Self::deposit_event(Event::GenesResolved {
+                card_record_id: card_id,
+                genes: template.genes,
+                element_profile: template.element_profile,
+                config_version: template.config_version,
+            });
+
             Ok(card_id)
         }
 
@@ -4393,6 +4648,7 @@ pub mod pallet {
             let card_info = Cards::<T>::get(card_id).ok_or(Error::<T>::NoSuchCard)?;
             ensure!(card_info.owner == *owner, Error::<T>::NotCardOwner);
             ensure!(card_info.finalized, Error::<T>::CardNotFinalized);
+            Self::ensure_card_not_account_bound(card_id)?;
             ensure!(
                 !T::HandChecker::is_card_in_current_hand(owner, card_id),
                 Error::<T>::CardInCurrentHand

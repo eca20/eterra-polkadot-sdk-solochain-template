@@ -40,6 +40,11 @@ pub trait WeightInfo {
 	fn set_avatar() -> Weight;
 	fn grant_experience() -> Weight;
 	fn redeem_levels() -> Weight;
+	fn set_steam_link_authority() -> Weight;
+	fn link_steam() -> Weight;
+	fn unlink_steam() -> Weight;
+	fn freeze_player() -> Weight;
+	fn unfreeze_player() -> Weight;
 }
 
 impl WeightInfo for () {
@@ -53,6 +58,21 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn redeem_levels() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn set_steam_link_authority() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn link_steam() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn unlink_steam() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn freeze_player() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn unfreeze_player() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 }
@@ -113,5 +133,20 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 			.saturating_add(Weight::from_parts(0, 3529))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(2))
+	}
+	fn set_steam_link_authority() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn link_steam() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn unlink_steam() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn freeze_player() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn unfreeze_player() -> Weight {
+		Weight::from_parts(10_000, 0)
 	}
 }

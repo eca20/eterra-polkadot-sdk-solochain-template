@@ -76,6 +76,7 @@ pallet-eterra-arcade-core = { workspace = true }
 pallet-eterra-arcade-ouro = { workspace = true }
 pallet-eterra-arcade-aegis-run = { workspace = true }
 pallet-alpha-access = { workspace = true }
+pallet-cryptostrike = { workspace = true }
 eterra-card-ai-adapter = { path = "../crates/eterra-card-ai-adapter", default-features = false }
 
 
@@ -126,6 +127,7 @@ std = [
   "pallet-eterra-arcade-ouro/std",
   "pallet-eterra-arcade-aegis-run/std",
   "pallet-alpha-access/std",
+  "pallet-cryptostrike/std",
   "pallet-eterra-media/std",
   "pallet-eterra-seasons/std",
   "pallet-eterra-tcg/std",
@@ -181,6 +183,7 @@ runtime-benchmarks = [
 	"pallet-eterra-arcade-ouro/runtime-benchmarks",
 	"pallet-eterra-arcade-aegis-run/runtime-benchmarks",
 	"pallet-alpha-access/runtime-benchmarks",
+	"pallet-cryptostrike/runtime-benchmarks",
 	"pallet-nfts/runtime-benchmarks",
 	"sp-runtime/runtime-benchmarks",
 ]
@@ -209,6 +212,7 @@ try-runtime = [
 	"pallet-eterra-arcade-ouro/try-runtime",
 	"pallet-eterra-arcade-aegis-run/try-runtime",
 	"pallet-alpha-access/try-runtime",
+	"pallet-cryptostrike/try-runtime",
 	"sp-runtime/try-runtime",
 ]
 

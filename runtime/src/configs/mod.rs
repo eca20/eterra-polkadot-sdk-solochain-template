@@ -29,7 +29,10 @@ use frame_support::{
     derive_impl,
     dispatch::DispatchResult,
     parameter_types,
-    traits::{ConstBool, ConstU128, ConstU16, ConstU32, ConstU64, ConstU8, VariantCountOf},
+    traits::{
+        ConstBool, ConstU128, ConstU16, ConstU32, ConstU64, ConstU8, Currency,
+        ExistenceRequirement, ReservableCurrency, VariantCountOf, WithdrawReasons,
+    },
     weights::{
         constants::{RocksDbWeight, WEIGHT_REF_TIME_PER_SECOND},
         IdentityFee, Weight,
@@ -41,7 +44,7 @@ use scale_info::TypeInfo;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_runtime::{
     traits::{AccountIdConversion, Morph, One},
-    Perbill, Permill,
+    DispatchError, Perbill, Permill,
 };
 use sp_version::RuntimeVersion;
 
@@ -50,11 +53,12 @@ use super::{HandProviderAdapter, UNIT};
 
 // Bring in the pallets re-exported in lib.rs
 use super::{
-    pallet_alpha_access, pallet_eterra, pallet_eterra_arcade_aegis_run, pallet_eterra_arcade_core,
-    pallet_eterra_arcade_ouro, pallet_eterra_authority, pallet_eterra_card_escrow,
-    pallet_eterra_daily_slots, pallet_eterra_economy, pallet_eterra_faucet, pallet_eterra_flow,
-    pallet_eterra_game_authority, pallet_eterra_gamer, pallet_eterra_media, pallet_eterra_profile,
-    pallet_eterra_seasons, pallet_eterra_simple_matchmaker, pallet_eterra_tcg, pallet_nfts,
+    pallet_alpha_access, pallet_cryptostrike, pallet_eterra, pallet_eterra_arcade_aegis_run,
+    pallet_eterra_arcade_core, pallet_eterra_arcade_ouro, pallet_eterra_authority,
+    pallet_eterra_card_escrow, pallet_eterra_daily_slots, pallet_eterra_economy,
+    pallet_eterra_faucet, pallet_eterra_flow, pallet_eterra_game_authority, pallet_eterra_gamer,
+    pallet_eterra_media, pallet_eterra_profile, pallet_eterra_seasons,
+    pallet_eterra_simple_matchmaker, pallet_eterra_tcg, pallet_nfts,
 };
 // Monte Carlo AI pallet lives at the crate root; bring it in explicitly.
 
@@ -72,6 +76,104 @@ const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 // centralized owner-control in both default and production modes.
 // This alias can be switched to governance origins when governance is introduced.
 type PrivilegedControlOrigin = frame_system::EnsureRoot<AccountId>;
+
+pub struct CryptoStrikeNativeGuapLedger;
+
+impl pallet_cryptostrike::GuapLedger<AccountId, Balance> for CryptoStrikeNativeGuapLedger {
+    fn mint(account: &AccountId, amount: Balance) -> DispatchResult {
+        let _imbalance = <Balances as Currency<AccountId>>::deposit_creating(account, amount);
+        Ok(())
+    }
+
+    fn burn(account: &AccountId, amount: Balance) -> DispatchResult {
+        <Balances as Currency<AccountId>>::withdraw(
+            account,
+            amount,
+            WithdrawReasons::TRANSFER,
+            ExistenceRequirement::AllowDeath,
+        )
+        .map(|_imbalance| ())
+    }
+
+    fn transfer(from: &AccountId, to: &AccountId, amount: Balance) -> DispatchResult {
+        <Balances as Currency<AccountId>>::transfer(
+            from,
+            to,
+            amount,
+            ExistenceRequirement::AllowDeath,
+        )
+    }
+}
+
+pub struct CryptoStrikeNativeStakeLedger;
+
+impl pallet_cryptostrike::StakeLedger<AccountId, Balance> for CryptoStrikeNativeStakeLedger {
+    fn reserve(account: &AccountId, amount: Balance) -> DispatchResult {
+        <Balances as ReservableCurrency<AccountId>>::reserve(account, amount)
+    }
+
+    fn release(account: &AccountId, amount: Balance) -> DispatchResult {
+        let remaining = <Balances as ReservableCurrency<AccountId>>::unreserve(account, amount);
+        if remaining == 0 {
+            Ok(())
+        } else {
+            Err(DispatchError::Other("cryptostrike stake release underflow"))
+        }
+    }
+
+    fn slash_reserved(account: &AccountId, amount: Balance) -> DispatchResult {
+        let (_imbalance, remaining) =
+            <Balances as ReservableCurrency<AccountId>>::slash_reserved(account, amount);
+        if remaining == 0 {
+            Ok(())
+        } else {
+            Err(DispatchError::Other("cryptostrike stake slash underflow"))
+        }
+    }
+}
+
+pub struct CryptoStrikeGamerIdentityProvider;
+
+impl pallet_cryptostrike::SteamIdentityProvider<AccountId> for CryptoStrikeGamerIdentityProvider {
+    fn account_for_steam_hash(steam_hash: pallet_cryptostrike::SteamHash) -> Option<AccountId> {
+        pallet_eterra_gamer::SteamToAccount::<Runtime>::get(steam_hash)
+    }
+
+    fn steam_hash_for_account(account: &AccountId) -> Option<pallet_cryptostrike::SteamHash> {
+        pallet_eterra_gamer::AccountToSteam::<Runtime>::get(account)
+    }
+
+    fn is_frozen(account: &AccountId) -> bool {
+        pallet_eterra_gamer::GamerProfiles::<Runtime>::get(account)
+            .map(|profile| profile.frozen)
+            .unwrap_or(false)
+    }
+}
+
+pub struct CryptoStrikeAlphaSignatureVerifier;
+
+impl<Signature> pallet_cryptostrike::ServerSignatureVerifier<Hash, Signature>
+    for CryptoStrikeAlphaSignatureVerifier
+where
+    Signature: AsRef<[u8]>,
+{
+    fn verify(server_pubkey: &[u8; 32], _payload_hash: &Hash, signature: &Signature) -> bool {
+        if server_pubkey.iter().all(|byte| *byte == 0) {
+            return false;
+        }
+
+        #[cfg(feature = "runtime-production")]
+        {
+            let _ = signature;
+            false
+        }
+
+        #[cfg(not(feature = "runtime-production"))]
+        {
+            signature.as_ref().starts_with(b"dev-v1:")
+        }
+    }
+}
 
 pub struct EterraFlowAuthorityProvider;
 
@@ -817,6 +919,7 @@ impl pallet_eterra_faucet::Config for Runtime {
 parameter_types! {
     pub const GamerTagMaxLen: u32 = 32;
     pub const AvatarCidMaxLen: u32 = 96; // or 128
+    pub const SteamLinkSignatureMaxLen: u32 = 64;
     pub const GamerChangeFee: Balance = 100 * UNIT;
 }
 impl pallet_eterra_gamer::Config for Runtime {
@@ -824,10 +927,12 @@ impl pallet_eterra_gamer::Config for Runtime {
     type Currency = Balances;
     type AccessControl = super::AlphaAccess;
     type ExpIssuerOrigin = PrivilegedControlOrigin;
+    type AdminOrigin = PrivilegedControlOrigin;
     type FaucetAccount = TreasuryAccount;
     type ChangeFee = GamerChangeFee;
     type MaxTagLen = GamerTagMaxLen;
     type MaxAvatarCidLen = AvatarCidMaxLen;
+    type MaxSteamLinkSignatureLen = SteamLinkSignatureMaxLen;
     type WeightInfo = pallet_eterra_gamer::weights::SubstrateWeight<Runtime>;
 }
 
@@ -901,6 +1006,21 @@ impl pallet_alpha_access::Config for Runtime {
     type AdminOrigin = PrivilegedControlOrigin;
     type TimeProvider = Timestamp;
     type MaxRevokeReasonLen = AlphaAccessMaxRevokeReasonLen;
+    type WeightInfo = ();
+}
+
+impl pallet_cryptostrike::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type AdminOrigin = PrivilegedControlOrigin;
+    type Balance = Balance;
+    type MaxSettlementEntries = ConstU32<64>;
+    type MaxServerSignatureLen = ConstU32<128>;
+    type MinServerStake = ConstU128<{ 100_000 * UNIT }>;
+    type UnstakeDelay = ConstU32<DAYS>;
+    type GuapLedger = CryptoStrikeNativeGuapLedger;
+    type StakeLedger = CryptoStrikeNativeStakeLedger;
+    type ServerSignatureVerifier = CryptoStrikeAlphaSignatureVerifier;
+    type IdentityProvider = CryptoStrikeGamerIdentityProvider;
     type WeightInfo = ();
 }
 

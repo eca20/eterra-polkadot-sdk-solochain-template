@@ -141,6 +141,40 @@ fn sample_progression_node() -> ProgressionNode {
     }
 }
 
+fn sample_starter_template(subject_id: SubjectId) -> StarterCardTemplate {
+    StarterCardTemplate {
+        subject_id,
+        base_ranks: [
+            RankValue::Number(5),
+            RankValue::Number(5),
+            RankValue::Number(5),
+            RankValue::Number(5),
+        ],
+        apex_side: None,
+        style_label: RankStyleLabel::Balanced,
+        genes: GeneProfile {
+            strength: 5,
+            agility: 5,
+            vitality: 5,
+            defense: 5,
+            magic: 5,
+            resist: 5,
+        },
+        element_profile: ElementProfile {
+            main: Element::Fire,
+            minor: None,
+            resistance: None,
+            weakness: None,
+        },
+        card_power: 20,
+        config_version: 1,
+    }
+}
+
+fn sample_starter_team() -> Vec<StarterCardTemplate> {
+    (0..5).map(|_| sample_starter_template(2)).collect()
+}
+
 fn setup_progression_tree<T: Config>() {
     Pallet::<T>::set_progression_tree(
         RawOrigin::Root.into(),
@@ -289,6 +323,28 @@ benchmarks! {
         assert!(card.is_finalized());
         assert!(card.get_slot_values().is_some());
         assert!(CardsByOwner::<T>::get(&caller).contains(&card_id));
+    }
+
+    claim_starter_grant {
+        let caller: T::AccountId = whitelisted_caller();
+        ensure_benchmark_season::<T>();
+        Pallet::<T>::set_starter_team_config(
+            RawOrigin::Root.into(),
+            StarterPath::Fire,
+            sample_starter_team(),
+            1
+        ).expect("set starter team succeeds");
+    }: _(RawOrigin::Signed(caller.clone()), StarterPath::Fire)
+    verify {
+        assert!(StarterGrants::<T>::get(&caller).is_some());
+        assert_eq!(CardsByOwner::<T>::get(&caller).len(), T::NexusTeamSize::get() as usize);
+    }
+
+    set_starter_team_config {
+        let team = sample_starter_team();
+    }: _(RawOrigin::Root, StarterPath::Fire, team, 1)
+    verify {
+        assert!(StarterTeamConfigs::<T>::get(StarterPath::Fire).is_some());
     }
 
     set_price {

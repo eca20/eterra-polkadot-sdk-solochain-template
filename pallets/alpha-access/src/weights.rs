@@ -7,6 +7,7 @@ pub trait WeightInfo {
     fn revoke_access() -> Weight;
     fn set_manager() -> Weight;
     fn set_allowed_source() -> Weight;
+    fn set_access_mode() -> Weight;
 }
 
 impl WeightInfo for () {
@@ -23,6 +24,10 @@ impl WeightInfo for () {
     }
 
     fn set_allowed_source() -> Weight {
+        Weight::from_parts(10_000, 0)
+    }
+
+    fn set_access_mode() -> Weight {
         Weight::from_parts(10_000, 0)
     }
 }

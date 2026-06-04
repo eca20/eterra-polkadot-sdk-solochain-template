@@ -8,8 +8,9 @@ use crate::{
     NexusOverflowSubjectCounts, NexusSpellbook, NexusStorageLocation, NexusSubjectCopyCounts,
     PackCardInProgress, PackInProgress, PlayerPacks, ProgressionNode, ProgressionNodeKind,
     ProgressionNodeStatus, ProgressionTreeBySubject, ProgressionTreeIds, ProgressionTreeUseCounts,
-    ProgressionTrees, RankValue, SeasonCollectionIds, SeasonCollectionStatus, SeasonCollections,
-    SpellEntry, SpellSlotEntry, StarterGrants, StarterPath,
+    ProgressionTrees, RankStyleLabel, RankValue, SeasonCollectionIds, SeasonCollectionStatus,
+    SeasonCollections, SpellEntry, SpellSlotEntry, StarterCardTemplate, StarterGrants, StarterPath,
+    StarterTeamConfigs,
 };
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok, BoundedBTreeSet, BoundedVec};
@@ -194,6 +195,44 @@ fn seed_collection_card(owner: u64, card_id: u32, power: u16) {
     );
 }
 
+fn starter_template(subject_id: u32, power: u16) -> StarterCardTemplate {
+    StarterCardTemplate {
+        subject_id,
+        base_ranks: [
+            RankValue::Number(5),
+            RankValue::Number(4),
+            RankValue::Number(5),
+            RankValue::Number(4),
+        ],
+        apex_side: None,
+        style_label: RankStyleLabel::Balanced,
+        genes: Default::default(),
+        element_profile: ElementProfile {
+            main: Element::Fire,
+            minor: None,
+            resistance: None,
+            weakness: None,
+        },
+        card_power: power,
+        config_version: 1,
+    }
+}
+
+fn starter_team() -> Vec<StarterCardTemplate> {
+    (0..NexusTeamSize::get())
+        .map(|offset| starter_template(2, 18 + offset as u16))
+        .collect()
+}
+
+fn set_default_starter_team(path: StarterPath) {
+    assert_ok!(EterraSlots::set_starter_team_config(
+        RuntimeOrigin::root(),
+        path,
+        starter_team(),
+        1
+    ));
+}
+
 #[test]
 fn nexus_config_defaults_use_season_1_constants() {
     new_test_ext().execute_with(|| {
@@ -210,9 +249,93 @@ fn nexus_config_defaults_use_season_1_constants() {
 }
 
 #[test]
-fn claim_starter_grant_initializes_nexus_account_state() {
+fn root_can_set_valid_starter_team_config() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraSlots::set_starter_team_config(
+            RuntimeOrigin::root(),
+            StarterPath::Fire,
+            starter_team(),
+            1
+        ));
+
+        let config = StarterTeamConfigs::<Test>::get(StarterPath::Fire)
+            .expect("starter team config should exist");
+        assert_eq!(config.len(), NexusTeamSize::get() as usize);
+
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::StarterTeamConfigSet {
+                        path,
+                        card_count,
+                        config_version,
+                    }) if *path == StarterPath::Fire
+                        && *card_count == NexusTeamSize::get()
+                        && *config_version == 1
+                )
+            },
+            "StarterTeamConfigSet",
+        );
+    });
+}
+
+#[test]
+fn invalid_starter_team_config_is_rejected() {
+    new_test_ext().execute_with(|| {
+        assert_noop!(
+            EterraSlots::set_starter_team_config(
+                RuntimeOrigin::signed(2),
+                StarterPath::Fire,
+                starter_team(),
+                1
+            ),
+            sp_runtime::DispatchError::BadOrigin
+        );
+
+        let mut too_short = starter_team();
+        too_short.pop();
+        assert_noop!(
+            EterraSlots::set_starter_team_config(
+                RuntimeOrigin::root(),
+                StarterPath::Fire,
+                too_short,
+                1
+            ),
+            Error::<Test>::InvalidStarterTeamConfig
+        );
+
+        let mut bad_rank = starter_team();
+        bad_rank[0].base_ranks[0] = RankValue::Apex;
+        assert_noop!(
+            EterraSlots::set_starter_team_config(
+                RuntimeOrigin::root(),
+                StarterPath::Fire,
+                bad_rank,
+                1
+            ),
+            Error::<Test>::InvalidStarterTeamConfig
+        );
+
+        let mut bad_version = starter_team();
+        bad_version[0].config_version = 2;
+        assert_noop!(
+            EterraSlots::set_starter_team_config(
+                RuntimeOrigin::root(),
+                StarterPath::Fire,
+                bad_version,
+                1
+            ),
+            Error::<Test>::InvalidStarterTeamConfig
+        );
+    });
+}
+
+#[test]
+fn claim_starter_grant_mints_account_bound_starter_team() {
     new_test_ext().execute_with(|| {
         let player = 2u64;
+        set_default_starter_team(StarterPath::Fire);
 
         assert_ok!(EterraSlots::claim_starter_grant(
             RuntimeOrigin::signed(player),
@@ -231,6 +354,37 @@ fn claim_starter_grant_initializes_nexus_account_state() {
         assert_eq!(grant.grant_id, 0);
         assert_eq!(NextStarterGrantId::<Test>::get(), 1);
 
+        let owned_cards = CardsByOwner::<Test>::get(player);
+        assert_eq!(owned_cards.len(), NexusTeamSize::get() as usize);
+        for card_id in owned_cards.iter() {
+            let card = Cards::<Test>::get(card_id).expect("starter card should exist");
+            assert!(card.is_finalized());
+            assert_eq!(card.get_owner(), &player);
+            assert_eq!(card.get_slot_values(), Some([5, 4, 5, 4]));
+
+            let collection_card =
+                NexusCollectionCards::<Test>::get(card_id).expect("collection card should exist");
+            assert_eq!(collection_card.owner, player);
+            assert_eq!(collection_card.subject_id, 2);
+            assert_eq!(collection_card.origin, NexusCardOrigin::StarterGrant);
+            assert_eq!(collection_card.location, NexusStorageLocation::Collection);
+            assert!(collection_card.account_bound);
+            assert_eq!(
+                collection_card.base_ranks,
+                [
+                    RankValue::Number(5),
+                    RankValue::Number(4),
+                    RankValue::Number(5),
+                    RankValue::Number(4),
+                ]
+            );
+
+            let art = EterraSlots::card_artwork(card_id).expect("artwork should exist");
+            assert_eq!(art.subject_media_id, 2);
+        }
+
+        assert_eq!(EterraSlots::unique_minter_count(), 1);
+
         assert_event_found(
             |event| {
                 matches!(
@@ -248,6 +402,19 @@ fn claim_starter_grant_initializes_nexus_account_state() {
             },
             "StarterGrantClaimed",
         );
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::NexusCardClaimed {
+                        account_id,
+                        source,
+                        ..
+                    }) if *account_id == player && *source == NexusCardOrigin::StarterGrant
+                )
+            },
+            "NexusCardClaimed",
+        );
     });
 }
 
@@ -255,6 +422,7 @@ fn claim_starter_grant_initializes_nexus_account_state() {
 fn claim_starter_grant_rejects_duplicates() {
     new_test_ext().execute_with(|| {
         let player = 2u64;
+        set_default_starter_team(StarterPath::Water);
 
         assert_ok!(EterraSlots::claim_starter_grant(
             RuntimeOrigin::signed(player),
@@ -268,6 +436,51 @@ fn claim_starter_grant_rejects_duplicates() {
         let grant = StarterGrants::<Test>::get(player).expect("starter grant should remain");
         assert_eq!(grant.path, StarterPath::Water);
         assert_eq!(NextStarterGrantId::<Test>::get(), 1);
+    });
+}
+
+#[test]
+fn claim_starter_grant_rejects_missing_team_config() {
+    new_test_ext().execute_with(|| {
+        assert_noop!(
+            EterraSlots::claim_starter_grant(RuntimeOrigin::signed(2), StarterPath::Fire),
+            Error::<Test>::StarterTeamConfigMissing
+        );
+    });
+}
+
+#[test]
+fn starter_cards_cannot_be_listed_transferred_or_converted() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let other = 3u64;
+        set_default_starter_team(StarterPath::Fire);
+        assert_ok!(EterraSlots::claim_starter_grant(
+            RuntimeOrigin::signed(player),
+            StarterPath::Fire
+        ));
+        let card_id = *CardsByOwner::<Test>::get(player)
+            .iter()
+            .next()
+            .expect("starter card id exists");
+
+        assert_noop!(
+            EterraSlots::set_price(RuntimeOrigin::signed(player), card_id, 500),
+            Error::<Test>::AccountBoundCardLocked
+        );
+        assert_noop!(
+            EterraSlots::transfer_card(RuntimeOrigin::signed(player), card_id, other),
+            Error::<Test>::AccountBoundCardLocked
+        );
+
+        assert_ok!(EterraSlots::init_card_nft_collection(
+            RuntimeOrigin::signed(1),
+            1
+        ));
+        assert_noop!(
+            EterraSlots::convert_to_nft(RuntimeOrigin::signed(player), card_id),
+            Error::<Test>::AccountBoundCardLocked
+        );
     });
 }
 

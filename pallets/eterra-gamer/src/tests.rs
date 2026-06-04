@@ -3,9 +3,67 @@
 
 use super::*;
 use crate::mock::*;
-use crate::pallet::{AvatarCid, Error as GamerError, Experience, GamerTag, Level};
+use crate::pallet::{
+    AccountToSteam, AvatarCid, Error as GamerError, Experience, GamerProfiles, GamerTag, Level,
+    SteamLinkAuthority, SteamToAccount, UsedSteamLinkNonces,
+};
 use frame_support::BoundedVec;
 use frame_support::{assert_noop, assert_ok};
+use sp_core::{sr25519, Pair};
+use sp_runtime::codec::Encode;
+
+type TestBlockNumber = frame_system::pallet_prelude::BlockNumberFor<Test>;
+
+fn steam_hash(seed: u8) -> SteamHash {
+    [seed; 32]
+}
+
+fn reason_hash(seed: u8) -> ReasonHash {
+    [seed; 32]
+}
+
+fn nonce(seed: u8) -> SteamLinkNonce {
+    [seed; 32]
+}
+
+fn authority_pair() -> sr25519::Pair {
+    sr25519::Pair::from_seed(&[42u8; 32])
+}
+
+fn steam_link_payload(
+    account: AccountId,
+    steam_hash: SteamHash,
+    nonce: SteamLinkNonce,
+    expires_at: TestBlockNumber,
+) -> Vec<u8> {
+    let mut payload = b"eterra:gamer:steam-link:v1".to_vec();
+    account.encode_to(&mut payload);
+    steam_hash.encode_to(&mut payload);
+    nonce.encode_to(&mut payload);
+    expires_at.encode_to(&mut payload);
+    payload
+}
+
+fn steam_link_signature(
+    account: AccountId,
+    steam_hash: SteamHash,
+    nonce: SteamLinkNonce,
+    expires_at: TestBlockNumber,
+) -> BoundedVec<u8, <Test as crate::Config>::MaxSteamLinkSignatureLen> {
+    authority_pair()
+        .sign(&steam_link_payload(account, steam_hash, nonce, expires_at))
+        .0
+        .to_vec()
+        .try_into()
+        .expect("sr25519 signature fits")
+}
+
+fn install_authority() {
+    assert_ok!(EterraGamer::set_steam_link_authority(
+        RuntimeOrigin::root(),
+        authority_pair().public().0,
+    ));
+}
 
 #[test]
 fn first_set_tag_is_free() {
@@ -185,5 +243,191 @@ fn redeem_caps_at_99() {
         assert_ok!(EterraGamer::redeem_levels(RuntimeOrigin::signed(ALICE)));
 
         assert_eq!(Level::<Test>::get(ALICE), 99u8);
+    });
+}
+
+#[test]
+fn set_steam_link_authority_rejects_zero_and_stores_key() {
+    new_test_ext().execute_with(|| {
+        assert_noop!(
+            EterraGamer::set_steam_link_authority(RuntimeOrigin::root(), [0; 32]),
+            GamerError::<Test>::InvalidSteamLinkAuthority
+        );
+
+        install_authority();
+        assert_eq!(
+            SteamLinkAuthority::<Test>::get(),
+            Some(authority_pair().public().0)
+        );
+    });
+}
+
+#[test]
+fn link_steam_stores_bidirectional_link_profile_and_nonce() {
+    new_test_ext().execute_with(|| {
+        install_authority();
+        System::set_block_number(1);
+        let hash = steam_hash(7);
+        let nonce = nonce(9);
+        let expires_at: TestBlockNumber = 10;
+
+        assert_ok!(EterraGamer::link_steam(
+            RuntimeOrigin::signed(ALICE),
+            hash,
+            nonce,
+            expires_at,
+            steam_link_signature(ALICE, hash, nonce, expires_at),
+        ));
+
+        assert_eq!(SteamToAccount::<Test>::get(hash), Some(ALICE));
+        assert_eq!(AccountToSteam::<Test>::get(ALICE), Some(hash));
+        assert!(UsedSteamLinkNonces::<Test>::contains_key(nonce));
+        assert_eq!(
+            GamerProfiles::<Test>::get(ALICE),
+            Some(GamerProfile {
+                linked_at: 1,
+                frozen: false,
+                freeze_reason: None,
+            })
+        );
+        System::assert_last_event(RuntimeEvent::EterraGamer(Event::SteamLinked {
+            steam_hash: hash,
+            account: ALICE,
+        }));
+    });
+}
+
+#[test]
+fn link_steam_rejects_expired_replayed_duplicate_and_bad_signatures() {
+    new_test_ext().execute_with(|| {
+        install_authority();
+        System::set_block_number(5);
+        let hash = steam_hash(7);
+        let nonce_a = nonce(9);
+
+        assert_noop!(
+            EterraGamer::link_steam(
+                RuntimeOrigin::signed(ALICE),
+                hash,
+                nonce_a,
+                5,
+                steam_link_signature(ALICE, hash, nonce_a, 5),
+            ),
+            GamerError::<Test>::SteamLinkExpired
+        );
+
+        assert_noop!(
+            EterraGamer::link_steam(
+                RuntimeOrigin::signed(ALICE),
+                hash,
+                nonce_a,
+                10,
+                steam_link_signature(BOB, hash, nonce_a, 10),
+            ),
+            GamerError::<Test>::InvalidSteamLinkSignature
+        );
+
+        assert_ok!(EterraGamer::link_steam(
+            RuntimeOrigin::signed(ALICE),
+            hash,
+            nonce_a,
+            10,
+            steam_link_signature(ALICE, hash, nonce_a, 10),
+        ));
+        assert_noop!(
+            EterraGamer::link_steam(
+                RuntimeOrigin::signed(BOB),
+                steam_hash(8),
+                nonce_a,
+                10,
+                steam_link_signature(BOB, steam_hash(8), nonce_a, 10),
+            ),
+            GamerError::<Test>::SteamLinkNonceUsed
+        );
+        assert_noop!(
+            EterraGamer::link_steam(
+                RuntimeOrigin::signed(ALICE),
+                steam_hash(8),
+                nonce(10),
+                10,
+                steam_link_signature(ALICE, steam_hash(8), nonce(10), 10),
+            ),
+            GamerError::<Test>::AlreadyLinked
+        );
+        assert_noop!(
+            EterraGamer::link_steam(
+                RuntimeOrigin::signed(BOB),
+                hash,
+                nonce(11),
+                10,
+                steam_link_signature(BOB, hash, nonce(11), 10),
+            ),
+            GamerError::<Test>::SteamHashAlreadyLinked
+        );
+    });
+}
+
+#[test]
+fn unlink_steam_removes_link_and_profile() {
+    new_test_ext().execute_with(|| {
+        install_authority();
+        System::set_block_number(1);
+        let hash = steam_hash(12);
+        let nonce = nonce(12);
+
+        assert_noop!(
+            EterraGamer::unlink_steam(RuntimeOrigin::signed(ALICE)),
+            GamerError::<Test>::SteamHashNotLinked
+        );
+        assert_ok!(EterraGamer::link_steam(
+            RuntimeOrigin::signed(ALICE),
+            hash,
+            nonce,
+            10,
+            steam_link_signature(ALICE, hash, nonce, 10),
+        ));
+        assert_ok!(EterraGamer::unlink_steam(RuntimeOrigin::signed(ALICE)));
+
+        assert_eq!(SteamToAccount::<Test>::get(hash), None);
+        assert_eq!(AccountToSteam::<Test>::get(ALICE), None);
+        assert_eq!(GamerProfiles::<Test>::get(ALICE), None);
+        System::assert_last_event(RuntimeEvent::EterraGamer(Event::SteamUnlinked {
+            steam_hash: hash,
+            account: ALICE,
+        }));
+    });
+}
+
+#[test]
+fn freeze_and_unfreeze_player_control_profile_actions() {
+    new_test_ext().execute_with(|| {
+        install_authority();
+        let hash = steam_hash(13);
+        let nonce = nonce(13);
+        assert_ok!(EterraGamer::link_steam(
+            RuntimeOrigin::signed(ALICE),
+            hash,
+            nonce,
+            10,
+            steam_link_signature(ALICE, hash, nonce, 10),
+        ));
+
+        assert_ok!(EterraGamer::freeze_player(
+            RuntimeOrigin::root(),
+            ALICE,
+            reason_hash(3),
+        ));
+        assert_noop!(
+            EterraGamer::set_gamer_tag(
+                RuntimeOrigin::signed(ALICE),
+                b"FrozenAlice".to_vec().try_into().unwrap(),
+            ),
+            GamerError::<Test>::PlayerFrozen
+        );
+        assert_ok!(EterraGamer::unfreeze_player(RuntimeOrigin::root(), ALICE));
+        assert_ok!(EterraGamer::set_gamer_tag(
+            RuntimeOrigin::signed(ALICE),
+            b"AliceAgain".to_vec().try_into().unwrap(),
+        ));
     });
 }

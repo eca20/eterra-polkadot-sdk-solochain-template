@@ -47,6 +47,51 @@ fn admin_can_set_manager_and_source() {
 }
 
 #[test]
+fn access_mode_defaults_to_enforced() {
+    new_test_ext().execute_with(|| {
+        assert_eq!(AlphaAccess::access_mode(), GateMode::Enforced);
+        assert_noop!(
+            AlphaAccess::ensure_whitelisted(&ALICE),
+            Error::<Test>::NotWhitelisted
+        );
+    });
+}
+
+#[test]
+fn admin_can_set_access_mode_open_and_enforced() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(AlphaAccess::set_access_mode(
+            RuntimeOrigin::root(),
+            GateMode::Open
+        ));
+        assert_eq!(AlphaAccess::access_mode(), GateMode::Open);
+        assert!(AlphaAccess::is_whitelisted(&ALICE));
+        assert_ok!(AlphaAccess::ensure_whitelisted(&ALICE));
+
+        assert_ok!(AlphaAccess::set_access_mode(
+            RuntimeOrigin::root(),
+            GateMode::Enforced
+        ));
+        assert_eq!(AlphaAccess::access_mode(), GateMode::Enforced);
+        assert!(!AlphaAccess::is_whitelisted(&ALICE));
+        assert_noop!(
+            AlphaAccess::ensure_whitelisted(&ALICE),
+            Error::<Test>::NotWhitelisted
+        );
+    });
+}
+
+#[test]
+fn non_admin_cannot_set_access_mode() {
+    new_test_ext().execute_with(|| {
+        assert_noop!(
+            AlphaAccess::set_access_mode(RuntimeOrigin::signed(ALICE), GateMode::Open),
+            sp_runtime::DispatchError::BadOrigin
+        );
+    });
+}
+
+#[test]
 fn non_admin_cannot_set_manager() {
     new_test_ext().execute_with(|| {
         assert_noop!(

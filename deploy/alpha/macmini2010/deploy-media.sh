@@ -5,6 +5,30 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib.sh
 source "${SCRIPT_DIR}/lib.sh"
 
+fresh=false
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--fresh)
+			fresh=true
+			;;
+		--help|-h)
+			cat <<'EOF'
+Usage: deploy-media.sh [--fresh]
+
+Normal deploys preserve alpha media/IPFS volumes.
+Pass --fresh to remove the alpha media compose volumes before rebuilding.
+EOF
+			exit 0
+			;;
+		*)
+			echo "[alpha-macmini2010] unknown argument: $1" >&2
+			exit 1
+			;;
+	esac
+	shift
+done
+
 load_env
 require_cmd expect
 require_cmd git
@@ -52,13 +76,19 @@ if [[ -f "${LEGACY_MEDIA_COMPOSE_BASE}" && -f "${LEGACY_MEDIA_ENV_FILE}" ]]; the
 fi
 
 media_action="skip"
-if [[ ! -f "${REMOTE_MEDIA_BUILD_HASH_FILE}" ]] || [[ "\$(cat "${REMOTE_MEDIA_BUILD_HASH_FILE}")" != "${media_build_hash}" ]]; then
+if ${fresh}; then
+	echo "[alpha-macmini2010] fresh deploy: removing media/IPFS volumes and cached deploy hashes"
+	${REMOTE_DOCKER_COMPOSE_CMD} down --volumes --remove-orphans >/dev/null 2>&1 || true
+	rm -f "${REMOTE_MEDIA_BUILD_HASH_FILE}" "${REMOTE_MEDIA_RUNTIME_HASH_FILE}"
 	media_action="build"
-elif [[ ! -f "${REMOTE_MEDIA_RUNTIME_HASH_FILE}" ]] || [[ "\$(cat "${REMOTE_MEDIA_RUNTIME_HASH_FILE}")" != "${media_runtime_hash}" ]]; then
+fi
+if [[ "\${media_action}" == "skip" ]] && { [[ ! -f "${REMOTE_MEDIA_BUILD_HASH_FILE}" ]] || [[ "\$(cat "${REMOTE_MEDIA_BUILD_HASH_FILE}")" != "${media_build_hash}" ]]; }; then
+	media_action="build"
+elif [[ "\${media_action}" == "skip" ]] && { [[ ! -f "${REMOTE_MEDIA_RUNTIME_HASH_FILE}" ]] || [[ "\$(cat "${REMOTE_MEDIA_RUNTIME_HASH_FILE}")" != "${media_runtime_hash}" ]]; }; then
 	media_action="reconcile"
-elif ! ${REMOTE_DOCKER_COMPOSE_CMD} ps --status running --services 2>/dev/null | grep -qx 'ipfs'; then
+elif [[ "\${media_action}" == "skip" ]] && ! ${REMOTE_DOCKER_COMPOSE_CMD} ps --status running --services 2>/dev/null | grep -qx 'ipfs'; then
 	media_action="reconcile"
-elif ! ${REMOTE_DOCKER_COMPOSE_CMD} ps --status running --services 2>/dev/null | grep -qx 'media-service'; then
+elif [[ "\${media_action}" == "skip" ]] && ! ${REMOTE_DOCKER_COMPOSE_CMD} ps --status running --services 2>/dev/null | grep -qx 'media-service'; then
 	media_action="reconcile"
 fi
 

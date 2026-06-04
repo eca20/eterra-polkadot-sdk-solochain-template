@@ -79,6 +79,10 @@ elif [[ "${remote_node_service_state}" != "1" ]]; then
 	node_restart_reason="service-not-running"
 fi
 
+if [[ "${purge_state}" -eq 1 ]] && [[ "${node_restart_reason}" == "none" ]]; then
+	node_restart_reason="purge-state"
+fi
+
 if [[ "${node_spec_pending_apply}" -eq 1 ]]; then
 	log "alpha spec/genesis changes detected but deferred to preserve live chain state; rerun with --purge-state to apply them"
 fi
@@ -94,6 +98,7 @@ rsync_with_remote \
 	--delete \
 	-e "${RSYNC_RSH}" \
 	--exclude '.git/' \
+	--exclude '.worktrees/' \
 	--exclude 'target/' \
 	--exclude 'data/' \
 	--exclude '.DS_Store' \

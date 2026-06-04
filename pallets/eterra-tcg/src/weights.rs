@@ -26,6 +26,8 @@ pub trait WeightInfo {
 	fn mint_pack() -> Weight;
 	fn mint_pro() -> Weight;
 	fn mint_card() -> Weight;
+	fn claim_starter_grant() -> Weight;
+	fn set_starter_team_config() -> Weight;
 	fn generate_slot() -> Weight;
 	fn spin_pro() -> Weight;
 	fn accept_slot() -> Weight;
@@ -62,6 +64,12 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn mint_card() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn claim_starter_grant() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn set_starter_team_config() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 	fn generate_slot() -> Weight {
@@ -204,6 +212,16 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 				.saturating_add(T::DbWeight::get().reads(5))
 				.saturating_add(T::DbWeight::get().writes(7))
 		}
+
+	fn claim_starter_grant() -> Weight {
+		Weight::from_parts(75_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(20))
+			.saturating_add(T::DbWeight::get().writes(35))
+	}
+
+	fn set_starter_team_config() -> Weight {
+		Weight::from_parts(15_000_000, 0).saturating_add(T::DbWeight::get().writes(1))
+	}
 
 	/// Storage: `EterraTCG::PlayerPacks` (r:1 w:1)
 	/// Proof: `EterraTCG::PlayerPacks` (`max_values`: None, `max_size`: Some(759), added: 3234, mode: `MaxEncodedLen`)

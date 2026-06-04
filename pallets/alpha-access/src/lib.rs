@@ -45,6 +45,29 @@ pub enum AccessSourceKind {
 
 #[derive(
     Clone,
+    Copy,
+    Decode,
+    DecodeWithMemTracking,
+    Encode,
+    MaxEncodedLen,
+    PartialEq,
+    Eq,
+    RuntimeDebug,
+    TypeInfo,
+)]
+pub enum GateMode {
+    Enforced,
+    Open,
+}
+
+impl Default for GateMode {
+    fn default() -> Self {
+        Self::Enforced
+    }
+}
+
+#[derive(
+    Clone,
     Decode,
     DecodeWithMemTracking,
     Encode,
@@ -124,6 +147,10 @@ pub mod pallet {
     pub type AllowedSources<T: Config> =
         StorageMap<_, Blake2_128Concat, (AccessSourceKind, u64, [u8; 20]), (), OptionQuery>;
 
+    #[pallet::storage]
+    #[pallet::getter(fn access_mode)]
+    pub type AccessMode<T: Config> = StorageValue<_, GateMode, ValueQuery>;
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
@@ -149,6 +176,9 @@ pub mod pallet {
             source_chain_id: u64,
             source_contract: [u8; 20],
             enabled: bool,
+        },
+        AccessModeSet {
+            mode: GateMode,
         },
     }
 
@@ -285,10 +315,22 @@ pub mod pallet {
             });
             Ok(())
         }
+
+        #[pallet::call_index(4)]
+        #[pallet::weight(T::WeightInfo::set_access_mode())]
+        pub fn set_access_mode(origin: OriginFor<T>, mode: GateMode) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            AccessMode::<T>::put(mode);
+            Self::deposit_event(Event::AccessModeSet { mode });
+            Ok(())
+        }
     }
 
     impl<T: Config> Pallet<T> {
         pub fn is_whitelisted(account: &T::AccountId) -> bool {
+            if AccessMode::<T>::get() == GateMode::Open {
+                return true;
+            }
             match Whitelist::<T>::get(account) {
                 Some(grant) => {
                     grant.expires_at_unix == 0
@@ -299,6 +341,9 @@ pub mod pallet {
         }
 
         pub fn ensure_whitelisted(account: &T::AccountId) -> DispatchResult {
+            if AccessMode::<T>::get() == GateMode::Open {
+                return Ok(());
+            }
             let grant = Whitelist::<T>::get(account).ok_or(Error::<T>::NotWhitelisted)?;
             ensure!(
                 grant.expires_at_unix == 0

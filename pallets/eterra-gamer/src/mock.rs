@@ -22,6 +22,7 @@ parameter_types! {
     pub const ExistentialDeposit: Balance = 1;
     pub const MaxTagLen: u32 = 32;
     pub const MaxAvatarCidLen: u32 = 96;
+    pub const MaxSteamLinkSignatureLen: u32 = 64;
     pub const ChangeFee: Balance = 100;
     pub FaucetAccountParam: AccountId = FAUCET;
 }
@@ -79,10 +80,12 @@ impl pallet_eterra_gamer::Config for Test {
     type Currency = Balances;
     type AccessControl = ();
     type ExpIssuerOrigin = frame_system::EnsureRoot<AccountId>;
+    type AdminOrigin = frame_system::EnsureRoot<AccountId>;
     type FaucetAccount = FaucetAccountParam;
     type ChangeFee = ChangeFee;
     type MaxTagLen = MaxTagLen;
     type MaxAvatarCidLen = MaxAvatarCidLen;
+    type MaxSteamLinkSignatureLen = MaxSteamLinkSignatureLen;
     type WeightInfo = ();
 }
 

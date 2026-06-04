@@ -5279,6 +5279,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-cryptostrike"
+version = "0.1.0"
+dependencies = [
+ "frame-support",
+ "frame-system",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
 name = "pallet-eterra"
 version = "0.1.0"
 dependencies = [
@@ -8811,6 +8825,7 @@ dependencies = [
  "pallet-aura",
  "pallet-balances",
  "pallet-collective",
+ "pallet-cryptostrike",
  "pallet-eterra",
  "pallet-eterra-arcade-aegis-run",
  "pallet-eterra-arcade-core",

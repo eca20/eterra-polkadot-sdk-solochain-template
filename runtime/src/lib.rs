@@ -25,6 +25,7 @@ pub use frame_system::Call as SystemCall;
 pub use pallet_balances::Call as BalancesCall;
 
 pub use pallet_alpha_access;
+pub use pallet_cryptostrike;
 pub use pallet_eterra;
 pub use pallet_eterra_arcade_aegis_run;
 pub use pallet_eterra_arcade_core;
@@ -95,7 +96,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     //   `spec_version`, and `authoring_version` are the same between Wasm and native.
     // This value is set to 100 to notify Polkadot-JS App (https://polkadot.js.org/apps) to use
     //   the compatible custom types.
-    spec_version: 100,
+    spec_version: 101,
     impl_version: 1,
     apis: apis::RUNTIME_API_VERSIONS,
     transaction_version: 1,
@@ -323,6 +324,9 @@ mod runtime {
 
     #[runtime::pallet_index(32)]
     pub type EterraArcadeAegisRun = pallet_eterra_arcade_aegis_run;
+
+    #[runtime::pallet_index(33)]
+    pub type CryptoStrike = pallet_cryptostrike;
 }
 
 #[cfg(test)]
