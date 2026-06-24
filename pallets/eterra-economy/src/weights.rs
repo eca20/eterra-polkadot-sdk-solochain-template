@@ -45,6 +45,7 @@ pub trait WeightInfo {
 	fn deposit_sponsor_funds() -> Weight;
 	fn record_revenue() -> Weight;
 	fn fulfill_product() -> Weight;
+	fn claim_arcade_credit() -> Weight;
 }
 
 impl WeightInfo for () {
@@ -73,6 +74,9 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn fulfill_product() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn claim_arcade_credit() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 }
@@ -193,5 +197,10 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(Weight::from_parts(0, 3581))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(4))
+	}
+	fn claim_arcade_credit() -> Weight {
+		Weight::from_parts(10_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
 }

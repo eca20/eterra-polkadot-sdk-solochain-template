@@ -29,6 +29,8 @@ impl frame_system::Config for Test {
 
 parameter_types! {
     pub const MaxSettlementEntries: u32 = 16;
+    pub const MaxCombatStatEntries: u32 = 16;
+    pub const MaxRivalStatEntries: u32 = 16;
     pub const MaxServerSignatureLen: u32 = 96;
     pub const MinServerStake: u128 = 100;
     pub const UnstakeDelay: u64 = 5;
@@ -184,6 +186,8 @@ impl pallet_cryptostrike::Config for Test {
     type AdminOrigin = frame_system::EnsureRoot<u64>;
     type Balance = u128;
     type MaxSettlementEntries = MaxSettlementEntries;
+    type MaxCombatStatEntries = MaxCombatStatEntries;
+    type MaxRivalStatEntries = MaxRivalStatEntries;
     type MaxServerSignatureLen = MaxServerSignatureLen;
     type MinServerStake = MinServerStake;
     type UnstakeDelay = UnstakeDelay;

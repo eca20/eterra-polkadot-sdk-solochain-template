@@ -27,6 +27,7 @@ members = [
     "pallets/eterra-arcade-core",
     "pallets/eterra-arcade-ouro",
     "pallets/eterra-arcade-aegis-run",
+    "pallets/eterra-arcade-nova-rail",
     "pallets/alpha-access",
     "pallets/cryptostrike",
     "crates/eterra-card-ai-adapter",   
@@ -128,6 +129,7 @@ pallet-eterra-profile                   = { path = "pallets/eterra-profile", def
 pallet-eterra-arcade-core               = { path = "pallets/eterra-arcade-core", default-features = false }
 pallet-eterra-arcade-ouro               = { path = "pallets/eterra-arcade-ouro", default-features = false }
 pallet-eterra-arcade-aegis-run          = { path = "pallets/eterra-arcade-aegis-run", default-features = false }
+pallet-eterra-arcade-nova-rail          = { path = "pallets/eterra-arcade-nova-rail", default-features = false }
 pallet-alpha-access                      = { path = "pallets/alpha-access", default-features = false }
 pallet-cryptostrike                      = { path = "pallets/cryptostrike", default-features = false }
 pallet-eterra-media                     = { path = "pallets/eterra-media", default-features = false }

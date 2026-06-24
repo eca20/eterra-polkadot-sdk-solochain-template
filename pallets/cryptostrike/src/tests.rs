@@ -1,7 +1,8 @@
 use crate::{
     mock::*, ActivePlayer, ActivePlayerInfo, ActiveSessionRoster, CurrentSeason, Error, Event,
-    NextServerId, PendingGuapClaims, PendingUnstakes, PlayerRole, RewardEntry, RoundSettlement,
-    SeasonInfo, SeasonStats, Seasons, ServerAllowance, ServerAllowances, ServerIdByPubkey,
+    NextServerId, PendingGuapClaims, PendingUnstakes, PlayerRole, RewardEntry,
+    RoundCombatStatsEntry, RoundRivalStatsEntry, RoundSettlement, SeasonInfo, SeasonRankStats,
+    SeasonRivalStats, SeasonStats, Seasons, ServerAllowance, ServerAllowances, ServerIdByPubkey,
     ServerStatus, Servers, SettledRounds, SettlementParticipant, TransferEntry, UnstakeInfo,
     UsedTransferNonces, WeaponSpendEntry,
 };
@@ -363,6 +364,8 @@ fn empty_settlement(round_number: u32, root: crate::RosterRoot) -> Box<RoundSett
         reward_entries: Vec::new().try_into().unwrap(),
         weapon_spend_entries: Vec::new().try_into().unwrap(),
         guap_transfer_entries: Vec::new().try_into().unwrap(),
+        combat_stats_entries: Vec::new().try_into().unwrap(),
+        rival_stats_entries: Vec::new().try_into().unwrap(),
         config_hash: config_hash(1),
         server_signature: Vec::new().try_into().unwrap(),
     }))
@@ -416,6 +419,8 @@ fn settlement_with_transfer(
         }]
         .try_into()
         .unwrap(),
+        combat_stats_entries: Vec::new().try_into().unwrap(),
+        rival_stats_entries: Vec::new().try_into().unwrap(),
         config_hash: config_hash(1),
         server_signature: Vec::new().try_into().unwrap(),
     }))
@@ -459,6 +464,8 @@ fn settlement_with_linked_recipient(
         }]
         .try_into()
         .unwrap(),
+        combat_stats_entries: Vec::new().try_into().unwrap(),
+        rival_stats_entries: Vec::new().try_into().unwrap(),
         config_hash: config_hash(1),
         server_signature: Vec::new().try_into().unwrap(),
     }))
@@ -1363,6 +1370,217 @@ fn settlement_updates_active_season_stats_for_linked_accounts() {
         assert_eq!(recipient_stats.guap_transferred_out, 0);
         assert_eq!(recipient_stats.guap_transferred_in, 40);
         assert_eq!(recipient_stats.season_points, 0);
+    });
+}
+
+#[test]
+fn settlement_updates_active_season_rank_and_rival_stats_by_steam_hash() {
+    new_test_ext().execute_with(|| {
+        register_active_server_with_roster(10);
+        link_steam(1, steam_hash(20));
+        assert_ok!(CryptoStrike::upsert_active_player(
+            RuntimeOrigin::signed(10),
+            1,
+            session_id(1),
+            steam_hash(20),
+            Some(1),
+            PlayerRole::Terrorist,
+            1,
+            20
+        ));
+        assert_ok!(CryptoStrike::upsert_active_player(
+            RuntimeOrigin::signed(10),
+            1,
+            session_id(1),
+            steam_hash(21),
+            None,
+            PlayerRole::CounterTerrorist,
+            1,
+            20
+        ));
+        assert_ok!(CryptoStrike::start_season(
+            RuntimeOrigin::root(),
+            1,
+            metadata_hash(91)
+        ));
+
+        let settlement = sign_settlement(Box::new(RoundSettlement {
+            combat_stats_entries: vec![
+                RoundCombatStatsEntry {
+                    steam_hash: steam_hash(20),
+                    kills: 2,
+                    deaths: 1,
+                    headshots: 1,
+                    shots_fired: 30,
+                    shots_hit: 12,
+                    rounds_played: 1,
+                },
+                RoundCombatStatsEntry {
+                    steam_hash: steam_hash(21),
+                    kills: 0,
+                    deaths: 2,
+                    headshots: 0,
+                    shots_fired: 15,
+                    shots_hit: 3,
+                    rounds_played: 1,
+                },
+            ]
+            .try_into()
+            .unwrap(),
+            rival_stats_entries: vec![RoundRivalStatsEntry {
+                attacker_steam_hash: steam_hash(20),
+                victim_steam_hash: steam_hash(21),
+                hits: 12,
+                damage: 204,
+                kills: 2,
+            }]
+            .try_into()
+            .unwrap(),
+            ..*empty_settlement(1, roster_root(7))
+        }));
+
+        assert_ok!(CryptoStrike::submit_round_settlement(
+            RuntimeOrigin::signed(10),
+            settlement
+        ));
+
+        let linked_stats = SeasonRankStats::<Test>::get(1, steam_hash(20)).expect("rank stats");
+        assert_eq!(linked_stats.kills, 2);
+        assert_eq!(linked_stats.deaths, 1);
+        assert_eq!(linked_stats.headshots, 1);
+        assert_eq!(linked_stats.shots_fired, 30);
+        assert_eq!(linked_stats.shots_hit, 12);
+        assert_eq!(linked_stats.rounds_played, 1);
+
+        let unlinked_stats =
+            SeasonRankStats::<Test>::get(1, steam_hash(21)).expect("unlinked stats");
+        assert_eq!(unlinked_stats.deaths, 2);
+        assert_eq!(unlinked_stats.shots_fired, 15);
+        assert_eq!(unlinked_stats.shots_hit, 3);
+
+        let rival_stats = SeasonRivalStats::<Test>::get((1, steam_hash(20), steam_hash(21)))
+            .expect("rival stats");
+        assert_eq!(rival_stats.hits, 12);
+        assert_eq!(rival_stats.damage, 204);
+        assert_eq!(rival_stats.kills, 2);
+    });
+}
+
+#[test]
+fn settlement_without_active_season_writes_no_rank_or_rival_stats() {
+    new_test_ext().execute_with(|| {
+        register_active_server_with_roster(10);
+        assert_ok!(CryptoStrike::upsert_active_player(
+            RuntimeOrigin::signed(10),
+            1,
+            session_id(1),
+            steam_hash(20),
+            None,
+            PlayerRole::Terrorist,
+            1,
+            20
+        ));
+        assert_ok!(CryptoStrike::upsert_active_player(
+            RuntimeOrigin::signed(10),
+            1,
+            session_id(1),
+            steam_hash(21),
+            None,
+            PlayerRole::CounterTerrorist,
+            1,
+            20
+        ));
+
+        let settlement = sign_settlement(Box::new(RoundSettlement {
+            combat_stats_entries: vec![RoundCombatStatsEntry {
+                steam_hash: steam_hash(20),
+                kills: 1,
+                deaths: 0,
+                headshots: 0,
+                shots_fired: 10,
+                shots_hit: 4,
+                rounds_played: 1,
+            }]
+            .try_into()
+            .unwrap(),
+            rival_stats_entries: vec![RoundRivalStatsEntry {
+                attacker_steam_hash: steam_hash(20),
+                victim_steam_hash: steam_hash(21),
+                hits: 4,
+                damage: 80,
+                kills: 1,
+            }]
+            .try_into()
+            .unwrap(),
+            ..*empty_settlement(1, roster_root(7))
+        }));
+
+        assert_ok!(CryptoStrike::submit_round_settlement(
+            RuntimeOrigin::signed(10),
+            settlement
+        ));
+        assert_eq!(SeasonRankStats::<Test>::get(1, steam_hash(20)), None);
+        assert_eq!(
+            SeasonRivalStats::<Test>::get((1, steam_hash(20), steam_hash(21))),
+            None
+        );
+    });
+}
+
+#[test]
+fn settlement_rejects_inactive_rank_and_rival_stat_participants() {
+    new_test_ext().execute_with(|| {
+        register_active_server_with_roster(10);
+
+        let stats_settlement = sign_settlement(Box::new(RoundSettlement {
+            combat_stats_entries: vec![RoundCombatStatsEntry {
+                steam_hash: steam_hash(50),
+                kills: 1,
+                deaths: 0,
+                headshots: 0,
+                shots_fired: 10,
+                shots_hit: 4,
+                rounds_played: 1,
+            }]
+            .try_into()
+            .unwrap(),
+            ..*empty_settlement(1, roster_root(7))
+        }));
+
+        assert_noop!(
+            CryptoStrike::submit_round_settlement(RuntimeOrigin::signed(10), stats_settlement),
+            Error::<Test>::SettlementParticipantNotActive
+        );
+
+        assert_ok!(CryptoStrike::upsert_active_player(
+            RuntimeOrigin::signed(10),
+            1,
+            session_id(1),
+            steam_hash(50),
+            None,
+            PlayerRole::Terrorist,
+            1,
+            20
+        ));
+
+        let rival_settlement = sign_settlement(Box::new(RoundSettlement {
+            rival_stats_entries: vec![RoundRivalStatsEntry {
+                attacker_steam_hash: steam_hash(50),
+                victim_steam_hash: steam_hash(51),
+                hits: 1,
+                damage: 10,
+                kills: 0,
+            }]
+            .try_into()
+            .unwrap(),
+            round_number: 2,
+            ..*empty_settlement(2, roster_root(7))
+        }));
+
+        assert_noop!(
+            CryptoStrike::submit_round_settlement(RuntimeOrigin::signed(10), rival_settlement),
+            Error::<Test>::SettlementParticipantNotActive
+        );
     });
 }
 

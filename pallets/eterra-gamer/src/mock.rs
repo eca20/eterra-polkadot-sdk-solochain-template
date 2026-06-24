@@ -21,7 +21,9 @@ parameter_types! {
     pub const SS58Prefix: u16 = 42;
     pub const ExistentialDeposit: Balance = 1;
     pub const MaxTagLen: u32 = 32;
+    pub const MaxInitialsLen: u32 = 4;
     pub const MaxAvatarCidLen: u32 = 96;
+    pub const MaxRegionCodeLen: u32 = 2;
     pub const MaxSteamLinkSignatureLen: u32 = 64;
     pub const ChangeFee: Balance = 100;
     pub FaucetAccountParam: AccountId = FAUCET;
@@ -84,7 +86,9 @@ impl pallet_eterra_gamer::Config for Test {
     type FaucetAccount = FaucetAccountParam;
     type ChangeFee = ChangeFee;
     type MaxTagLen = MaxTagLen;
+    type MaxInitialsLen = MaxInitialsLen;
     type MaxAvatarCidLen = MaxAvatarCidLen;
+    type MaxRegionCodeLen = MaxRegionCodeLen;
     type MaxSteamLinkSignatureLen = MaxSteamLinkSignatureLen;
     type WeightInfo = ();
 }

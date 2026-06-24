@@ -39,6 +39,24 @@ benchmarks! {
         assert!(GamerTag::<T>::contains_key(&caller));
     }
 
+    set_arcade_initials {
+        let caller: T::AccountId = whitelisted_caller();
+        let initials: BoundedVec<u8, T::MaxInitialsLen> =
+            b"AB_1".to_vec().try_into().expect("len ok");
+        ArcadeInitials::<T>::insert(&caller, initials.clone());
+
+        let fee = T::ChangeFee::get();
+        let min = T::Currency::minimum_balance();
+        // Ensure faucet account exists so a small fee transfer doesn't fail below ED.
+        let faucet = T::FaucetAccount::get();
+        fund::<T>(&faucet, min);
+        let fund_amount = fee.saturating_add(min);
+        fund::<T>(&caller, fund_amount);
+    }: _(RawOrigin::Signed(caller.clone()), initials)
+    verify {
+        assert!(ArcadeInitials::<T>::contains_key(&caller));
+    }
+
     set_avatar {
         let caller: T::AccountId = whitelisted_caller();
         let cid: BoundedVec<u8, T::MaxAvatarCidLen> =
@@ -55,6 +73,15 @@ benchmarks! {
     }: _(RawOrigin::Signed(caller.clone()), cid)
     verify {
         assert!(AvatarCid::<T>::contains_key(&caller));
+    }
+
+    set_region {
+        let caller: T::AccountId = whitelisted_caller();
+        let region: BoundedVec<u8, T::MaxRegionCodeLen> =
+            b"US".to_vec().try_into().expect("len ok");
+    }: _(RawOrigin::Signed(caller.clone()), Some(region))
+    verify {
+        assert_eq!(RegionCode::<T>::get(&caller).map(|code| code.to_vec()), Some(b"US".to_vec()));
     }
 
     grant_experience {

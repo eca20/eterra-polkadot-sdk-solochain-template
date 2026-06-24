@@ -451,12 +451,12 @@ mod tests {
                 aegis_summary(run_id, AEGIS_RUN_GAME_ID, 2, 8)
             ));
             assert_eq!(
-                PlayerBest::<Test>::get((AEGIS_RUN_GAME_ID, 1, 42))
+                PlayerBest::<Test>::get((AEGIS_RUN_GAME_ID, 1, 0, 42))
                     .expect("best")
                     .score,
                 1_200
             );
-            assert_eq!(Leaderboards::<Test>::get((AEGIS_RUN_GAME_ID, 1)).len(), 1);
+            assert_eq!(Leaderboards::<Test>::get((AEGIS_RUN_GAME_ID, 1, 0)).len(), 1);
         });
     }
 }

@@ -34,6 +34,13 @@ echo "== alpha media upload should stay blocked =="
 curl -sS -o /dev/null -w '%{http_code}\n' -X POST "http://127.0.0.1:${MEDIA_PORT}/media/upload" || true
 echo
 echo
+echo "== alpha arcade authority service =="
+systemctl --no-pager --full status "${AUTHORITY_SERVICE_NAME}" || true
+echo
+echo "== alpha arcade authority status =="
+curl -fsS "http://127.0.0.1:${AUTHORITY_PORT}/v1/status" || true
+echo
+echo
 echo "== alpha ipfs gateway =="
 curl -sSI "http://127.0.0.1:${IPFS_GATEWAY_PORT}" | head -n 5 || true
 EOF

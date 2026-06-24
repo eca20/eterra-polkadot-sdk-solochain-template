@@ -134,7 +134,10 @@ parameter_types! {
 parameter_types! {
     pub const GamerChangeFee: u128 = 0;
     pub const GamerTagMaxLen: u32 = 32;
+    pub const GamerInitialsMaxLen: u32 = 4;
     pub const GamerAvatarCidMaxLen: u32 = 96;
+    pub const GamerRegionCodeMaxLen: u32 = 2;
+    pub const GamerSteamLinkSignatureMaxLen: u32 = 64;
 }
 
 impl system::Config for Test {
@@ -304,10 +307,14 @@ impl pallet_eterra_gamer::Config for Test {
     type Currency = Balances;
     type AccessControl = ();
     type ExpIssuerOrigin = frame_system::EnsureRoot<u64>;
+    type AdminOrigin = frame_system::EnsureRoot<u64>;
     type FaucetAccount = FaucetAccountId;
     type ChangeFee = GamerChangeFee;
     type MaxTagLen = GamerTagMaxLen;
+    type MaxInitialsLen = GamerInitialsMaxLen;
     type MaxAvatarCidLen = GamerAvatarCidMaxLen;
+    type MaxRegionCodeLen = GamerRegionCodeMaxLen;
+    type MaxSteamLinkSignatureLen = GamerSteamLinkSignatureMaxLen;
     type RuntimeEvent = RuntimeEvent;
     type WeightInfo = ();
 }

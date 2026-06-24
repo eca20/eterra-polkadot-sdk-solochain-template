@@ -37,6 +37,7 @@ use frame_support::{traits::Get, weights::Weight};
 /// Weight functions for `pallet_eterra_gamer`.
 pub trait WeightInfo {
 	fn set_gamer_tag() -> Weight;
+	fn set_arcade_initials() -> Weight;
 	fn set_avatar() -> Weight;
 	fn grant_experience() -> Weight;
 	fn redeem_levels() -> Weight;
@@ -45,10 +46,14 @@ pub trait WeightInfo {
 	fn unlink_steam() -> Weight;
 	fn freeze_player() -> Weight;
 	fn unfreeze_player() -> Weight;
+	fn set_region() -> Weight;
 }
 
 impl WeightInfo for () {
 	fn set_gamer_tag() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn set_arcade_initials() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 	fn set_avatar() -> Weight {
@@ -75,6 +80,9 @@ impl WeightInfo for () {
 	fn unfreeze_player() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
+	fn set_region() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
 }
 
 /// Weight functions for `pallet_eterra_gamer`.
@@ -89,6 +97,16 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		//  Measured:  `250`
 		//  Estimated: `3593`
 		// Minimum execution time: 679_000_000 picoseconds.
+		Weight::from_parts(697_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 3593))
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+	/// Storage: `EterraGamer::ArcadeInitials` (r:1 w:1)
+	/// Proof: `EterraGamer::ArcadeInitials` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `MaxEncodedLen`)
+	/// Storage: `System::Account` (r:1 w:1)
+	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
+	fn set_arcade_initials() -> Weight {
 		Weight::from_parts(697_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 3593))
 			.saturating_add(T::DbWeight::get().reads(2))
@@ -147,6 +165,9 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(10_000, 0)
 	}
 	fn unfreeze_player() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn set_region() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 }

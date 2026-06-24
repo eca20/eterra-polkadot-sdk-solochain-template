@@ -4,8 +4,8 @@
 use super::*;
 use crate::mock::*;
 use crate::pallet::{
-    AccountToSteam, AvatarCid, Error as GamerError, Experience, GamerProfiles, GamerTag, Level,
-    SteamLinkAuthority, SteamToAccount, UsedSteamLinkNonces,
+    AccountToSteam, ArcadeInitials, AvatarCid, Error as GamerError, Experience, GamerProfiles,
+    GamerTag, Level, RegionCode, SteamLinkAuthority, SteamToAccount, UsedSteamLinkNonces,
 };
 use frame_support::BoundedVec;
 use frame_support::{assert_noop, assert_ok};
@@ -63,6 +63,12 @@ fn install_authority() {
         RuntimeOrigin::root(),
         authority_pair().public().0,
     ));
+}
+
+fn arcade_initials(
+    value: &[u8],
+) -> BoundedVec<u8, <Test as crate::Config>::MaxInitialsLen> {
+    value.to_vec().try_into().expect("within max initials len")
 }
 
 #[test]
@@ -124,6 +130,101 @@ fn second_set_tag_charges_fee() {
 }
 
 #[test]
+fn first_set_arcade_initials_is_free() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let faucet_before = pallet_balances::Pallet::<Test>::free_balance(FAUCET);
+
+        assert_ok!(EterraGamer::set_arcade_initials(
+            RuntimeOrigin::signed(ALICE),
+            arcade_initials(b"AB_1")
+        ));
+        assert_eq!(
+            ArcadeInitials::<Test>::get(ALICE).unwrap().to_vec(),
+            b"AB_1"
+        );
+        assert_eq!(
+            pallet_balances::Pallet::<Test>::free_balance(FAUCET),
+            faucet_before
+        );
+        System::assert_last_event(RuntimeEvent::EterraGamer(Event::InitialsSet {
+            who: ALICE,
+            initials: b"AB_1".to_vec(),
+            charged: false,
+        }));
+    });
+}
+
+#[test]
+fn second_set_arcade_initials_charges_fee() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraGamer::set_arcade_initials(
+            RuntimeOrigin::signed(ALICE),
+            arcade_initials(b"ABC")
+        ));
+
+        let before_faucet = pallet_balances::Pallet::<Test>::free_balance(FAUCET);
+        let before_alice = pallet_balances::Pallet::<Test>::free_balance(ALICE);
+
+        assert_ok!(EterraGamer::set_arcade_initials(
+            RuntimeOrigin::signed(ALICE),
+            arcade_initials(b"A-1")
+        ));
+
+        let fee = ChangeFee::get();
+        assert_eq!(
+            pallet_balances::Pallet::<Test>::free_balance(FAUCET),
+            before_faucet + fee
+        );
+        assert_eq!(
+            pallet_balances::Pallet::<Test>::free_balance(ALICE),
+            before_alice - fee
+        );
+    });
+}
+
+#[test]
+fn arcade_initials_accept_classic_machine_characters() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraGamer::set_arcade_initials(
+            RuntimeOrigin::signed(ALICE),
+            arcade_initials(b"A._-")
+        ));
+        assert_eq!(
+            ArcadeInitials::<Test>::get(ALICE).unwrap().to_vec(),
+            b"A._-"
+        );
+    });
+}
+
+#[test]
+fn arcade_initials_reject_lowercase_invalid_and_all_space_values() {
+    new_test_ext().execute_with(|| {
+        assert_noop!(
+            EterraGamer::set_arcade_initials(RuntimeOrigin::signed(ALICE), arcade_initials(b"abc")),
+            GamerError::<Test>::InvalidInitials
+        );
+        assert_noop!(
+            EterraGamer::set_arcade_initials(RuntimeOrigin::signed(ALICE), arcade_initials(b"A@1")),
+            GamerError::<Test>::InvalidInitials
+        );
+        assert_noop!(
+            EterraGamer::set_arcade_initials(RuntimeOrigin::signed(ALICE), arcade_initials(b"    ")),
+            GamerError::<Test>::InvalidInitials
+        );
+    });
+}
+
+#[test]
+fn arcade_initials_max_length_is_enforced_by_bounded_vec() {
+    new_test_ext().execute_with(|| {
+        let too_long: Result<BoundedVec<u8, <Test as crate::Config>::MaxInitialsLen>, _> =
+            b"ABCDE".to_vec().try_into();
+        assert!(too_long.is_err());
+    });
+}
+
+#[test]
 fn set_avatar_valid_ascii_and_length() {
     new_test_ext().execute_with(|| {
         let cid = b"bafybeigdyrztvz3kvis4cdwq5lq6eqyqf7x7v2gd3h3b7l5jv2w7".to_vec();
@@ -169,6 +270,58 @@ fn second_set_avatar_charges_fee_and_fails_if_insufficient() {
         assert_noop!(
             EterraGamer::set_avatar(RuntimeOrigin::signed(BOB), cid2),
             GamerError::<Test>::InsufficientBalanceForChange
+        );
+    });
+}
+
+#[test]
+fn set_region_stores_updates_and_clears_country_code() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let us: BoundedVec<u8, <Test as crate::Config>::MaxRegionCodeLen> =
+            b"US".to_vec().try_into().expect("two-byte region fits");
+        assert_ok!(EterraGamer::set_region(
+            RuntimeOrigin::signed(ALICE),
+            Some(us)
+        ));
+        assert_eq!(RegionCode::<Test>::get(ALICE).unwrap().to_vec(), b"US");
+
+        let jp: BoundedVec<u8, <Test as crate::Config>::MaxRegionCodeLen> =
+            b"JP".to_vec().try_into().expect("two-byte region fits");
+        assert_ok!(EterraGamer::set_region(
+            RuntimeOrigin::signed(ALICE),
+            Some(jp)
+        ));
+        assert_eq!(RegionCode::<Test>::get(ALICE).unwrap().to_vec(), b"JP");
+        System::assert_last_event(RuntimeEvent::EterraGamer(Event::RegionSet {
+            who: ALICE,
+            country_code: Some(b"JP".to_vec()),
+        }));
+
+        assert_ok!(EterraGamer::set_region(RuntimeOrigin::signed(ALICE), None));
+        assert_eq!(RegionCode::<Test>::get(ALICE), None);
+        System::assert_last_event(RuntimeEvent::EterraGamer(Event::RegionSet {
+            who: ALICE,
+            country_code: None,
+        }));
+    });
+}
+
+#[test]
+fn set_region_rejects_non_uppercase_alpha2_codes() {
+    new_test_ext().execute_with(|| {
+        let lower: BoundedVec<u8, <Test as crate::Config>::MaxRegionCodeLen> =
+            b"us".to_vec().try_into().expect("two-byte region fits");
+        assert_noop!(
+            EterraGamer::set_region(RuntimeOrigin::signed(ALICE), Some(lower)),
+            GamerError::<Test>::InvalidRegionCode
+        );
+
+        let numeric: BoundedVec<u8, <Test as crate::Config>::MaxRegionCodeLen> =
+            b"U1".to_vec().try_into().expect("two-byte region fits");
+        assert_noop!(
+            EterraGamer::set_region(RuntimeOrigin::signed(ALICE), Some(numeric)),
+            GamerError::<Test>::InvalidRegionCode
         );
     });
 }
@@ -421,6 +574,13 @@ fn freeze_and_unfreeze_player_control_profile_actions() {
             EterraGamer::set_gamer_tag(
                 RuntimeOrigin::signed(ALICE),
                 b"FrozenAlice".to_vec().try_into().unwrap(),
+            ),
+            GamerError::<Test>::PlayerFrozen
+        );
+        assert_noop!(
+            EterraGamer::set_region(
+                RuntimeOrigin::signed(ALICE),
+                Some(b"US".to_vec().try_into().unwrap()),
             ),
             GamerError::<Test>::PlayerFrozen
         );

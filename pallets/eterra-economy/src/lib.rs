@@ -64,6 +64,13 @@ pub mod pallet {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
         type WeightInfo: WeightInfo;
         type AdminOrigin: EnsureOrigin<Self::RuntimeOrigin>;
+
+        #[pallet::constant]
+        type ArcadeCreditFaucetGameId: Get<GameId>;
+        #[pallet::constant]
+        type ArcadeCreditFaucetType: Get<CreditTypeId>;
+        #[pallet::constant]
+        type ArcadeCreditFaucetAmount: Get<u64>;
     }
 
     const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
@@ -153,6 +160,12 @@ pub mod pallet {
             amount: u64,
         },
         CreditConsumed {
+            game_id: GameId,
+            account: T::AccountId,
+            credit_type: CreditTypeId,
+            amount: u64,
+        },
+        ArcadeCreditFaucetClaimed {
             game_id: GameId,
             account: T::AccountId,
             credit_type: CreditTypeId,
@@ -328,6 +341,23 @@ pub mod pallet {
         ) -> DispatchResult {
             T::AdminOrigin::ensure_origin(origin)?;
             Self::try_fulfill_product(&account, game_id, product_id, receipt_hash)
+        }
+
+        #[pallet::call_index(9)]
+        #[pallet::weight(T::WeightInfo::claim_arcade_credit())]
+        pub fn claim_arcade_credit(origin: OriginFor<T>) -> DispatchResult {
+            let account = ensure_signed(origin)?;
+            let game_id = T::ArcadeCreditFaucetGameId::get();
+            let credit_type = T::ArcadeCreditFaucetType::get();
+            let amount = T::ArcadeCreditFaucetAmount::get();
+            Self::try_grant_credit(&account, game_id, credit_type, amount)?;
+            Self::deposit_event(Event::ArcadeCreditFaucetClaimed {
+                game_id,
+                account,
+                credit_type,
+                amount,
+            });
+            Ok(())
         }
     }
 
@@ -562,6 +592,15 @@ mod tests {
         type RuntimeEvent = RuntimeEvent;
         type WeightInfo = ();
         type AdminOrigin = frame_system::EnsureRoot<AccountId>;
+        type ArcadeCreditFaucetGameId = ArcadeCreditFaucetGameId;
+        type ArcadeCreditFaucetType = ArcadeCreditFaucetType;
+        type ArcadeCreditFaucetAmount = ArcadeCreditFaucetAmount;
+    }
+
+    parameter_types! {
+        pub const ArcadeCreditFaucetGameId: GameId = 1000;
+        pub const ArcadeCreditFaucetType: CreditTypeId = 1;
+        pub const ArcadeCreditFaucetAmount: u64 = 1000;
     }
 
     pub(crate) fn new_test_ext() -> sp_io::TestExternalities {
@@ -616,6 +655,21 @@ mod tests {
                 EterraEconomy::fulfill_product(RuntimeOrigin::root(), 10, 77, 42, receipt),
                 Error::<Test>::ReceiptAlreadyFulfilled
             );
+        });
+    }
+
+    #[test]
+    fn arcade_credit_faucet_grants_configured_alpha_amount() {
+        new_test_ext().execute_with(|| {
+            assert_eq!(EterraEconomy::credit_balance(&42, 1000, 1), 0);
+            assert_ok!(EterraEconomy::claim_arcade_credit(RuntimeOrigin::signed(
+                42
+            )));
+            assert_eq!(EterraEconomy::credit_balance(&42, 1000, 1), 1000);
+            assert_ok!(EterraEconomy::claim_arcade_credit(RuntimeOrigin::signed(
+                42
+            )));
+            assert_eq!(EterraEconomy::credit_balance(&42, 1000, 1), 2000);
         });
     }
 

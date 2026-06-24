@@ -19,4 +19,7 @@ journalctl -u "${REMOTE_NODE_SERVICE_NAME}" -n "${LINES}" --no-pager || true
 echo
 echo "== alpha media logs =="
 ${REMOTE_DOCKER_COMPOSE_CMD} logs --tail "${LINES}" || true
+echo
+echo "== alpha arcade authority logs =="
+journalctl -u "${AUTHORITY_SERVICE_NAME}" -n "${LINES}" --no-pager || true
 EOF

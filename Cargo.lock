@@ -5353,6 +5353,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-eterra-arcade-nova-rail"
+version = "0.1.0"
+dependencies = [
+ "frame-benchmarking",
+ "frame-support",
+ "frame-system",
+ "pallet-eterra-arcade-core",
+ "parity-scale-codec",
+ "scale-info",
+ "sp-core",
+ "sp-io",
+ "sp-runtime",
+ "sp-std 8.0.0",
+]
+
+[[package]]
 name = "pallet-eterra-arcade-ouro"
 version = "0.1.0"
 dependencies = [
@@ -8829,6 +8845,7 @@ dependencies = [
  "pallet-eterra",
  "pallet-eterra-arcade-aegis-run",
  "pallet-eterra-arcade-core",
+ "pallet-eterra-arcade-nova-rail",
  "pallet-eterra-arcade-ouro",
  "pallet-eterra-authority",
  "pallet-eterra-card-escrow",

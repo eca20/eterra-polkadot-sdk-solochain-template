@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 node_args=()
 media_args=()
+authority_args=()
+deploy_authority=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -15,14 +17,23 @@ while [[ $# -gt 0 ]]; do
 			node_args+=("--purge-state")
 			media_args+=("--fresh")
 			;;
+		--with-arcade-authority)
+			deploy_authority=1
+			;;
+		--authorize-arcade-authority)
+			deploy_authority=1
+			authority_args+=("--authorize")
+			;;
 		--help|-h)
 			cat <<'EOF'
-Usage: deploy-all.sh [--purge-state] [--fresh]
+Usage: deploy-all.sh [--purge-state] [--fresh] [--with-arcade-authority] [--authorize-arcade-authority]
 
 Normal deploys preserve alpha chain state.
 Pass --purge-state to wipe the remote alpha node base path before restart.
 Alpha spec/genesis changes are only applied when --purge-state is set.
 Pass --fresh to purge chain state and reset the alpha media/IPFS volumes after deploy.
+Pass --with-arcade-authority to deploy the Nova Rail authority relay API/operator.
+Pass --authorize-arcade-authority to deploy and run the one-shot relay authorization operator.
 EOF
 			exit 0
 			;;
@@ -36,3 +47,6 @@ done
 
 "${SCRIPT_DIR}/deploy-node.sh" "${node_args[@]}"
 "${SCRIPT_DIR}/deploy-media.sh" "${media_args[@]}"
+if [[ "${deploy_authority}" -eq 1 ]]; then
+	"${SCRIPT_DIR}/deploy-arcade-authority.sh" "${authority_args[@]}"
+fi

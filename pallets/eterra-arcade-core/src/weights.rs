@@ -11,6 +11,7 @@ pub trait WeightInfo {
 	fn start_run() -> Weight;
 	fn abandon_run() -> Weight;
 	fn expire_run() -> Weight;
+	fn pay_continue() -> Weight;
 }
 
 impl WeightInfo for () {
@@ -24,6 +25,9 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn expire_run() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn pay_continue() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 }
@@ -49,5 +53,10 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(16_000_000, 0)
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(2))
+	}
+	fn pay_continue() -> Weight {
+		Weight::from_parts(25_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
 }

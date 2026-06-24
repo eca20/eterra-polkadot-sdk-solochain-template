@@ -54,10 +54,10 @@ use super::{HandProviderAdapter, UNIT};
 // Bring in the pallets re-exported in lib.rs
 use super::{
     pallet_alpha_access, pallet_cryptostrike, pallet_eterra, pallet_eterra_arcade_aegis_run,
-    pallet_eterra_arcade_core, pallet_eterra_arcade_ouro, pallet_eterra_authority,
-    pallet_eterra_card_escrow, pallet_eterra_daily_slots, pallet_eterra_economy,
-    pallet_eterra_faucet, pallet_eterra_flow, pallet_eterra_game_authority, pallet_eterra_gamer,
-    pallet_eterra_media, pallet_eterra_profile, pallet_eterra_seasons,
+    pallet_eterra_arcade_core, pallet_eterra_arcade_nova_rail, pallet_eterra_arcade_ouro,
+    pallet_eterra_authority, pallet_eterra_card_escrow, pallet_eterra_daily_slots,
+    pallet_eterra_economy, pallet_eterra_faucet, pallet_eterra_flow, pallet_eterra_game_authority,
+    pallet_eterra_gamer, pallet_eterra_media, pallet_eterra_profile, pallet_eterra_seasons,
     pallet_eterra_simple_matchmaker, pallet_eterra_tcg, pallet_nfts,
 };
 // Monte Carlo AI pallet lives at the crate root; bring it in explicitly.
@@ -918,7 +918,9 @@ impl pallet_eterra_faucet::Config for Runtime {
 
 parameter_types! {
     pub const GamerTagMaxLen: u32 = 32;
+    pub const GamerInitialsMaxLen: u32 = 4;
     pub const AvatarCidMaxLen: u32 = 96; // or 128
+    pub const GamerRegionCodeMaxLen: u32 = 2;
     pub const SteamLinkSignatureMaxLen: u32 = 64;
     pub const GamerChangeFee: Balance = 100 * UNIT;
 }
@@ -931,7 +933,9 @@ impl pallet_eterra_gamer::Config for Runtime {
     type FaucetAccount = TreasuryAccount;
     type ChangeFee = GamerChangeFee;
     type MaxTagLen = GamerTagMaxLen;
+    type MaxInitialsLen = GamerInitialsMaxLen;
     type MaxAvatarCidLen = AvatarCidMaxLen;
+    type MaxRegionCodeLen = GamerRegionCodeMaxLen;
     type MaxSteamLinkSignatureLen = SteamLinkSignatureMaxLen;
     type WeightInfo = pallet_eterra_gamer::weights::SubstrateWeight<Runtime>;
 }
@@ -1014,6 +1018,8 @@ impl pallet_cryptostrike::Config for Runtime {
     type AdminOrigin = PrivilegedControlOrigin;
     type Balance = Balance;
     type MaxSettlementEntries = ConstU32<64>;
+    type MaxCombatStatEntries = ConstU32<64>;
+    type MaxRivalStatEntries = ConstU32<64>;
     type MaxServerSignatureLen = ConstU32<128>;
     type MinServerStake = ConstU128<{ 100_000 * UNIT }>;
     type UnstakeDelay = ConstU32<DAYS>;
@@ -1035,10 +1041,21 @@ impl pallet_eterra_authority::Config for Runtime {
     type MaxAllowedEventsPerAuthority = EterraAuthorityMaxAllowedEventsPerAuthority;
 }
 
+parameter_types! {
+    pub const EterraEconomyArcadeCreditFaucetGameId: pallet_eterra_economy::GameId =
+        pallet_eterra_arcade_core::ARCADE_CORE_GAME_ID;
+    pub const EterraEconomyArcadeCreditFaucetType: pallet_eterra_economy::CreditTypeId =
+        pallet_eterra_arcade_core::ARCADE_PLAY_CREDIT_TYPE;
+    pub const EterraEconomyArcadeCreditFaucetAmount: u64 = 1000;
+}
+
 impl pallet_eterra_economy::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type WeightInfo = pallet_eterra_economy::weights::SubstrateWeight<Runtime>;
     type AdminOrigin = PrivilegedControlOrigin;
+    type ArcadeCreditFaucetGameId = EterraEconomyArcadeCreditFaucetGameId;
+    type ArcadeCreditFaucetType = EterraEconomyArcadeCreditFaucetType;
+    type ArcadeCreditFaucetAmount = EterraEconomyArcadeCreditFaucetAmount;
 }
 
 impl pallet_eterra_profile::Config for Runtime {
@@ -1057,6 +1074,9 @@ parameter_types! {
     pub const EterraArcadeMaxOuroBossesPerRun: u32 = 64;
     pub const EterraArcadeMaxAegisStagesPerRun: u32 = 32;
     pub const EterraArcadeMaxAegisCheckpointsPerRun: u32 = 256;
+    pub const EterraArcadeMaxNovaRailStage: u32 = 64;
+    pub const EterraArcadeMaxNovaRailEnemiesDefeated: u32 = 100_000;
+    pub const EterraArcadeMaxNovaRailTerrainHits: u32 = 10_000;
 }
 
 impl pallet_eterra_arcade_core::Config for Runtime {
@@ -1084,6 +1104,14 @@ impl pallet_eterra_arcade_aegis_run::Config for Runtime {
     type WeightInfo = pallet_eterra_arcade_aegis_run::weights::SubstrateWeight<Runtime>;
     type MaxAegisStagesPerRun = EterraArcadeMaxAegisStagesPerRun;
     type MaxAegisCheckpointsPerRun = EterraArcadeMaxAegisCheckpointsPerRun;
+}
+
+impl pallet_eterra_arcade_nova_rail::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = pallet_eterra_arcade_nova_rail::weights::SubstrateWeight<Runtime>;
+    type MaxNovaRailStage = EterraArcadeMaxNovaRailStage;
+    type MaxNovaRailEnemiesDefeated = EterraArcadeMaxNovaRailEnemiesDefeated;
+    type MaxNovaRailTerrainHits = EterraArcadeMaxNovaRailTerrainHits;
 }
 
 parameter_types! {

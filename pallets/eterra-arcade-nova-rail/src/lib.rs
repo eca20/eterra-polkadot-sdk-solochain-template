@@ -1,18 +1,18 @@
-//! Ouro arcade game pallet.
+//! Nova Rail arcade game pallet.
 //!
-//! Purpose: game-specific validation and entrypoints for the Ouro cabinet.
+//! Purpose: game-specific validation and entrypoints for the Nova Rail cabinet.
 #![cfg_attr(not(feature = "std"), no_std)]
 
 pub use pallet::*;
 pub mod weights;
 pub use weights::WeightInfo;
 
-pub const OURO_GAME_ID: pallet_eterra_arcade_core::GameId = 1001;
-pub const OURO_SLUG: &[u8] = b"ouro";
+pub const NOVA_RAIL_GAME_ID: pallet_eterra_arcade_core::GameId = 1003;
+pub const NOVA_RAIL_SLUG: &[u8] = b"nova_rail";
 
 #[frame_support::pallet]
 pub mod pallet {
-    use super::{weights::WeightInfo, OURO_GAME_ID};
+    use super::{weights::WeightInfo, NOVA_RAIL_GAME_ID};
     use frame_support::{dispatch::DispatchResult, ensure, pallet_prelude::*};
     use frame_system::pallet_prelude::*;
     use pallet_eterra_arcade_core::{self as arcade_core, ClientRunIdOf, RunId, RunResultInput};
@@ -21,13 +21,16 @@ pub mod pallet {
         Encode, Decode, MaxEncodedLen, TypeInfo, CloneNoBound, PartialEqNoBound, RuntimeDebugNoBound,
     )]
     #[scale_info(skip_type_params(T))]
-    pub struct OuroRunResult<T: arcade_core::Config> {
+    pub struct NovaRailRunResult<T: arcade_core::Config> {
         pub common: RunResultInput<T>,
-        pub rooms_cleared: u32,
-        pub bosses_defeated: u32,
-        pub elemental_gates_cleared: u32,
-        pub elemental_gate_failures: u32,
-        pub boss_shields_broken: u32,
+        pub stage_reached: u32,
+        pub enemies_defeated: u32,
+        pub boss_spawned: bool,
+        pub boss_defeated: bool,
+        pub terrain_hits: u32,
+        pub pickups_collected: u32,
+        pub deflections: u32,
+        pub nova_bombs_used: u32,
     }
 
     #[pallet::config]
@@ -36,9 +39,11 @@ pub mod pallet {
         type WeightInfo: WeightInfo;
 
         #[pallet::constant]
-        type MaxOuroRoomsPerRun: Get<u32>;
+        type MaxNovaRailStage: Get<u32>;
         #[pallet::constant]
-        type MaxOuroBossesPerRun: Get<u32>;
+        type MaxNovaRailEnemiesDefeated: Get<u32>;
+        #[pallet::constant]
+        type MaxNovaRailTerrainHits: Get<u32>;
     }
 
     #[pallet::pallet]
@@ -47,11 +52,16 @@ pub mod pallet {
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
-        OuroRunStarted {
+        NovaRailRunStarted {
             run_id: RunId,
             player: T::AccountId,
         },
-        OuroResultSubmitted {
+        NovaRailContinuePaid {
+            run_id: RunId,
+            player: T::AccountId,
+            paid_continues_used: u32,
+        },
+        NovaRailResultSubmitted {
             run_id: RunId,
             score: u64,
             ranked: bool,
@@ -61,8 +71,9 @@ pub mod pallet {
     #[pallet::error]
     pub enum Error<T> {
         WrongGameId,
-        RoomsOutOfBounds,
-        BossesOutOfBounds,
+        StageOutOfBounds,
+        EnemiesOutOfBounds,
+        TerrainHitsOutOfBounds,
     }
 
     #[pallet::call]
@@ -78,25 +89,42 @@ pub mod pallet {
             let player = ensure_signed(origin)?;
             let run_id = arcade_core::Pallet::<T>::start_run_for_game(
                 &player,
-                OURO_GAME_ID,
+                NOVA_RAIL_GAME_ID,
                 ruleset_version,
                 client_run_id,
                 seed_commitment,
             )?;
-            Self::deposit_event(Event::OuroRunStarted { run_id, player });
+            Self::deposit_event(Event::NovaRailRunStarted { run_id, player });
             Ok(())
         }
 
         #[pallet::call_index(1)]
+        #[pallet::weight(<T as Config>::WeightInfo::pay_continue())]
+        pub fn pay_continue(origin: OriginFor<T>, run_id: RunId) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            let paid_continues_used =
+                arcade_core::Pallet::<T>::pay_continue_for_run(&player, run_id)?;
+            Self::deposit_event(Event::NovaRailContinuePaid {
+                run_id,
+                player,
+                paid_continues_used,
+            });
+            Ok(())
+        }
+
+        #[pallet::call_index(2)]
         #[pallet::weight(<T as Config>::WeightInfo::submit_result())]
-        pub fn submit_result(origin: OriginFor<T>, summary: OuroRunResult<T>) -> DispatchResult {
+        pub fn submit_result(
+            origin: OriginFor<T>,
+            summary: NovaRailRunResult<T>,
+        ) -> DispatchResult {
             let authority = ensure_signed(origin)?;
             Self::validate_summary(&summary)?;
             let run_id = summary.common.run_id;
             let score = summary.common.score;
             let ranked = summary.common.ranked;
             arcade_core::Pallet::<T>::submit_result_for_authority(&authority, summary.common)?;
-            Self::deposit_event(Event::OuroResultSubmitted {
+            Self::deposit_event(Event::NovaRailResultSubmitted {
                 run_id,
                 score,
                 ranked,
@@ -106,19 +134,22 @@ pub mod pallet {
     }
 
     impl<T: Config> Pallet<T> {
-        fn validate_summary(summary: &OuroRunResult<T>) -> DispatchResult {
+        fn validate_summary(summary: &NovaRailRunResult<T>) -> DispatchResult {
             ensure!(
-                summary.common.game_id == OURO_GAME_ID,
+                summary.common.game_id == NOVA_RAIL_GAME_ID,
                 Error::<T>::WrongGameId
             );
             ensure!(
-                summary.rooms_cleared <= T::MaxOuroRoomsPerRun::get(),
-                Error::<T>::RoomsOutOfBounds
+                summary.stage_reached <= T::MaxNovaRailStage::get(),
+                Error::<T>::StageOutOfBounds
             );
             ensure!(
-                summary.bosses_defeated <= T::MaxOuroBossesPerRun::get()
-                    && summary.boss_shields_broken <= T::MaxOuroBossesPerRun::get(),
-                Error::<T>::BossesOutOfBounds
+                summary.enemies_defeated <= T::MaxNovaRailEnemiesDefeated::get(),
+                Error::<T>::EnemiesOutOfBounds
+            );
+            ensure!(
+                summary.terrain_hits <= T::MaxNovaRailTerrainHits::get(),
+                Error::<T>::TerrainHitsOutOfBounds
             );
             Ok(())
         }
@@ -155,7 +186,7 @@ mod tests {
         pub enum Test {
             System: system,
             ArcadeCore: pallet_eterra_arcade_core,
-            ArcadeOuro: crate,
+            ArcadeNovaRail: crate,
         }
     );
 
@@ -166,8 +197,9 @@ mod tests {
         pub const MaxResultIdLen: u32 = 64;
         pub const MaxProgressLabelLen: u32 = 64;
         pub const MaxLeaderboardEntries: u32 = 4;
-        pub const MaxOuroRoomsPerRun: u32 = 16;
-        pub const MaxOuroBossesPerRun: u32 = 4;
+        pub const MaxNovaRailStage: u32 = 32;
+        pub const MaxNovaRailEnemiesDefeated: u32 = 10_000;
+        pub const MaxNovaRailTerrainHits: u32 = 1_000;
     }
 
     thread_local! {
@@ -270,8 +302,9 @@ mod tests {
     impl Config for Test {
         type RuntimeEvent = RuntimeEvent;
         type WeightInfo = ();
-        type MaxOuroRoomsPerRun = MaxOuroRoomsPerRun;
-        type MaxOuroBossesPerRun = MaxOuroBossesPerRun;
+        type MaxNovaRailStage = MaxNovaRailStage;
+        type MaxNovaRailEnemiesDefeated = MaxNovaRailEnemiesDefeated;
+        type MaxNovaRailTerrainHits = MaxNovaRailTerrainHits;
     }
 
     fn new_test_ext() -> sp_io::TestExternalities {
@@ -316,29 +349,26 @@ mod tests {
         });
     }
 
-    fn authorize(account: AccountId) {
+    fn authorize(account: AccountId, game_id: GameId) {
         AUTHORITIES.with(|authorities| {
-            authorities.borrow_mut().insert((
-                account,
-                OURO_GAME_ID,
-                1,
-                EVENT_ARCADE_SUBMIT_RUN_RESULT,
-            ));
+            authorities
+                .borrow_mut()
+                .insert((account, game_id, 1, EVENT_ARCADE_SUBMIT_RUN_RESULT));
         });
     }
 
-    fn configure_ouro() {
+    fn configure_game(game_id: GameId) {
         assert_ok!(ArcadeCore::configure_game(
             RuntimeOrigin::root(),
-            OURO_GAME_ID,
-            slug("ouro"),
+            game_id,
+            slug("nova_rail"),
             true,
             1,
             ARCADE_CORE_GAME_ID,
             ARCADE_PLAY_CREDIT_TYPE,
-            1,
-            10,
-            100_000,
+            25,
+            100,
+            1_000_000,
             3,
         ));
     }
@@ -354,92 +384,155 @@ mod tests {
             unranked_reason: UnrankedReason::None,
             ended_reason: EndedReason::BossDefeated,
             continues_used: 0,
-            progress_label: progress("Chapter Clear"),
+            progress_label: progress("Stage 1"),
             progress_hash: H256::repeat_byte(1),
             metrics_hash: Some(H256::repeat_byte(2)),
         }
     }
 
-    fn ouro_summary(run_id: u64, game_id: GameId, rooms: u32) -> OuroRunResult<Test> {
-        OuroRunResult::<Test> {
-            common: common_result(run_id, game_id, 900),
-            rooms_cleared: rooms,
-            bosses_defeated: 1,
-            elemental_gates_cleared: 4,
-            elemental_gate_failures: 0,
-            boss_shields_broken: 1,
+    fn nova_summary(run_id: u64, game_id: GameId, score: u64) -> NovaRailRunResult<Test> {
+        NovaRailRunResult::<Test> {
+            common: common_result(run_id, game_id, score),
+            stage_reached: 1,
+            enemies_defeated: 32,
+            boss_spawned: true,
+            boss_defeated: true,
+            terrain_hits: 2,
+            pickups_collected: 4,
+            deflections: 3,
+            nova_bombs_used: 1,
         }
     }
 
     #[test]
-    fn wrapper_starts_ouro_game_only() {
+    fn wrapper_starts_nova_rail_and_consumes_twenty_five_credits() {
         new_test_ext().execute_with(|| {
-            configure_ouro();
-            grant_credit(42, 1);
-            assert_ok!(ArcadeOuro::start_run(
+            configure_game(NOVA_RAIL_GAME_ID);
+            grant_credit(42, 50);
+            assert_ok!(ArcadeNovaRail::start_run(
                 RuntimeOrigin::signed(42),
                 1,
                 client_run_id("client-1"),
                 H256::repeat_byte(1),
             ));
-            assert!(ActiveRunByPlayerGame::<Test>::get(OURO_GAME_ID, 42).is_some());
-        });
-    }
-
-    #[test]
-    fn wrapper_rejects_wrong_game_id_and_out_of_bounds_summary() {
-        new_test_ext().execute_with(|| {
-            configure_ouro();
-            grant_credit(42, 1);
-            let run_id = ArcadeCore::start_run_for_game(
-                &42,
-                OURO_GAME_ID,
-                1,
-                client_run_id("client-1"),
-                H256::repeat_byte(1),
-            )
-            .expect("run starts");
-
-            assert_noop!(
-                ArcadeOuro::submit_result(RuntimeOrigin::signed(9), ouro_summary(run_id, 1002, 1)),
-                Error::<Test>::WrongGameId
-            );
-            assert_noop!(
-                ArcadeOuro::submit_result(
-                    RuntimeOrigin::signed(9),
-                    ouro_summary(run_id, OURO_GAME_ID, 17)
+            assert!(ActiveRunByPlayerGame::<Test>::get(NOVA_RAIL_GAME_ID, 42).is_some());
+            assert_eq!(
+                TestEconomyProvider::credit_balance(
+                    &42,
+                    ARCADE_CORE_GAME_ID,
+                    ARCADE_PLAY_CREDIT_TYPE
                 ),
-                Error::<Test>::RoomsOutOfBounds
+                25
             );
         });
     }
 
     #[test]
-    fn wrapper_delegates_valid_result_to_core_leaderboard() {
+    fn paid_continue_consumes_twenty_five_and_preserves_ranked_result() {
         new_test_ext().execute_with(|| {
-            configure_ouro();
-            authorize(9);
-            grant_credit(42, 1);
+            configure_game(NOVA_RAIL_GAME_ID);
+            authorize(9, NOVA_RAIL_GAME_ID);
+            grant_credit(42, 50);
             let run_id = ArcadeCore::start_run_for_game(
                 &42,
-                OURO_GAME_ID,
+                NOVA_RAIL_GAME_ID,
                 1,
                 client_run_id("client-1"),
                 H256::repeat_byte(1),
             )
             .expect("run starts");
 
-            assert_ok!(ArcadeOuro::submit_result(
+            assert_ok!(ArcadeNovaRail::pay_continue(
+                RuntimeOrigin::signed(42),
+                run_id
+            ));
+            let mut summary = nova_summary(run_id, NOVA_RAIL_GAME_ID, 9_000);
+            summary.common.continues_used = 1;
+            assert_ok!(ArcadeNovaRail::submit_result(
                 RuntimeOrigin::signed(9),
-                ouro_summary(run_id, OURO_GAME_ID, 3)
+                summary
             ));
             assert_eq!(
-                PlayerBest::<Test>::get((OURO_GAME_ID, 1, 0, 42))
+                PlayerBest::<Test>::get((NOVA_RAIL_GAME_ID, 1, 1, 42))
                     .expect("best")
                     .score,
-                900
+                9_000
             );
-            assert_eq!(Leaderboards::<Test>::get((OURO_GAME_ID, 1, 0)).len(), 1);
+            assert_eq!(
+                Leaderboards::<Test>::get((NOVA_RAIL_GAME_ID, 1, 1))[0].player,
+                42
+            );
+            assert!(Leaderboards::<Test>::get((NOVA_RAIL_GAME_ID, 1, 0)).is_empty());
+        });
+    }
+
+    #[test]
+    fn unpaid_continue_cannot_enter_ranked_leaderboard() {
+        new_test_ext().execute_with(|| {
+            configure_game(NOVA_RAIL_GAME_ID);
+            authorize(9, NOVA_RAIL_GAME_ID);
+            grant_credit(42, 25);
+            let run_id = ArcadeCore::start_run_for_game(
+                &42,
+                NOVA_RAIL_GAME_ID,
+                1,
+                client_run_id("client-1"),
+                H256::repeat_byte(1),
+            )
+            .expect("run starts");
+
+            let mut summary = nova_summary(run_id, NOVA_RAIL_GAME_ID, 9_000);
+            summary.common.continues_used = 1;
+            assert_noop!(
+                ArcadeNovaRail::submit_result(RuntimeOrigin::signed(9), summary),
+                pallet_eterra_arcade_core::Error::<Test>::RankedRunUsedUnpaidContinue
+            );
+            assert!(Leaderboards::<Test>::get((NOVA_RAIL_GAME_ID, 1, 1)).is_empty());
+        });
+    }
+
+    #[test]
+    fn nova_rail_leaderboard_does_not_collide_with_other_game_ids() {
+        new_test_ext().execute_with(|| {
+            configure_game(NOVA_RAIL_GAME_ID);
+            configure_game(1001);
+            authorize(9, NOVA_RAIL_GAME_ID);
+            authorize(9, 1001);
+            grant_credit(42, 50);
+            grant_credit(77, 50);
+
+            let nova_run = ArcadeCore::start_run_for_game(
+                &42,
+                NOVA_RAIL_GAME_ID,
+                1,
+                client_run_id("nova-client"),
+                H256::repeat_byte(1),
+            )
+            .expect("nova run starts");
+            let ouro_run = ArcadeCore::start_run_for_game(
+                &77,
+                1001,
+                1,
+                client_run_id("ouro-client"),
+                H256::repeat_byte(2),
+            )
+            .expect("ouro run starts");
+
+            assert_ok!(ArcadeNovaRail::submit_result(
+                RuntimeOrigin::signed(9),
+                nova_summary(nova_run, NOVA_RAIL_GAME_ID, 9_000)
+            ));
+            let mut ouro_result = common_result(ouro_run, 1001, 1_000);
+            ouro_result.result_id = result_id("ouro-result-1");
+            assert_ok!(ArcadeCore::submit_result_for_authority(&9, ouro_result));
+
+            assert_eq!(Leaderboards::<Test>::get((NOVA_RAIL_GAME_ID, 1, 0)).len(), 1);
+            assert_eq!(Leaderboards::<Test>::get((1001, 1, 0)).len(), 1);
+            assert_eq!(
+                Leaderboards::<Test>::get((NOVA_RAIL_GAME_ID, 1, 0))[0].player,
+                42
+            );
+            assert_eq!(Leaderboards::<Test>::get((1001, 1, 0))[0].player, 77);
         });
     }
 }

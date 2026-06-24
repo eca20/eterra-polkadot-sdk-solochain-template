@@ -29,6 +29,7 @@ pub use pallet_cryptostrike;
 pub use pallet_eterra;
 pub use pallet_eterra_arcade_aegis_run;
 pub use pallet_eterra_arcade_core;
+pub use pallet_eterra_arcade_nova_rail;
 pub use pallet_eterra_arcade_ouro;
 pub use pallet_eterra_authority;
 pub use pallet_eterra_card_escrow;
@@ -96,7 +97,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     //   `spec_version`, and `authoring_version` are the same between Wasm and native.
     // This value is set to 100 to notify Polkadot-JS App (https://polkadot.js.org/apps) to use
     //   the compatible custom types.
-    spec_version: 101,
+    spec_version: 103,
     impl_version: 1,
     apis: apis::RUNTIME_API_VERSIONS,
     transaction_version: 1,
@@ -326,6 +327,9 @@ mod runtime {
     pub type EterraArcadeAegisRun = pallet_eterra_arcade_aegis_run;
 
     #[runtime::pallet_index(33)]
+    pub type EterraArcadeNovaRail = pallet_eterra_arcade_nova_rail;
+
+    #[runtime::pallet_index(34)]
     pub type CryptoStrike = pallet_cryptostrike;
 }
 

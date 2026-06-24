@@ -83,9 +83,17 @@ pub mod pallet {
         #[pallet::constant]
         type MaxTagLen: Get<u32>;
 
+        /// Maximum bytes for arcade initials.
+        #[pallet::constant]
+        type MaxInitialsLen: Get<u32>;
+
         /// Maximum bytes for avatar CID (e.g., 96 or 128). CIDs are ASCII bytes.
         #[pallet::constant]
         type MaxAvatarCidLen: Get<u32>;
+
+        /// Maximum bytes for an ISO 3166-1 alpha-2 country code.
+        #[pallet::constant]
+        type MaxRegionCodeLen: Get<u32>;
 
         /// Maximum bytes for Steam link authority signatures.
         #[pallet::constant]
@@ -105,6 +113,17 @@ pub mod pallet {
         StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<u8, T::MaxTagLen>, OptionQuery>;
 
     #[pallet::storage]
+    #[pallet::getter(fn arcade_initials)]
+    /// Stored as arcade-safe bytes. First set is free; later changes cost a fee.
+    pub type ArcadeInitials<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedVec<u8, T::MaxInitialsLen>,
+        OptionQuery,
+    >;
+
+    #[pallet::storage]
     #[pallet::getter(fn avatar_cid)]
     /// Stored as **ASCII** bytes representing a CID (IPFS / multibase). First set free; changes cost a fee.
     pub type AvatarCid<T: Config> = StorageMap<
@@ -112,6 +131,17 @@ pub mod pallet {
         Blake2_128Concat,
         T::AccountId,
         BoundedVec<u8, T::MaxAvatarCidLen>,
+        OptionQuery,
+    >;
+
+    #[pallet::storage]
+    #[pallet::getter(fn region_code)]
+    /// Optional ISO 3166-1 alpha-2 region code stored as uppercase ASCII bytes.
+    pub type RegionCode<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        BoundedVec<u8, T::MaxRegionCodeLen>,
         OptionQuery,
     >;
 
@@ -157,10 +187,19 @@ pub mod pallet {
             tag: Vec<u8>,
             charged: bool,
         },
+        InitialsSet {
+            who: T::AccountId,
+            initials: Vec<u8>,
+            charged: bool,
+        },
         AvatarSet {
             who: T::AccountId,
             cid: Vec<u8>,
             charged: bool,
+        },
+        RegionSet {
+            who: T::AccountId,
+            country_code: Option<Vec<u8>>,
         },
         ExperienceGranted {
             to: T::AccountId,
@@ -196,6 +235,7 @@ pub mod pallet {
         TagTooLong,
         AvatarCidTooLong,
         AvatarCidInvalidAscii,
+        InvalidRegionCode,
         AlreadyMaxLevel,
         NotEnoughExperience,
         InsufficientBalanceForChange,
@@ -210,9 +250,11 @@ pub mod pallet {
         SteamHashNotLinked,
         PlayerProfileNotFound,
         PlayerFrozen,
+        InitialsTooShort,
+        InvalidInitials,
     }
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(4);
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -307,6 +349,21 @@ pub mod pallet {
                 ensure!(!profile.frozen, Error::<T>::PlayerFrozen);
             }
             Ok(())
+        }
+
+        fn validate_region_code(region: &[u8]) -> bool {
+            region.len() == 2 && region.iter().all(|byte| byte.is_ascii_uppercase())
+        }
+
+        fn validate_arcade_initials(initials: &[u8]) -> bool {
+            !initials.is_empty()
+                && initials.len() <= T::MaxInitialsLen::get() as usize
+                && initials.iter().any(|byte| *byte != b' ')
+                && initials.iter().all(|byte| {
+                    byte.is_ascii_uppercase()
+                        || byte.is_ascii_digit()
+                        || matches!(*byte, b' ' | b'.' | b'_' | b'-')
+                })
         }
 
         fn steam_link_payload(
@@ -549,6 +606,67 @@ pub mod pallet {
                 Ok(())
             })?;
             Self::deposit_event(Event::PlayerUnfrozen { account });
+            Ok(())
+        }
+
+        #[pallet::call_index(9)]
+        #[pallet::weight(T::WeightInfo::set_region())]
+        pub fn set_region(
+            origin: OriginFor<T>,
+            country_code: Option<BoundedVec<u8, T::MaxRegionCodeLen>>,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_profile_access(&who)?;
+
+            match country_code {
+                Some(country_code) => {
+                    ensure!(
+                        Self::validate_region_code(&country_code),
+                        Error::<T>::InvalidRegionCode
+                    );
+                    let raw = country_code.to_vec();
+                    RegionCode::<T>::insert(&who, country_code);
+                    Self::deposit_event(Event::RegionSet {
+                        who,
+                        country_code: Some(raw),
+                    });
+                }
+                None => {
+                    RegionCode::<T>::remove(&who);
+                    Self::deposit_event(Event::RegionSet {
+                        who,
+                        country_code: None,
+                    });
+                }
+            }
+            Ok(())
+        }
+
+        /// Set (or change) arcade cabinet initials. First set is free; changes cost a fee.
+        #[pallet::call_index(10)]
+        #[pallet::weight(T::WeightInfo::set_arcade_initials())]
+        pub fn set_arcade_initials(
+            origin: OriginFor<T>,
+            initials: BoundedVec<u8, T::MaxInitialsLen>,
+        ) -> DispatchResult {
+            let who = ensure_signed(origin)?;
+            Self::ensure_profile_access(&who)?;
+            ensure!(!initials.is_empty(), Error::<T>::InitialsTooShort);
+            ensure!(
+                Self::validate_arcade_initials(&initials),
+                Error::<T>::InvalidInitials
+            );
+            let initials_raw = initials.to_vec();
+
+            let already = <ArcadeInitials<T>>::contains_key(&who);
+            let charged = Self::charge_change_fee_if_needed(&who, already)?;
+
+            <ArcadeInitials<T>>::insert(&who, initials);
+            Self::deposit_event(Event::InitialsSet {
+                who,
+                initials: initials_raw,
+                charged,
+            });
             Ok(())
         }
     }

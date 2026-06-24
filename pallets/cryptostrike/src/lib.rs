@@ -115,6 +115,26 @@ pub struct WeaponSpendEntry<AccountId, Balance> {
 }
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+pub struct RoundCombatStatsEntry {
+    pub steam_hash: SteamHash,
+    pub kills: u32,
+    pub deaths: u32,
+    pub headshots: u32,
+    pub shots_fired: u32,
+    pub shots_hit: u32,
+    pub rounds_played: u32,
+}
+
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+pub struct RoundRivalStatsEntry {
+    pub attacker_steam_hash: SteamHash,
+    pub victim_steam_hash: SteamHash,
+    pub hits: u32,
+    pub damage: u64,
+    pub kills: u32,
+}
+
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
 pub struct PlayerSeasonStats<Balance> {
     pub kills: u32,
     pub deaths: u32,
@@ -128,6 +148,46 @@ pub struct PlayerSeasonStats<Balance> {
     pub guap_transferred_in: Balance,
     pub guap_transferred_out: Balance,
     pub season_points: u64,
+}
+
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+pub struct PlayerSeasonRankStats {
+    pub kills: u32,
+    pub deaths: u32,
+    pub headshots: u32,
+    pub shots_fired: u32,
+    pub shots_hit: u32,
+    pub rounds_played: u32,
+}
+
+impl Default for PlayerSeasonRankStats {
+    fn default() -> Self {
+        Self {
+            kills: 0,
+            deaths: 0,
+            headshots: 0,
+            shots_fired: 0,
+            shots_hit: 0,
+            rounds_played: 0,
+        }
+    }
+}
+
+#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+pub struct PlayerSeasonRivalStats {
+    pub hits: u32,
+    pub damage: u64,
+    pub kills: u32,
+}
+
+impl Default for PlayerSeasonRivalStats {
+    fn default() -> Self {
+        Self {
+            hits: 0,
+            damage: 0,
+            kills: 0,
+        }
+    }
 }
 
 impl<Balance: Default> Default for PlayerSeasonStats<Balance> {
@@ -218,6 +278,8 @@ pub mod pallet {
             BoundedVec<WeaponSpendEntry<T::AccountId, BalanceOf<T>>, T::MaxSettlementEntries>,
         pub guap_transfer_entries:
             BoundedVec<TransferEntry<T::AccountId, BalanceOf<T>>, T::MaxSettlementEntries>,
+        pub combat_stats_entries: BoundedVec<RoundCombatStatsEntry, T::MaxCombatStatEntries>,
+        pub rival_stats_entries: BoundedVec<RoundRivalStatsEntry, T::MaxRivalStatEntries>,
         pub config_hash: ConfigHash,
         pub server_signature: BoundedVec<u8, T::MaxServerSignatureLen>,
     }
@@ -239,6 +301,12 @@ pub mod pallet {
 
         #[pallet::constant]
         type MaxSettlementEntries: Get<u32>;
+
+        #[pallet::constant]
+        type MaxCombatStatEntries: Get<u32>;
+
+        #[pallet::constant]
+        type MaxRivalStatEntries: Get<u32>;
 
         #[pallet::constant]
         type MaxServerSignatureLen: Get<u32>;
@@ -263,11 +331,24 @@ pub mod pallet {
         type WeightInfo: WeightInfo;
     }
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
     pub struct Pallet<T>(_);
+
+    #[pallet::hooks]
+    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        fn on_runtime_upgrade() -> frame_support::weights::Weight {
+            let on_chain = StorageVersion::get::<Pallet<T>>();
+            if on_chain < STORAGE_VERSION {
+                STORAGE_VERSION.put::<Pallet<T>>();
+                T::DbWeight::get().reads_writes(1, 1)
+            } else {
+                T::DbWeight::get().reads(1)
+            }
+        }
+    }
 
     #[pallet::storage]
     pub type PendingGuapClaims<T: Config> =
@@ -359,6 +440,29 @@ pub mod pallet {
         Blake2_128Concat,
         T::AccountId,
         PlayerSeasonStatsOf<T>,
+        OptionQuery,
+    >;
+
+    #[pallet::storage]
+    pub type SeasonRankStats<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        SeasonId,
+        Blake2_128Concat,
+        SteamHash,
+        PlayerSeasonRankStats,
+        OptionQuery,
+    >;
+
+    #[pallet::storage]
+    pub type SeasonRivalStats<T: Config> = StorageNMap<
+        _,
+        (
+            NMapKey<Blake2_128Concat, SeasonId>,
+            NMapKey<Blake2_128Concat, SteamHash>,
+            NMapKey<Blake2_128Concat, SteamHash>,
+        ),
+        PlayerSeasonRivalStats,
         OptionQuery,
     >;
 
@@ -457,6 +561,15 @@ pub mod pallet {
         SeasonStatsUpdated {
             season_id: SeasonId,
             account: T::AccountId,
+        },
+        SeasonRankStatsUpdated {
+            season_id: SeasonId,
+            steam_hash: SteamHash,
+        },
+        SeasonRivalStatsUpdated {
+            season_id: SeasonId,
+            attacker_steam_hash: SteamHash,
+            victim_steam_hash: SteamHash,
         },
     }
 
@@ -836,6 +949,37 @@ pub mod pallet {
                 );
             }
 
+            for stats in settlement.combat_stats_entries.iter() {
+                Self::ensure_steam_hash_active(
+                    settlement.server_id,
+                    settlement.session_id,
+                    stats.steam_hash,
+                    None,
+                    now,
+                )?;
+            }
+
+            for rival in settlement.rival_stats_entries.iter() {
+                ensure!(
+                    rival.attacker_steam_hash != rival.victim_steam_hash,
+                    Error::<T>::SettlementParticipantNotActive
+                );
+                Self::ensure_steam_hash_active(
+                    settlement.server_id,
+                    settlement.session_id,
+                    rival.attacker_steam_hash,
+                    None,
+                    now,
+                )?;
+                Self::ensure_steam_hash_active(
+                    settlement.server_id,
+                    settlement.session_id,
+                    rival.victim_steam_hash,
+                    None,
+                    now,
+                )?;
+            }
+
             for spend in settlement.weapon_spend_entries.iter() {
                 Self::ensure_allowance_available(
                     &spend.account,
@@ -868,6 +1012,7 @@ pub mod pallet {
             }
 
             Self::apply_season_stats(&settlement);
+            Self::apply_season_rank_stats(&settlement);
 
             SettledRounds::<T>::insert(
                 (
@@ -1115,6 +1260,8 @@ pub mod pallet {
                 &settlement.reward_entries,
                 &settlement.weapon_spend_entries,
                 &settlement.guap_transfer_entries,
+                &settlement.combat_stats_entries,
+                &settlement.rival_stats_entries,
                 settlement.config_hash,
             ))
         }
@@ -1362,6 +1509,61 @@ pub mod pallet {
                             stats.guap_transferred_in.saturating_add(transfer.amount);
                     });
                 }
+            }
+        }
+
+        fn apply_season_rank_stats(settlement: &RoundSettlement<T>) {
+            let Some(season_id) = CurrentSeason::<T>::get() else {
+                return;
+            };
+
+            for entry in settlement.combat_stats_entries.iter() {
+                if entry.kills == 0
+                    && entry.deaths == 0
+                    && entry.headshots == 0
+                    && entry.shots_fired == 0
+                    && entry.shots_hit == 0
+                    && entry.rounds_played == 0
+                {
+                    continue;
+                }
+                SeasonRankStats::<T>::mutate(season_id, entry.steam_hash, |maybe_stats| {
+                    let stats = maybe_stats.get_or_insert_with(PlayerSeasonRankStats::default);
+                    stats.kills = stats.kills.saturating_add(entry.kills);
+                    stats.deaths = stats.deaths.saturating_add(entry.deaths);
+                    stats.headshots = stats.headshots.saturating_add(entry.headshots);
+                    stats.shots_fired = stats.shots_fired.saturating_add(entry.shots_fired);
+                    stats.shots_hit = stats.shots_hit.saturating_add(entry.shots_hit);
+                    stats.rounds_played = stats.rounds_played.saturating_add(entry.rounds_played);
+                });
+                Self::deposit_event(Event::SeasonRankStatsUpdated {
+                    season_id,
+                    steam_hash: entry.steam_hash,
+                });
+            }
+
+            for entry in settlement.rival_stats_entries.iter() {
+                if entry.hits == 0 && entry.damage == 0 && entry.kills == 0 {
+                    continue;
+                }
+                SeasonRivalStats::<T>::mutate(
+                    (
+                        season_id,
+                        entry.attacker_steam_hash,
+                        entry.victim_steam_hash,
+                    ),
+                    |maybe_stats| {
+                        let stats = maybe_stats.get_or_insert_with(PlayerSeasonRivalStats::default);
+                        stats.hits = stats.hits.saturating_add(entry.hits);
+                        stats.damage = stats.damage.saturating_add(entry.damage);
+                        stats.kills = stats.kills.saturating_add(entry.kills);
+                    },
+                );
+                Self::deposit_event(Event::SeasonRivalStatsUpdated {
+                    season_id,
+                    attacker_steam_hash: entry.attacker_steam_hash,
+                    victim_steam_hash: entry.victim_steam_hash,
+                });
             }
         }
 

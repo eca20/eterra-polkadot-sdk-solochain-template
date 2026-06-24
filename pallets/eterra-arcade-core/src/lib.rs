@@ -160,6 +160,7 @@ pub mod pallet {
         pub started_at: BlockNumberFor<T>,
         pub expires_at: BlockNumberFor<T>,
         pub status: RunStatus,
+        pub paid_continues_used: u32,
     }
 
     #[derive(
@@ -235,7 +236,7 @@ pub mod pallet {
         type MaxLeaderboardEntries: Get<u32>;
     }
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -287,6 +288,7 @@ pub mod pallet {
         (
             NMapKey<Blake2_128Concat, GameId>,
             NMapKey<Blake2_128Concat, RulesetVersion>,
+            NMapKey<Blake2_128Concat, u32>,
             NMapKey<Blake2_128Concat, T::AccountId>,
         ),
         LeaderboardEntry<T>,
@@ -299,6 +301,7 @@ pub mod pallet {
         (
             NMapKey<Blake2_128Concat, GameId>,
             NMapKey<Blake2_128Concat, RulesetVersion>,
+            NMapKey<Blake2_128Concat, u32>,
         ),
         BoundedVec<LeaderboardEntry<T>, T::MaxLeaderboardEntries>,
         ValueQuery,
@@ -335,15 +338,23 @@ pub mod pallet {
             score: u64,
             ranked: bool,
         },
+        RunContinuePaid {
+            run_id: RunId,
+            game_id: GameId,
+            player: T::AccountId,
+            paid_continues_used: u32,
+        },
         PlayerBestUpdated {
             game_id: GameId,
             ruleset_version: RulesetVersion,
+            paid_continues_used: u32,
             player: T::AccountId,
             score: u64,
         },
         LeaderboardUpdated {
             game_id: GameId,
             ruleset_version: RulesetVersion,
+            paid_continues_used: u32,
         },
     }
 
@@ -367,6 +378,7 @@ pub mod pallet {
         UnauthorizedAuthority,
         ScoreTooHigh,
         RankedRunUsedContinue,
+        RankedRunUsedUnpaidContinue,
         RankedRunHasUnrankedReason,
         RankedRunEndedWithUnrankedReason,
         UnrankedRunMissingReason,
@@ -467,6 +479,13 @@ pub mod pallet {
             );
             Self::expire_run_internal(run_id, run)
         }
+
+        #[pallet::call_index(4)]
+        #[pallet::weight(T::WeightInfo::pay_continue())]
+        pub fn pay_continue(origin: OriginFor<T>, run_id: RunId) -> DispatchResult {
+            let player = ensure_signed(origin)?;
+            Self::pay_continue_for_run(&player, run_id).map(|_| ())
+        }
     }
 
     impl<T: Config> Pallet<T> {
@@ -530,6 +549,7 @@ pub mod pallet {
                     started_at: now,
                     expires_at,
                     status: RunStatus::Active,
+                    paid_continues_used: 0,
                 },
             );
             ActiveRunByPlayerGame::<T>::insert(game_id, player.clone(), run_id);
@@ -541,6 +561,48 @@ pub mod pallet {
                 expires_at,
             });
             Ok(run_id)
+        }
+
+        #[transactional]
+        pub fn pay_continue_for_run(
+            player: &T::AccountId,
+            run_id: RunId,
+        ) -> Result<u32, DispatchError> {
+            let mut run = Runs::<T>::get(run_id).ok_or(Error::<T>::RunNotFound)?;
+            ensure!(run.player == *player, Error::<T>::NotRunOwner);
+            ensure!(run.status == RunStatus::Active, Error::<T>::RunNotActive);
+
+            let now = frame_system::Pallet::<T>::block_number();
+            if now >= run.expires_at {
+                Self::expire_run_internal(run_id, run)?;
+                return Err(Error::<T>::RunExpired.into());
+            }
+
+            let config = GameConfigs::<T>::get(run.game_id).ok_or(Error::<T>::GameNotConfigured)?;
+            ensure!(
+                config.ruleset_version == run.ruleset_version,
+                Error::<T>::RulesetVersionMismatch
+            );
+            T::EconomyProvider::consume_credit(
+                player,
+                config.credit_game_id,
+                config.credit_type,
+                config.credit_cost,
+            )?;
+
+            run.paid_continues_used = run
+                .paid_continues_used
+                .checked_add(1)
+                .ok_or(Error::<T>::ArithmeticOverflow)?;
+            let paid_continues_used = run.paid_continues_used;
+            Runs::<T>::insert(run_id, &run);
+            Self::deposit_event(Event::RunContinuePaid {
+                run_id,
+                game_id: run.game_id,
+                player: run.player,
+                paid_continues_used,
+            });
+            Ok(paid_continues_used)
         }
 
         #[transactional]
@@ -565,7 +627,6 @@ pub mod pallet {
                 Error::<T>::RulesetVersionMismatch
             );
             ensure!(result.score <= config.max_score, Error::<T>::ScoreTooHigh);
-            Self::ensure_ranked_consistency(&result)?;
             ensure!(
                 T::AuthorityProvider::can_submit(
                     authority,
@@ -583,6 +644,7 @@ pub mod pallet {
                 run.ruleset_version == result.ruleset_version,
                 Error::<T>::RulesetVersionMismatch
             );
+            Self::ensure_ranked_consistency(&result, &run)?;
 
             let now = frame_system::Pallet::<T>::block_number();
             if now >= run.expires_at {
@@ -632,11 +694,14 @@ pub mod pallet {
             (ARCADE_CORE_GAME_ID, ARCADE_PLAY_CREDIT_TYPE, 1)
         }
 
-        fn ensure_ranked_consistency(result: &RunResultInput<T>) -> DispatchResult {
+        fn ensure_ranked_consistency(
+            result: &RunResultInput<T>,
+            run: &RunRecord<T>,
+        ) -> DispatchResult {
             if result.ranked {
                 ensure!(
-                    result.continues_used == 0,
-                    Error::<T>::RankedRunUsedContinue
+                    result.continues_used <= run.paid_continues_used,
+                    Error::<T>::RankedRunUsedUnpaidContinue
                 );
                 ensure!(
                     result.unranked_reason == UnrankedReason::None,
@@ -672,7 +737,12 @@ pub mod pallet {
             record: &RunResultRecord<T>,
         ) -> DispatchResult {
             let current_best =
-                PlayerBest::<T>::get((record.game_id, record.ruleset_version, &record.player));
+                PlayerBest::<T>::get((
+                    record.game_id,
+                    record.ruleset_version,
+                    record.continues_used,
+                    &record.player,
+                ));
             let should_update = current_best
                 .as_ref()
                 .map(|best| {
@@ -695,6 +765,7 @@ pub mod pallet {
                 (
                     record.game_id,
                     record.ruleset_version,
+                    record.continues_used,
                     record.player.clone(),
                 ),
                 &entry,
@@ -702,12 +773,13 @@ pub mod pallet {
             Self::deposit_event(Event::PlayerBestUpdated {
                 game_id: record.game_id,
                 ruleset_version: record.ruleset_version,
+                paid_continues_used: record.continues_used,
                 player: record.player.clone(),
                 score: record.score,
             });
 
             Leaderboards::<T>::try_mutate(
-                (record.game_id, record.ruleset_version),
+                (record.game_id, record.ruleset_version, record.continues_used),
                 |entries| -> DispatchResult {
                     let mut raw: Vec<LeaderboardEntry<T>> = entries.clone().into_inner();
                     raw.retain(|existing| existing.player != record.player);
@@ -722,6 +794,7 @@ pub mod pallet {
             Self::deposit_event(Event::LeaderboardUpdated {
                 game_id: record.game_id,
                 ruleset_version: record.ruleset_version,
+                paid_continues_used: record.continues_used,
             });
             Ok(())
         }
@@ -1083,7 +1156,7 @@ mod tests {
                 Error::<Test>::ResultAlreadyProcessed
             );
             assert_eq!(
-                PlayerBest::<Test>::get((1001, 1, 42)).expect("best").score,
+                PlayerBest::<Test>::get((1001, 1, 0, 42)).expect("best").score,
                 500
             );
         });
@@ -1110,8 +1183,74 @@ mod tests {
             result.ended_reason = EndedReason::PracticeContinue;
 
             assert_ok!(ArcadeCore::submit_result_for_authority(&9, result));
-            assert!(PlayerBest::<Test>::get((1001, 1, 42)).is_none());
-            assert!(Leaderboards::<Test>::get((1001, 1)).is_empty());
+            assert!(PlayerBest::<Test>::get((1001, 1, 1, 42)).is_none());
+            assert!(Leaderboards::<Test>::get((1001, 1, 1)).is_empty());
+        });
+    }
+
+    #[test]
+    fn paid_continue_consumes_credit_and_allows_ranked_leaderboard() {
+        new_test_ext().execute_with(|| {
+            configure_game(1001);
+            authorize(9, 1001, 1);
+            grant_credit(42, 2);
+            let run_id = ArcadeCore::start_run_for_game(
+                &42,
+                1001,
+                1,
+                client_run_id("client-1"),
+                H256::repeat_byte(1),
+            )
+            .expect("run starts");
+
+            assert_ok!(ArcadeCore::pay_continue(RuntimeOrigin::signed(42), run_id));
+            assert_eq!(
+                Runs::<Test>::get(run_id).expect("run").paid_continues_used,
+                1
+            );
+            assert_eq!(
+                TestEconomyProvider::credit_balance(
+                    &42,
+                    ARCADE_CORE_GAME_ID,
+                    ARCADE_PLAY_CREDIT_TYPE
+                ),
+                0
+            );
+
+            let mut result = ranked_result(run_id, 1001, "result-1", 900);
+            result.continues_used = 1;
+            assert_ok!(ArcadeCore::submit_result_for_authority(&9, result));
+            assert_eq!(
+                PlayerBest::<Test>::get((1001, 1, 1, 42)).expect("best").score,
+                900
+            );
+            assert_eq!(Leaderboards::<Test>::get((1001, 1, 1)).len(), 1);
+            assert!(Leaderboards::<Test>::get((1001, 1, 0)).is_empty());
+        });
+    }
+
+    #[test]
+    fn ranked_continue_without_paid_continue_is_rejected() {
+        new_test_ext().execute_with(|| {
+            configure_game(1001);
+            authorize(9, 1001, 1);
+            grant_credit(42, 1);
+            let run_id = ArcadeCore::start_run_for_game(
+                &42,
+                1001,
+                1,
+                client_run_id("client-1"),
+                H256::repeat_byte(1),
+            )
+            .expect("run starts");
+
+            let mut result = ranked_result(run_id, 1001, "result-1", 900);
+            result.continues_used = 1;
+            assert_noop!(
+                ArcadeCore::submit_result_for_authority(&9, result),
+                Error::<Test>::RankedRunUsedUnpaidContinue
+            );
+            assert!(Leaderboards::<Test>::get((1001, 1, 1)).is_empty());
         });
     }
 
@@ -1143,7 +1282,7 @@ mod tests {
                 ));
             }
 
-            let board = Leaderboards::<Test>::get((1001, 1));
+            let board = Leaderboards::<Test>::get((1001, 1, 0));
             assert_eq!(board.len(), 3);
             assert_eq!(board[0].player, 11);
             assert_eq!(board[1].player, 13);
@@ -1165,7 +1304,7 @@ mod tests {
             )
             .expect("run starts");
             assert_ok!(ArcadeCore::abandon_run(RuntimeOrigin::signed(42), run_id));
-            assert!(PlayerBest::<Test>::get((1001, 1, 42)).is_none());
+            assert!(PlayerBest::<Test>::get((1001, 1, 0, 42)).is_none());
 
             let expiring_run = ArcadeCore::start_run_for_game(
                 &42,
