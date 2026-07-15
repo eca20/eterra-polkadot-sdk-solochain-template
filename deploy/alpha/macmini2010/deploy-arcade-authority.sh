@@ -6,18 +6,23 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
 authorize_after=0
+seed_config_after=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--authorize)
 			authorize_after=1
 			;;
+		--seed-config)
+			seed_config_after=1
+			;;
 		--help|-h)
 			cat <<'EOF'
-Usage: deploy-arcade-authority.sh [--authorize]
+Usage: deploy-arcade-authority.sh [--authorize] [--seed-config]
 
 Builds and deploys the self-hosted Nova Rail authority relay API and operator.
 Pass --authorize to run the one-shot operator after the service is deployed.
+Pass --seed-config to idempotently seed the Nova Rail ArcadeCore game config.
 EOF
 			exit 0
 			;;
@@ -39,6 +44,10 @@ if [[ ! -x "${DOTNET_BIN}" ]]; then
 fi
 [[ -n "${DOTNET_BIN}" && -x "${DOTNET_BIN}" ]] || die "dotnet CLI not found; set DOTNET_BIN"
 [[ -d "${AUTHORITY_REPO_DIR}" ]] || die "authority SDK repo not found: ${AUTHORITY_REPO_DIR}"
+
+require_release_source "${REPO_ROOT}" "alpha deploy tooling" "${ETERRA_EXPECTED_CHAIN_COMMIT}" >/dev/null
+AUTHORITY_SOURCE_COMMIT="$(require_release_source "$(cd -- "${AUTHORITY_REPO_DIR}/.." && pwd)" "SDKGen authority" "${ETERRA_EXPECTED_SDKGEN_COMMIT}")"
+export AUTHORITY_SOURCE_COMMIT
 
 if [[ "${AUTHORITY_SUBMITTER_MODE}" == "live_alpha" ]]; then
 	[[ -n "${AUTHORITY_RELAY_ACCOUNT}" ]] || die "AUTHORITY_RELAY_ACCOUNT or NOVA_RAIL_RELAY_ACCOUNT is required for live alpha authority"
@@ -70,6 +79,14 @@ log "publishing authority operator for ${AUTHORITY_RUNTIME_IDENTIFIER}"
 	-r "${AUTHORITY_RUNTIME_IDENTIFIER}" \
 	--self-contained "${AUTHORITY_PUBLISH_SELF_CONTAINED}" \
 	-o "${publish_operator_dir}"
+
+authority_artifact_hash="$(
+	find "${publish_api_dir}" "${publish_operator_dir}" -type f -print0 |
+		LC_ALL=C sort -z |
+		xargs -0 shasum -a 256 |
+		shasum -a 256 |
+		awk '{print $1}'
+)"
 
 if [[ "${AUTHORITY_SUBMITTER_MODE}" == "live_alpha" ]]; then
 	printf '%s\n' "$(read_secret_value "${AUTHORITY_RELAY_MNEMONIC}")" >"${bundle_dir}/secrets/nova-rail-relay.mnemonic"
@@ -130,11 +147,19 @@ systemctl enable "${AUTHORITY_SERVICE_NAME}.service"
 systemctl restart "${AUTHORITY_SERVICE_NAME}.service"
 systemctl is-active --quiet "${AUTHORITY_SERVICE_NAME}.service"
 systemctl --no-pager --full status "${AUTHORITY_SERVICE_NAME}.service" || true
+printf '%s\n' "${ETERRA_RELEASE_VERSION}" >"${REMOTE_RELEASE_VERSION_FILE}"
+printf '%s\n' "${AUTHORITY_SOURCE_COMMIT}" >"${REMOTE_AUTHORITY_SOURCE_COMMIT_FILE}"
+printf '%s\n' "${authority_artifact_hash}" >"${REMOTE_AUTHORITY_ARTIFACT_HASH_FILE}"
+chown root:root "${REMOTE_RELEASE_VERSION_FILE}" "${REMOTE_AUTHORITY_SOURCE_COMMIT_FILE}" "${REMOTE_AUTHORITY_ARTIFACT_HASH_FILE}"
 rm -rf "${remote_tmp_dir}"
 EOF
 
-log "alpha arcade authority deploy complete"
+log "alpha arcade authority deploy complete release=${ETERRA_RELEASE_VERSION} source=${AUTHORITY_SOURCE_COMMIT} artifact_sha256=${authority_artifact_hash}"
 
 if [[ "${authorize_after}" -eq 1 ]]; then
 	"${SCRIPT_DIR}/authorize-arcade-authority.sh"
+fi
+
+if [[ "${seed_config_after}" -eq 1 ]]; then
+	"${SCRIPT_DIR}/seed-nova-rail-config.sh"
 fi

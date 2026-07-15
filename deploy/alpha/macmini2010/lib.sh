@@ -7,7 +7,7 @@ WORKSPACE_ROOT="$(cd -- "${REPO_ROOT}/.." && pwd)"
 ENV_FILE_DEFAULT="${REPO_ROOT}/deploy/alpha/macmini2010.env"
 ENV_FILE_EXAMPLE="${REPO_ROOT}/deploy/alpha/macmini2010.env.example"
 MEDIA_REPO_DIR_DEFAULT="${WORKSPACE_ROOT}/eterra-ipfs-media-service"
-AUTHORITY_REPO_DIR_DEFAULT="${WORKSPACE_ROOT}/SDKGen/EterraFPSDemo"
+AUTHORITY_REPO_DIR_DEFAULT="${WORKSPACE_ROOT}/SDKGen/Eterra"
 ARTIFACTS_DIR="${DEPLOY_LIB_DIR}/.artifacts"
 cleanup_paths=()
 
@@ -22,6 +22,37 @@ log() {
 
 require_cmd() {
 	command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+repo_source_commit() {
+	local root="$1"
+
+	git -C "${root}" rev-parse HEAD
+}
+
+require_release_source() {
+	local root="$1"
+	local label="$2"
+	local expected_commit="${3:-}"
+	local actual_commit
+
+	git -C "${root}" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "${label} source is not a git worktree: ${root}"
+	actual_commit="$(repo_source_commit "${root}")"
+
+	if [[ -n "$(git -C "${root}" status --porcelain --untracked-files=normal)" ]] &&
+		! is_truthy "${ALLOW_DIRTY_DEPLOY:-0}"; then
+		die "${label} source tree is dirty: ${root} (commit/stash changes or use ALLOW_DIRTY_DEPLOY=1 for an explicitly non-release development deploy)"
+	fi
+
+	if [[ -n "${expected_commit}" && "${actual_commit}" != "${expected_commit}" ]]; then
+		die "${label} source commit mismatch: expected ${expected_commit}, found ${actual_commit}"
+	fi
+
+	if [[ "${ETERRA_RELEASE_VERSION:-dev}" != "dev" && -z "${expected_commit}" ]]; then
+		die "${label} expected commit is required when ETERRA_RELEASE_VERSION is not dev"
+	fi
+
+	printf '%s\n' "${actual_commit}"
 }
 
 shell_escape() {
@@ -149,6 +180,11 @@ load_env() {
 	AUTHORITY_RELAY_DERIVATION_PASSWORD="${AUTHORITY_RELAY_DERIVATION_PASSWORD:-}"
 	AUTHORITY_FINALITY_TIMEOUT_SECONDS="${AUTHORITY_FINALITY_TIMEOUT_SECONDS:-90}"
 	AUTHORITY_SERVICE_NAME="${AUTHORITY_SERVICE_NAME:-eterra-arcade-authority}"
+	ETERRA_RELEASE_VERSION="${ETERRA_RELEASE_VERSION:-dev}"
+	ETERRA_EXPECTED_CHAIN_COMMIT="${ETERRA_EXPECTED_CHAIN_COMMIT:-}"
+	ETERRA_EXPECTED_MEDIA_COMMIT="${ETERRA_EXPECTED_MEDIA_COMMIT:-}"
+	ETERRA_EXPECTED_SDKGEN_COMMIT="${ETERRA_EXPECTED_SDKGEN_COMMIT:-}"
+	ALLOW_DIRTY_DEPLOY="${ALLOW_DIRTY_DEPLOY:-0}"
 	ETERRA_ALPHA_SUDO_MNEMONIC="${ETERRA_ALPHA_SUDO_MNEMONIC:-}"
 	ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD="${ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD:-}"
 	NOVA_RAIL_RELAY_AUTHORITY_ID="${NOVA_RAIL_RELAY_AUTHORITY_ID:-1}"
@@ -237,8 +273,14 @@ load_env() {
 	REMOTE_NODE_RUNTIME_HASH_FILE="${REMOTE_STATE_DIR}/node-runtime.sha256"
 	REMOTE_MEDIA_BUILD_HASH_FILE="${REMOTE_STATE_DIR}/media-build.sha256"
 	REMOTE_MEDIA_RUNTIME_HASH_FILE="${REMOTE_STATE_DIR}/media-runtime.sha256"
+	REMOTE_MEDIA_IMAGE_DIGEST_FILE="${REMOTE_STATE_DIR}/media-image-digest.txt"
 	REMOTE_AUTHORITY_BUILD_HASH_FILE="${REMOTE_STATE_DIR}/arcade-authority-build.sha256"
 	REMOTE_AUTHORITY_RUNTIME_HASH_FILE="${REMOTE_STATE_DIR}/arcade-authority-runtime.sha256"
+	REMOTE_AUTHORITY_ARTIFACT_HASH_FILE="${REMOTE_STATE_DIR}/arcade-authority-artifact.sha256"
+	REMOTE_RELEASE_VERSION_FILE="${REMOTE_STATE_DIR}/release-version.txt"
+	REMOTE_CHAIN_SOURCE_COMMIT_FILE="${REMOTE_STATE_DIR}/chain-source-commit.txt"
+	REMOTE_MEDIA_SOURCE_COMMIT_FILE="${REMOTE_STATE_DIR}/media-source-commit.txt"
+	REMOTE_AUTHORITY_SOURCE_COMMIT_FILE="${REMOTE_STATE_DIR}/authority-source-commit.txt"
 	REMOTE_NODE_SERVICE_UNIT_FILE="/etc/systemd/system/${REMOTE_NODE_SERVICE_NAME}.service"
 	REMOTE_AUTHORITY_SERVICE_UNIT_FILE="/etc/systemd/system/${AUTHORITY_SERVICE_NAME}.service"
 	REMOTE_SCRIPT_DIR="${REMOTE_SCRIPT_DIR:-/tmp/alpha-macmini2010-${DEPLOY_USER}}"
@@ -476,6 +518,8 @@ ensure_local_artifacts_dir() {
 write_node_env() {
 	local path="$1"
 	cat >"${path}" <<EOF
+ETERRA_RELEASE_VERSION=${ETERRA_RELEASE_VERSION}
+ETERRA_SOURCE_COMMIT=${CHAIN_SOURCE_COMMIT:-unknown}
 NODE_BIN=${REMOTE_NODE_BIN}
 RAW_SPEC=${REMOTE_NODE_SPEC}
 BASE_PATH=${REMOTE_NODE_DATA_DIR}
@@ -491,6 +535,8 @@ EOF
 write_media_env() {
 	local path="$1"
 	cat >"${path}" <<EOF
+ETERRA_RELEASE_VERSION=${ETERRA_RELEASE_VERSION}
+ETERRA_SOURCE_COMMIT=${MEDIA_SOURCE_COMMIT:-unknown}
 DOCKERIZED=1
 NODE_ENV=production
 KUBO_IMAGE=${KUBO_IMAGE}
@@ -521,6 +567,8 @@ EOF
 write_authority_env() {
 	local path="$1"
 	cat >"${path}" <<EOF
+ETERRA_RELEASE_VERSION=${ETERRA_RELEASE_VERSION}
+ETERRA_SOURCE_COMMIT=${AUTHORITY_SOURCE_COMMIT:-unknown}
 ASPNETCORE_URLS=http://${AUTHORITY_BIND_HOST}:${AUTHORITY_PORT}
 AUTHORITY_SUBMITTER_MODE=${AUTHORITY_SUBMITTER_MODE}
 ALPHA_RPC_URL=${AUTHORITY_RPC_URL}

@@ -1,4 +1,5 @@
 target/
+release-artifacts/
 chain-specs/generated/
 chain-specs/production-overrides.json
 chain-specs/production-keys.json

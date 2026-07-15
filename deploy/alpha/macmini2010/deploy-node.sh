@@ -35,6 +35,13 @@ require_cmd rsync
 require_cmd shasum
 require_cmd ssh
 
+CHAIN_SOURCE_COMMIT="$(require_release_source "${REPO_ROOT}" "alpha chain" "${ETERRA_EXPECTED_CHAIN_COMMIT}")"
+export CHAIN_SOURCE_COMMIT
+
+if [[ "${ETERRA_RELEASE_VERSION}" != "dev" && "${purge_state}" -eq 1 ]]; then
+	die "release deploys must preserve live state; --purge-state is forbidden"
+fi
+
 bundle_dir="$(make_temp_dir)"
 remote_tmp_dir="${DEPLOY_ROOT}/tmp/node-deploy"
 render_runtime_env_bundle "${bundle_dir}"
@@ -185,13 +192,16 @@ fi
 systemctl is-active --quiet "${REMOTE_NODE_SERVICE_NAME}.service"
 printf '%s\n' "${node_code_hash}" >"${REMOTE_NODE_CODE_HASH_FILE}"
 printf '%s\n' "${node_runtime_hash}" >"${REMOTE_NODE_RUNTIME_HASH_FILE}"
+printf '%s\n' "${ETERRA_RELEASE_VERSION}" >"${REMOTE_RELEASE_VERSION_FILE}"
+printf '%s\n' "${CHAIN_SOURCE_COMMIT}" >"${REMOTE_CHAIN_SOURCE_COMMIT_FILE}"
 if [[ "${node_spec_needed}" -eq 1 ]]; then
 	printf '%s\n' "${node_spec_hash}" >"${REMOTE_NODE_SPEC_HASH_FILE}"
 	chown root:root "${REMOTE_NODE_SPEC_HASH_FILE}"
 fi
-chown root:root "${REMOTE_NODE_CODE_HASH_FILE}" "${REMOTE_NODE_RUNTIME_HASH_FILE}"
+chown root:root "${REMOTE_NODE_CODE_HASH_FILE}" "${REMOTE_NODE_RUNTIME_HASH_FILE}" \
+	"${REMOTE_RELEASE_VERSION_FILE}" "${REMOTE_CHAIN_SOURCE_COMMIT_FILE}"
 systemctl --no-pager --full status "${REMOTE_NODE_SERVICE_NAME}.service" || true
 rm -rf "${remote_tmp_dir}"
 EOF
 
-log "alpha node deploy complete"
+log "alpha node deploy complete release=${ETERRA_RELEASE_VERSION} source=${CHAIN_SOURCE_COMMIT} code_sha256=${node_code_hash} spec_sha256=${node_spec_hash} runtime_env_sha256=${node_runtime_hash}"

@@ -36,6 +36,14 @@ require_cmd rsync
 require_cmd shasum
 require_cmd ssh
 
+require_release_source "${REPO_ROOT}" "alpha deploy tooling" "${ETERRA_EXPECTED_CHAIN_COMMIT}" >/dev/null
+MEDIA_SOURCE_COMMIT="$(require_release_source "${MEDIA_REPO_DIR}" "media service" "${ETERRA_EXPECTED_MEDIA_COMMIT}")"
+export MEDIA_SOURCE_COMMIT
+
+if [[ "${ETERRA_RELEASE_VERSION}" != "dev" && "${fresh}" == "true" ]]; then
+	die "release deploys must preserve media/IPFS state; --fresh is forbidden"
+fi
+
 bundle_dir="$(make_temp_dir)"
 render_runtime_env_bundle "${bundle_dir}"
 media_build_hash="$(compute_media_build_hash)"
@@ -107,9 +115,18 @@ case "\${media_action}" in
 esac
 
 ${REMOTE_DOCKER_COMPOSE_CMD} ps
+media_container_id="\$(${REMOTE_DOCKER_COMPOSE_CMD} ps -q media-service)"
+[[ -n "\${media_container_id}" ]] || { echo "media-service container id unavailable" >&2; exit 1; }
+media_image_digest="\$(docker inspect --format '{{.Image}}' "\${media_container_id}")"
+[[ "\${media_image_digest}" == sha256:* ]] || { echo "media-service image digest unavailable" >&2; exit 1; }
 printf '%s\n' "${media_build_hash}" >"${REMOTE_MEDIA_BUILD_HASH_FILE}"
 printf '%s\n' "${media_runtime_hash}" >"${REMOTE_MEDIA_RUNTIME_HASH_FILE}"
-chown root:root "${REMOTE_MEDIA_BUILD_HASH_FILE}" "${REMOTE_MEDIA_RUNTIME_HASH_FILE}"
+printf '%s\n' "\${media_image_digest}" >"${REMOTE_MEDIA_IMAGE_DIGEST_FILE}"
+printf '%s\n' "${ETERRA_RELEASE_VERSION}" >"${REMOTE_RELEASE_VERSION_FILE}"
+printf '%s\n' "${MEDIA_SOURCE_COMMIT}" >"${REMOTE_MEDIA_SOURCE_COMMIT_FILE}"
+chown root:root "${REMOTE_MEDIA_BUILD_HASH_FILE}" "${REMOTE_MEDIA_RUNTIME_HASH_FILE}" "${REMOTE_MEDIA_IMAGE_DIGEST_FILE}" \
+	"${REMOTE_RELEASE_VERSION_FILE}" "${REMOTE_MEDIA_SOURCE_COMMIT_FILE}"
 EOF
 
-log "alpha media deploy complete"
+remote_media_image_digest="$(ssh_to_remote "cat $(shell_escape "${REMOTE_MEDIA_IMAGE_DIGEST_FILE}")")"
+log "alpha media deploy complete release=${ETERRA_RELEASE_VERSION} source=${MEDIA_SOURCE_COMMIT} build_sha256=${media_build_hash} runtime_env_sha256=${media_runtime_hash} image_digest=${remote_media_image_digest}"
