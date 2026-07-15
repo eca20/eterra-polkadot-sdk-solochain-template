@@ -150,7 +150,7 @@ pub struct PlayerSeasonStats<Balance> {
     pub season_points: u64,
 }
 
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+#[derive(Encode, Decode, Clone, Default, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
 pub struct PlayerSeasonRankStats {
     pub kills: u32,
     pub deaths: u32,
@@ -160,34 +160,11 @@ pub struct PlayerSeasonRankStats {
     pub rounds_played: u32,
 }
 
-impl Default for PlayerSeasonRankStats {
-    fn default() -> Self {
-        Self {
-            kills: 0,
-            deaths: 0,
-            headshots: 0,
-            shots_fired: 0,
-            shots_hit: 0,
-            rounds_played: 0,
-        }
-    }
-}
-
-#[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+#[derive(Encode, Decode, Clone, Default, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
 pub struct PlayerSeasonRivalStats {
     pub hits: u32,
     pub damage: u64,
     pub kills: u32,
-}
-
-impl Default for PlayerSeasonRivalStats {
-    fn default() -> Self {
-        Self {
-            hits: 0,
-            damage: 0,
-            kills: 0,
-        }
-    }
 }
 
 impl<Balance: Default> Default for PlayerSeasonStats<Balance> {
@@ -1148,6 +1125,7 @@ pub mod pallet {
 
         #[pallet::call_index(18)]
         #[pallet::weight(T::WeightInfo::upsert_active_player())]
+        #[allow(clippy::too_many_arguments)]
         pub fn upsert_active_player(
             origin: OriginFor<T>,
             server_id: ServerId,

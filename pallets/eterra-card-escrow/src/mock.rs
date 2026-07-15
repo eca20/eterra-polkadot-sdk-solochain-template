@@ -32,8 +32,8 @@ pub struct GameRecord {
 }
 
 thread_local! {
-    static CARDS: RefCell<BTreeMap<u32, CardRecord>> = RefCell::new(BTreeMap::new());
-    static GAMES: RefCell<BTreeMap<GameId, GameRecord>> = RefCell::new(BTreeMap::new());
+    static CARDS: RefCell<BTreeMap<u32, CardRecord>> = const { RefCell::new(BTreeMap::new()) };
+    static GAMES: RefCell<BTreeMap<GameId, GameRecord>> = const { RefCell::new(BTreeMap::new()) };
 }
 
 pub fn reset_fixtures() {

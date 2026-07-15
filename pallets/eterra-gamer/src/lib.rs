@@ -62,7 +62,8 @@ pub mod pallet {
         /// Runtime currency (native token).
         type Currency: Currency<Self::AccountId>;
 
-        /// Canonical Alpha access gate for player-facing calls.
+        /// Canonical Alpha access gate for profile/game-adjacent calls that still require alpha gating.
+        /// Arcade initials are public signed identity metadata and intentionally do not use this gate.
         type AccessControl: AccessControl<Self::AccountId>;
 
         /// Origin allowed to mint/grant XP (e.g., Root or a custom EnsureOrigin).
@@ -650,7 +651,7 @@ pub mod pallet {
             initials: BoundedVec<u8, T::MaxInitialsLen>,
         ) -> DispatchResult {
             let who = ensure_signed(origin)?;
-            Self::ensure_profile_access(&who)?;
+            Self::ensure_account_not_frozen(&who)?;
             ensure!(!initials.is_empty(), Error::<T>::InitialsTooShort);
             ensure!(
                 Self::validate_arcade_initials(&initials),

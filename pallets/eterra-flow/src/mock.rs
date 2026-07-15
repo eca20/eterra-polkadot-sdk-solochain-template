@@ -2,7 +2,7 @@ use crate as pallet_eterra_flow;
 
 use frame_support::{
     construct_runtime, parameter_types,
-    traits::{ConstU32, Everything},
+    traits::{ConstU32, ConstU64, Everything},
 };
 use frame_system as system;
 use sp_core::H256;
@@ -218,6 +218,9 @@ impl pallet_eterra_economy::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type WeightInfo = ();
     type AdminOrigin = frame_system::EnsureRoot<AccountId>;
+    type ArcadeCreditFaucetGameId = ConstU64<1000>;
+    type ArcadeCreditFaucetType = ConstU32<1>;
+    type ArcadeCreditFaucetAmount = ConstU64<1000>;
 }
 
 impl pallet_eterra_profile::Config for Test {

@@ -203,8 +203,8 @@ mod tests {
     }
 
     thread_local! {
-        static CREDITS: RefCell<BTreeMap<(AccountId, GameId, CreditTypeId), u64>> = RefCell::new(BTreeMap::new());
-        static AUTHORITIES: RefCell<BTreeSet<(AccountId, GameId, RulesetVersion, AuthorityEventTypeId)>> = RefCell::new(BTreeSet::new());
+        static CREDITS: RefCell<BTreeMap<(AccountId, GameId, CreditTypeId), u64>> = const { RefCell::new(BTreeMap::new()) };
+        static AUTHORITIES: RefCell<BTreeSet<(AccountId, GameId, RulesetVersion, AuthorityEventTypeId)>> = const { RefCell::new(BTreeSet::new()) };
     }
 
     pub struct TestEconomyProvider;
@@ -526,7 +526,10 @@ mod tests {
             ouro_result.result_id = result_id("ouro-result-1");
             assert_ok!(ArcadeCore::submit_result_for_authority(&9, ouro_result));
 
-            assert_eq!(Leaderboards::<Test>::get((NOVA_RAIL_GAME_ID, 1, 0)).len(), 1);
+            assert_eq!(
+                Leaderboards::<Test>::get((NOVA_RAIL_GAME_ID, 1, 0)).len(),
+                1
+            );
             assert_eq!(Leaderboards::<Test>::get((1001, 1, 0)).len(), 1);
             assert_eq!(
                 Leaderboards::<Test>::get((NOVA_RAIL_GAME_ID, 1, 0))[0].player,

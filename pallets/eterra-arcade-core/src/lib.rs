@@ -73,8 +73,12 @@ pub mod pallet {
         EVENT_ARCADE_SUBMIT_RUN_RESULT,
     };
     use frame_support::{
-        dispatch::DispatchResult, ensure, pallet_prelude::*, sp_runtime::traits::Saturating,
-        traits::StorageVersion, transactional,
+        dispatch::DispatchResult,
+        ensure,
+        pallet_prelude::*,
+        sp_runtime::traits::Saturating,
+        traits::{BuildGenesisConfig, StorageVersion},
+        transactional,
     };
     use frame_system::pallet_prelude::*;
     use sp_runtime::DispatchError;
@@ -84,6 +88,18 @@ pub mod pallet {
     pub type ClientRunIdOf<T> = BoundedVec<u8, <T as Config>::MaxClientRunIdLen>;
     pub type ResultIdOf<T> = BoundedVec<u8, <T as Config>::MaxResultIdLen>;
     pub type ProgressLabelOf<T> = BoundedVec<u8, <T as Config>::MaxProgressLabelLen>;
+    pub type InitialGameConfigOf<T> = (
+        GameId,
+        Vec<u8>,
+        bool,
+        RulesetVersion,
+        GameId,
+        CreditTypeId,
+        u64,
+        BlockNumberFor<T>,
+        u64,
+        u32,
+    );
 
     #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, PartialEq, Eq, RuntimeDebug)]
     pub enum RunStatus {
@@ -237,6 +253,59 @@ pub mod pallet {
     }
 
     const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
+
+    #[pallet::genesis_config]
+    pub struct GenesisConfig<T: Config> {
+        pub initial_game_configs: Vec<InitialGameConfigOf<T>>,
+    }
+
+    impl<T: Config> Default for GenesisConfig<T> {
+        fn default() -> Self {
+            Self {
+                initial_game_configs: Vec::new(),
+            }
+        }
+    }
+
+    #[pallet::genesis_build]
+    impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
+        fn build(&self) {
+            for (
+                game_id,
+                slug,
+                enabled,
+                ruleset_version,
+                credit_game_id,
+                credit_type,
+                credit_cost,
+                max_run_blocks,
+                max_score,
+                leaderboard_size,
+            ) in &self.initial_game_configs
+            {
+                assert!(
+                    *leaderboard_size > 0 && *leaderboard_size <= T::MaxLeaderboardEntries::get(),
+                    "arcade core genesis game config leaderboard_size must be within bounds"
+                );
+                let slug = SlugOf::<T>::try_from(slug.clone())
+                    .expect("arcade core genesis game config slug must be within bounds");
+                GameConfigs::<T>::insert(
+                    game_id,
+                    GameConfig::<T> {
+                        slug,
+                        enabled: *enabled,
+                        ruleset_version: *ruleset_version,
+                        credit_game_id: *credit_game_id,
+                        credit_type: *credit_type,
+                        credit_cost: *credit_cost,
+                        max_run_blocks: *max_run_blocks,
+                        max_score: *max_score,
+                        leaderboard_size: *leaderboard_size,
+                    },
+                );
+            }
+        }
+    }
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -736,13 +805,12 @@ pub mod pallet {
             config: &GameConfig<T>,
             record: &RunResultRecord<T>,
         ) -> DispatchResult {
-            let current_best =
-                PlayerBest::<T>::get((
-                    record.game_id,
-                    record.ruleset_version,
-                    record.continues_used,
-                    &record.player,
-                ));
+            let current_best = PlayerBest::<T>::get((
+                record.game_id,
+                record.ruleset_version,
+                record.continues_used,
+                &record.player,
+            ));
             let should_update = current_best
                 .as_ref()
                 .map(|best| {
@@ -779,7 +847,11 @@ pub mod pallet {
             });
 
             Leaderboards::<T>::try_mutate(
-                (record.game_id, record.ruleset_version, record.continues_used),
+                (
+                    record.game_id,
+                    record.ruleset_version,
+                    record.continues_used,
+                ),
                 |entries| -> DispatchResult {
                     let mut raw: Vec<LeaderboardEntry<T>> = entries.clone().into_inner();
                     raw.retain(|existing| existing.player != record.player);
@@ -838,8 +910,8 @@ mod tests {
     }
 
     thread_local! {
-        static CREDITS: RefCell<BTreeMap<(AccountId, GameId, CreditTypeId), u64>> = RefCell::new(BTreeMap::new());
-        static AUTHORITIES: RefCell<BTreeSet<(AccountId, GameId, RulesetVersion, AuthorityEventTypeId)>> = RefCell::new(BTreeSet::new());
+        static CREDITS: RefCell<BTreeMap<(AccountId, GameId, CreditTypeId), u64>> = const { RefCell::new(BTreeMap::new()) };
+        static AUTHORITIES: RefCell<BTreeSet<(AccountId, GameId, RulesetVersion, AuthorityEventTypeId)>> = const { RefCell::new(BTreeSet::new()) };
     }
 
     pub struct TestEconomyProvider;
@@ -945,8 +1017,41 @@ mod tests {
         ext
     }
 
+    fn new_test_ext_with_arcade_genesis(
+        configs: Vec<InitialGameConfigOf<Test>>,
+    ) -> sp_io::TestExternalities {
+        CREDITS.with(|credits| credits.borrow_mut().clear());
+        AUTHORITIES.with(|authorities| authorities.borrow_mut().clear());
+        let mut storage = system::GenesisConfig::<Test>::default()
+            .build_storage()
+            .expect("frame-system storage build should not fail");
+        GenesisConfig::<Test> {
+            initial_game_configs: configs,
+        }
+        .assimilate_storage(&mut storage)
+        .expect("arcade core genesis storage assimilation should not fail");
+        let mut ext = sp_io::TestExternalities::new(storage);
+        ext.execute_with(|| System::set_block_number(1));
+        ext
+    }
+
     fn slug(value: &str) -> SlugOf<Test> {
         value.as_bytes().to_vec().try_into().expect("bounded slug")
+    }
+
+    fn genesis_game_config(slug_value: &str) -> InitialGameConfigOf<Test> {
+        (
+            1003,
+            slug_value.as_bytes().to_vec(),
+            true,
+            1,
+            ARCADE_CORE_GAME_ID,
+            ARCADE_PLAY_CREDIT_TYPE,
+            25,
+            100,
+            1_000_000,
+            3,
+        )
     }
 
     fn client_run_id(value: &str) -> ClientRunIdOf<Test> {
@@ -1029,6 +1134,23 @@ mod tests {
             progress_hash: H256::repeat_byte(7),
             metrics_hash: Some(H256::repeat_byte(8)),
         }
+    }
+
+    #[test]
+    fn genesis_can_seed_initial_game_configs() {
+        new_test_ext_with_arcade_genesis(vec![genesis_game_config("nova_rail")]).execute_with(
+            || {
+                let config = GameConfigs::<Test>::get(1003).expect("game config should be seeded");
+                assert_eq!(config.slug, slug("nova_rail"));
+                assert!(config.enabled);
+                assert_eq!(config.ruleset_version, 1);
+                assert_eq!(config.credit_game_id, ARCADE_CORE_GAME_ID);
+                assert_eq!(config.credit_type, ARCADE_PLAY_CREDIT_TYPE);
+                assert_eq!(config.credit_cost, 25);
+                assert_eq!(config.max_score, 1_000_000);
+                assert_eq!(config.leaderboard_size, 3);
+            },
+        );
     }
 
     #[test]
@@ -1156,7 +1278,9 @@ mod tests {
                 Error::<Test>::ResultAlreadyProcessed
             );
             assert_eq!(
-                PlayerBest::<Test>::get((1001, 1, 0, 42)).expect("best").score,
+                PlayerBest::<Test>::get((1001, 1, 0, 42))
+                    .expect("best")
+                    .score,
                 500
             );
         });
@@ -1221,7 +1345,9 @@ mod tests {
             result.continues_used = 1;
             assert_ok!(ArcadeCore::submit_result_for_authority(&9, result));
             assert_eq!(
-                PlayerBest::<Test>::get((1001, 1, 1, 42)).expect("best").score,
+                PlayerBest::<Test>::get((1001, 1, 1, 42))
+                    .expect("best")
+                    .score,
                 900
             );
             assert_eq!(Leaderboards::<Test>::get((1001, 1, 1)).len(), 1);

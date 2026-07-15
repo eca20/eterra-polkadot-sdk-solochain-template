@@ -104,7 +104,7 @@ impl pallet_eterra_slots::ProgressionAuthorityProvider<u64> for MockProgressionA
 }
 
 std::thread_local! {
-    static MOCK_CURRENT_HAND: RefCell<BTreeSet<(u64, u32)>> = RefCell::new(BTreeSet::new());
+    static MOCK_CURRENT_HAND: RefCell<BTreeSet<(u64, u32)>> = const { RefCell::new(BTreeSet::new()) };
 }
 
 pub fn set_mock_current_hand(owner: u64, card_id: u32) {

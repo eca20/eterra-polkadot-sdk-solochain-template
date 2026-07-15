@@ -172,8 +172,8 @@ mod tests {
     }
 
     thread_local! {
-        static CREDITS: RefCell<BTreeMap<(AccountId, GameId, CreditTypeId), u64>> = RefCell::new(BTreeMap::new());
-        static AUTHORITIES: RefCell<BTreeSet<(AccountId, GameId, RulesetVersion, AuthorityEventTypeId)>> = RefCell::new(BTreeSet::new());
+        static CREDITS: RefCell<BTreeMap<(AccountId, GameId, CreditTypeId), u64>> = const { RefCell::new(BTreeMap::new()) };
+        static AUTHORITIES: RefCell<BTreeSet<(AccountId, GameId, RulesetVersion, AuthorityEventTypeId)>> = const { RefCell::new(BTreeSet::new()) };
     }
 
     pub struct TestEconomyProvider;
@@ -456,7 +456,10 @@ mod tests {
                     .score,
                 1_200
             );
-            assert_eq!(Leaderboards::<Test>::get((AEGIS_RUN_GAME_ID, 1, 0)).len(), 1);
+            assert_eq!(
+                Leaderboards::<Test>::get((AEGIS_RUN_GAME_ID, 1, 0)).len(),
+                1
+            );
         });
     }
 }

@@ -37,12 +37,12 @@ parameter_types! {
 }
 
 thread_local! {
-    static GUAP_BALANCES: RefCell<BTreeMap<u64, u128>> = RefCell::new(BTreeMap::new());
-    static RESERVED_STAKES: RefCell<BTreeMap<u64, u128>> = RefCell::new(BTreeMap::new());
-    static SLASHED_STAKES: RefCell<BTreeMap<u64, u128>> = RefCell::new(BTreeMap::new());
-    static STEAM_TO_ACCOUNT: RefCell<BTreeMap<pallet_cryptostrike::SteamHash, u64>> = RefCell::new(BTreeMap::new());
-    static ACCOUNT_TO_STEAM: RefCell<BTreeMap<u64, pallet_cryptostrike::SteamHash>> = RefCell::new(BTreeMap::new());
-    static FROZEN_ACCOUNTS: RefCell<BTreeMap<u64, bool>> = RefCell::new(BTreeMap::new());
+    static GUAP_BALANCES: RefCell<BTreeMap<u64, u128>> = const { RefCell::new(BTreeMap::new()) };
+    static RESERVED_STAKES: RefCell<BTreeMap<u64, u128>> = const { RefCell::new(BTreeMap::new()) };
+    static SLASHED_STAKES: RefCell<BTreeMap<u64, u128>> = const { RefCell::new(BTreeMap::new()) };
+    static STEAM_TO_ACCOUNT: RefCell<BTreeMap<pallet_cryptostrike::SteamHash, u64>> = const { RefCell::new(BTreeMap::new()) };
+    static ACCOUNT_TO_STEAM: RefCell<BTreeMap<u64, pallet_cryptostrike::SteamHash>> = const { RefCell::new(BTreeMap::new()) };
+    static FROZEN_ACCOUNTS: RefCell<BTreeMap<u64, bool>> = const { RefCell::new(BTreeMap::new()) };
 }
 
 pub struct MockGuapLedger;

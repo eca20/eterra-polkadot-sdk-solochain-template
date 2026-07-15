@@ -65,9 +65,7 @@ fn install_authority() {
     ));
 }
 
-fn arcade_initials(
-    value: &[u8],
-) -> BoundedVec<u8, <Test as crate::Config>::MaxInitialsLen> {
+fn arcade_initials(value: &[u8]) -> BoundedVec<u8, <Test as crate::Config>::MaxInitialsLen> {
     value.to_vec().try_into().expect("within max initials len")
 }
 
@@ -209,7 +207,10 @@ fn arcade_initials_reject_lowercase_invalid_and_all_space_values() {
             GamerError::<Test>::InvalidInitials
         );
         assert_noop!(
-            EterraGamer::set_arcade_initials(RuntimeOrigin::signed(ALICE), arcade_initials(b"    ")),
+            EterraGamer::set_arcade_initials(
+                RuntimeOrigin::signed(ALICE),
+                arcade_initials(b"    ")
+            ),
             GamerError::<Test>::InvalidInitials
         );
     });

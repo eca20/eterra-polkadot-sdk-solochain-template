@@ -624,6 +624,7 @@ pub struct NexusConfigState<BlockNumber> {
     pub updated_at: BlockNumber,
 }
 
+#[allow(clippy::too_many_arguments)]
 #[frame_support::pallet]
 pub mod pallet {
     use super::*;
@@ -1948,6 +1949,7 @@ pub mod pallet {
     // ------------------
 
     #[pallet::call]
+    #[allow(clippy::too_many_arguments)]
     impl<T: Config> Pallet<T> {
         /// Mint a new pack of cards for the caller.
         ///
@@ -3331,6 +3333,7 @@ pub mod pallet {
         #[pallet::call_index(32)]
         #[pallet::weight(<T as Config>::WeightInfo::seed_alpha_progression_gear())]
         #[transactional]
+        #[allow(clippy::too_many_arguments)]
         pub fn seed_alpha_progression_gear(
             origin: OriginFor<T>,
             owner: T::AccountId,
@@ -3683,10 +3686,7 @@ pub mod pallet {
                 .spells
                 .iter()
                 .filter_map(|spell_id| {
-                    let inserted = match seen.try_insert(*spell_id) {
-                        Ok(inserted) => inserted,
-                        Err(_) => false,
-                    };
+                    let inserted = seen.try_insert(*spell_id).unwrap_or_default();
                     if !inserted {
                         return None;
                     }

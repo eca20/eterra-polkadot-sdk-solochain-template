@@ -64,7 +64,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 thread_local! {
-    static TL_HAND_SET: RefCell<BTreeSet<AccountId>> = RefCell::new(BTreeSet::new());
+    static TL_HAND_SET: RefCell<BTreeSet<AccountId>> = const { RefCell::new(BTreeSet::new()) };
 }
 
 thread_local! {

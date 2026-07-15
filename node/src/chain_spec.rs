@@ -322,6 +322,22 @@ fn testnet_genesis(
         "eterraGameAuthority": {
             "initialServers": initial_servers
         },
+        "eterraArcadeCore": {
+            "initialGameConfigs": [
+                [
+                    1003,
+                    b"nova_rail".to_vec(),
+                    true,
+                    1,
+                    1000,
+                    1,
+                    25,
+                    100,
+                    1_000_000,
+                    3
+                ]
+            ]
+        },
         "eterraMedia": {
             // Ensure the runtime default collection exists so callers can omit a collection id
             // when registering media (the pallet falls back to `DefaultCollectionId`).
