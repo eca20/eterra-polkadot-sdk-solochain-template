@@ -1,20 +1,22 @@
 # Chain Agent Instructions
 
-Use the Nexus Season 1 snapshot at:
+Use the active Nexus V2 snapshot at:
 
-`/Users/edmundanderson/eterra_projects/docs/nexus_spec_snapshot/`
+`/Users/edmundanderson/eterra_projects/docs/nexus_v2_spec_snapshot_20260730_runtime_freeze_v3/`
+
+The superseded V2 snapshots and
+`/Users/edmundanderson/eterra_projects/docs/nexus_spec_snapshot/` historical
+LegacyV1/Season 1 authority are read-only. Legacy SCALE/state compatibility is
+preserved only where the active V2 contract requires it.
 
 Primary specs for this repo:
 
-- `nexus_core_rules_1_39.md`
+- `nexus_v2_core_rules.md`
+- `nexus_v2_migration_baseline_addendum.md`
 - `superseded_nexus_assumptions.md`
-- `nexus_chain_runtime_requirements.md`
-- `nexus_event_schema.md`
-- `tasks/PI_01_runtime_state_model.md`
-- `tasks/PI_05_match_engine.md`
-- `tasks/PI_06_workshop_forge_trials.md`
-- `tasks/PI_07_admin_locks_pauses.md`
-- `tasks/PI_09_payments_vault_expansion.md`
+- `nexus_product_increment_plan.md`
+- `approved_design/nexus_v2_card_entity_cross_game_loop_refactor.md`
+- `content/nexus_v2/manifests/content_manifest.json`
 
 ## Scope
 
@@ -34,4 +36,3 @@ Run the narrowest relevant checks first, then broaden when touching shared runti
 - `cargo clippy --all-targets --all-features`, if available and practical
 
 For runtime upgrade or chain spec behavior, also review the commands in `README.md` and `scripts/deploy.sh`.
-
