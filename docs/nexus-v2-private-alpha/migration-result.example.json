@@ -1,0 +1,43 @@
+{
+  "checks": {
+    "anomaliesAccounted": true,
+    "boundedBatchWeightRespected": true,
+    "interruptedResumeSafe": true,
+    "nextCardIdMonotonic": true,
+    "noCardDuplicated": true,
+    "noCardLost": true,
+    "noSilentReclassification": true,
+    "ownershipIndexesMatch": true,
+    "safeLegacyExitsPreserved": true,
+    "subjectIndexesMatch": true,
+    "v2WritesRemainPaused": true
+  },
+  "counts": {
+    "anomalies": 0,
+    "cardsSeen": 0,
+    "knownEscrow": 0,
+    "legacyCardsAfter": 0,
+    "legacyCardsBefore": 0,
+    "maxCardIdSeen": null,
+    "nextCardId": 0,
+    "nftWrapped": 0,
+    "ordinary": 0
+  },
+  "fromStorageVersion": 15,
+  "kind": "nexus-v2-v15-v16-migration-result",
+  "legacyCreationSealed": true,
+  "legacyWritesPaused": false,
+  "migrationPhase": "Completed",
+  "releaseId": "replace-private-alpha-release-id",
+  "runtimeWasmSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "schemaVersion": 1,
+  "snapshotSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "sourceCommit": "0000000000000000000000000000000000000000",
+  "toStorageVersion": 16,
+  "tryRuntimeLogSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "v2Features": {
+    "Conversion": false,
+    "Packs": false,
+    "Ranked": false
+  }
+}

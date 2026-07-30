@@ -1,0 +1,41 @@
+{
+  "backupManifestSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "bindHost": "127.0.0.1",
+  "checks": {
+    "backupHashesVerified": true,
+    "configLoaded": true,
+    "crossServiceReadPathHealthy": true,
+    "indexerHealthHealthy": true,
+    "indexerStateReadable": true,
+    "ipfsGatewayHealthy": true,
+    "ipfsRepoVerified": true,
+    "mediaHealthHealthy": true,
+    "mediaStateReadable": true,
+    "nodeRpcHealthy": true,
+    "nodeStateReadable": true,
+    "serviceDefinitionsLoaded": true,
+    "teardownComplete": true
+  },
+  "kind": "nexus-v2-isolated-restore-result",
+  "liveAlphaTouched": false,
+  "mode": "isolated",
+  "ports": {
+    "indexer": 18788,
+    "ipfsApi": 15001,
+    "ipfsGateway": 18080,
+    "media": 14000,
+    "nodeP2p": 31333,
+    "nodeRpc": 19944
+  },
+  "releaseId": "replace-private-alpha-release-id",
+  "restoredArtifactGroups": [
+    "config",
+    "indexer",
+    "ipfs",
+    "media",
+    "node",
+    "service"
+  ],
+  "schemaVersion": 1,
+  "sourceCommit": "0000000000000000000000000000000000000000"
+}

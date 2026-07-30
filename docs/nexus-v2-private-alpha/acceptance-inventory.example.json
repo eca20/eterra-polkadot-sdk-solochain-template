@@ -1,0 +1,43 @@
+{
+  "counts": {
+    "acceptedProductionResults": 0,
+    "acceptedTrainingResults": 0,
+    "activeV2Sessions": 0,
+    "cardsV2": 0,
+    "conversionCommitments": 0,
+    "entitiesV2": 0,
+    "essenceBalances": 0,
+    "founderEntitlements": 0,
+    "lifetimeCardsV2Created": 0,
+    "lifetimeConversionsCommitted": 0,
+    "lifetimeEntitiesV2Created": 0,
+    "lifetimeFounderEntitlementsIssued": 0,
+    "lifetimeMagicAssetsCreated": 0,
+    "lifetimePackCreditsIssued": 0,
+    "lifetimePackOpeningsRequested": 0,
+    "lifetimeProgressionRecordsCreated": 0,
+    "lifetimeRankedTeamsCreated": 0,
+    "lifetimeReforgesCommitted": 0,
+    "lifetimeV2ResultsAccepted": 0,
+    "lifetimeV2SessionsAuthorized": 0,
+    "packProgressRecords": 0,
+    "pendingPackOpenings": 0,
+    "playerAdvancementRecords": 0,
+    "prismSpells": 0,
+    "productionMagicBalances": 0,
+    "productionPackCredits": 0,
+    "rankedTeams": 0,
+    "reforgeCommitments": 0,
+    "spellChargeBalances": 0,
+    "trainingMagicBalances": 0,
+    "trainingPackCredits": 0
+  },
+  "kind": "nexus-v2-acceptance-inventory",
+  "observedAtFinalizedBlock": {
+    "hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "number": 0
+  },
+  "releaseId": "replace-private-alpha-release-id",
+  "schemaVersion": 1,
+  "sourceCommit": "0000000000000000000000000000000000000000"
+}

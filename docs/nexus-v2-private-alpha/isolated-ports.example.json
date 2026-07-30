@@ -1,0 +1,20 @@
+{
+  "bindHost": "127.0.0.1",
+  "livePorts": {
+    "indexer": 8788,
+    "ipfsApi": 5001,
+    "ipfsGateway": 8080,
+    "media": 4000,
+    "nodeP2p": 30333,
+    "nodeRpc": 9944
+  },
+  "ports": {
+    "indexer": 18788,
+    "ipfsApi": 15001,
+    "ipfsGateway": 18080,
+    "media": 14000,
+    "nodeP2p": 31333,
+    "nodeRpc": 19944
+  },
+  "schemaVersion": 1
+}

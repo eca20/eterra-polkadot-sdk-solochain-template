@@ -1,0 +1,57 @@
+{
+  "additionalEconomicFlags": {
+    "arcadeStorefront": false,
+    "legacyPackMint": false
+  },
+  "arcadeTickets": {
+    "earningEnabled": false,
+    "featuredVendingEnabled": false,
+    "randomVendingEnabled": false,
+    "redemptionEnabled": false,
+    "transferEnabled": false
+  },
+  "gameResults": {
+    "activeProductionPolicyCount": 0,
+    "allAlphaPoliciesPracticeOnlyOrValuelessTraining": true
+  },
+  "issuance": {
+    "paidV2IssuanceCallAvailable": false,
+    "trainingPackCreditRejectsProduction": true
+  },
+  "kind": "nexus-v2-private-alpha-economic-gates",
+  "legacyEconomy": {
+    "economicWritesEnabled": false,
+    "faucetEnabled": false,
+    "marketplaceEnabled": false,
+    "purchaseEnabled": false
+  },
+  "magic": {
+    "productionTransferEnabled": false,
+    "seedTrainingOnly": true
+  },
+  "observedAtFinalizedBlock": {
+    "hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "number": 0
+  },
+  "randomness": {
+    "cryptographyReviewApproved": false,
+    "drandQuicknetEnabled": false,
+    "mode": "Disabled",
+    "privateAlphaSeedRecorded": false,
+    "productionEconomicUseAllowed": false
+  },
+  "reforge": {
+    "dispatchableAvailable": false
+  },
+  "releaseId": "replace-private-alpha-release-id",
+  "schemaVersion": 1,
+  "sourceCommit": "0000000000000000000000000000000000000000",
+  "tcg": {
+    "features": {
+      "Conversion": false,
+      "Packs": false,
+      "Ranked": false
+    },
+    "legacyCreationSealed": true
+  }
+}
