@@ -1,6 +1,7 @@
 use super::*;
 
 use codec::Encode;
+use frame_support::traits::Contains;
 use sp_core::{sr25519, Pair};
 use sp_io::TestExternalities;
 use sp_runtime::{
@@ -164,5 +165,53 @@ fn non_faucet_call_from_zero_balance_is_rejected_for_payment() {
             )),
             "expected zero-balance account to be rejected for non-faucet call, got: {validity:?}"
         );
+    });
+}
+
+#[test]
+fn ticket_asset_raw_transfers_and_approvals_are_filtered() {
+    let player_pair = sr25519::Pair::from_string("//Alice", None).expect("dev key should parse");
+    let player = account_id_from_pair(&player_pair);
+    let destination = account_id_from_pair(
+        &sr25519::Pair::from_string("//Bob", None).expect("dev key should parse"),
+    );
+
+    new_test_ext_with_faucet(&player, 1u128 << 60).execute_with(|| {
+        pallet_eterra_economy::TicketAsset::<Runtime>::put(
+            pallet_eterra_economy::TicketAssetConfig {
+                asset_id: 3,
+                config_version: 1,
+            },
+        );
+
+        let raw_transfer = RuntimeCall::Assets(pallet_assets::Call::transfer {
+            id: 3,
+            target: destination.clone().into(),
+            amount: 1,
+        });
+        let raw_approval = RuntimeCall::Assets(pallet_assets::Call::approve_transfer {
+            id: 3,
+            delegate: destination.clone().into(),
+            amount: 1,
+        });
+        let non_ticket_transfer = RuntimeCall::Assets(pallet_assets::Call::transfer {
+            id: 2,
+            target: destination.into(),
+            amount: 1,
+        });
+        let economy_transfer =
+            RuntimeCall::EterraEconomy(pallet_eterra_economy::Call::transfer_tickets {
+                to: player,
+                amount: 1,
+            });
+
+        assert!(!configs::EterraRuntimeCallFilter::contains(&raw_transfer));
+        assert!(!configs::EterraRuntimeCallFilter::contains(&raw_approval));
+        assert!(configs::EterraRuntimeCallFilter::contains(
+            &non_ticket_transfer
+        ));
+        assert!(configs::EterraRuntimeCallFilter::contains(
+            &economy_transfer
+        ));
     });
 }

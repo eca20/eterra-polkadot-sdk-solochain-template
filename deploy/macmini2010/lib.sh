@@ -115,6 +115,7 @@ load_env() {
 	REMOTE_CARGO_JOBS="${REMOTE_CARGO_JOBS:-2}"
 	REMOTE_CARGO_HOME="${REMOTE_CARGO_HOME:-/home/${DEPLOY_USER}/.cargo}"
 	REMOTE_CARGO_ENV_FILE="${REMOTE_CARGO_ENV_FILE:-${REMOTE_CARGO_HOME}/env}"
+	REMOTE_CARGO_CLEAN_AFTER_DEPLOY="${REMOTE_CARGO_CLEAN_AFTER_DEPLOY:-1}"
 
 	[[ -n "${DEPLOY_HOST}" ]] || die "DEPLOY_HOST must be set in ${env_file}"
 	[[ -n "${MINI_LAN_IP}" ]] || die "MINI_LAN_IP must be set in ${env_file}"

@@ -39,9 +39,9 @@ require_release_source() {
 	git -C "${root}" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "${label} source is not a git worktree: ${root}"
 	actual_commit="$(repo_source_commit "${root}")"
 
-	if [[ -n "$(git -C "${root}" status --porcelain --untracked-files=normal)" ]] &&
-		! is_truthy "${ALLOW_DIRTY_DEPLOY:-0}"; then
-		die "${label} source tree is dirty: ${root} (commit/stash changes or use ALLOW_DIRTY_DEPLOY=1 for an explicitly non-release development deploy)"
+	if [[ -n "$(git -C "${root}" status --porcelain --untracked-files=all)" ]] &&
+		{ [[ "${ETERRA_RELEASE_VERSION:-dev}" != "dev" ]] || ! is_truthy "${ALLOW_DIRTY_DEPLOY:-0}"; }; then
+		die "${label} source tree is dirty: ${root}"
 	fi
 
 	if [[ -n "${expected_commit}" && "${actual_commit}" != "${expected_commit}" ]]; then
@@ -50,6 +50,18 @@ require_release_source() {
 
 	if [[ "${ETERRA_RELEASE_VERSION:-dev}" != "dev" && -z "${expected_commit}" ]]; then
 		die "${label} expected commit is required when ETERRA_RELEASE_VERSION is not dev"
+	fi
+
+	if [[ "${ETERRA_RELEASE_VERSION:-dev}" != "dev" ]]; then
+		local release_branch="release/${ETERRA_RELEASE_VERSION}"
+		[[ "$(git -C "${root}" rev-parse --verify "refs/heads/${release_branch}")" == "${actual_commit}" ]] ||
+			die "${label} local ${release_branch} is not pinned to ${actual_commit}"
+		[[ "$(git -C "${root}" ls-remote origin "refs/heads/${release_branch}" | awk '{print $1}')" == "${actual_commit}" ]] ||
+			die "${label} remote ${release_branch} is not pinned to ${actual_commit}"
+		[[ -z "$(git -C "${root}" show-ref --verify "refs/tags/${ETERRA_RELEASE_VERSION}" 2>/dev/null || true)" ]] ||
+			die "${label} local release tag already exists; deploy and validate before tagging"
+		[[ -z "$(git -C "${root}" ls-remote origin "refs/tags/${ETERRA_RELEASE_VERSION}")" ]] ||
+			die "${label} remote release tag already exists; deploy and validate before tagging"
 	fi
 
 	printf '%s\n' "${actual_commit}"
@@ -185,6 +197,9 @@ load_env() {
 	ETERRA_EXPECTED_MEDIA_COMMIT="${ETERRA_EXPECTED_MEDIA_COMMIT:-}"
 	ETERRA_EXPECTED_SDKGEN_COMMIT="${ETERRA_EXPECTED_SDKGEN_COMMIT:-}"
 	ALLOW_DIRTY_DEPLOY="${ALLOW_DIRTY_DEPLOY:-0}"
+	RUNTIME_SPEC_VERSION="${RUNTIME_SPEC_VERSION:-104}"
+	RUNTIME_CODE_HASH="${RUNTIME_CODE_HASH:-unverified}"
+	MEDIA_RELEASE_CONTENT_SMOKE_URL="${MEDIA_RELEASE_CONTENT_SMOKE_URL:-}"
 	ETERRA_ALPHA_SUDO_MNEMONIC="${ETERRA_ALPHA_SUDO_MNEMONIC:-}"
 	ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD="${ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD:-}"
 	NOVA_RAIL_RELAY_AUTHORITY_ID="${NOVA_RAIL_RELAY_AUTHORITY_ID:-1}"
@@ -197,10 +212,13 @@ load_env() {
 	REMOTE_CARGO_ENV_FILE="${REMOTE_CARGO_ENV_FILE:-${REMOTE_CARGO_HOME}/env}"
 	REMOTE_CARGO_TARGET_DIR="${REMOTE_CARGO_TARGET_DIR:-${DEPLOY_ROOT}/cache/cargo-target}"
 	REMOTE_CARGO_INCREMENTAL="${REMOTE_CARGO_INCREMENTAL:-1}"
+	REMOTE_CARGO_CLEAN_AFTER_DEPLOY="${REMOTE_CARGO_CLEAN_AFTER_DEPLOY:-1}"
 	ENABLE_REMOTE_SCCACHE="${ENABLE_REMOTE_SCCACHE:-1}"
 	REMOTE_SCCACHE_DIR="${REMOTE_SCCACHE_DIR:-${DEPLOY_ROOT}/cache/sccache}"
 
 	[[ -n "${DEPLOY_HOST}" ]] || die "DEPLOY_HOST must be set in ${env_file}"
+	[[ "${REMOTE_CARGO_TARGET_DIR}" == "${DEPLOY_ROOT}/"* ]] || die "REMOTE_CARGO_TARGET_DIR must remain under DEPLOY_ROOT"
+	[[ "${REMOTE_CARGO_TARGET_DIR}" != "${DEPLOY_ROOT}" ]] || die "REMOTE_CARGO_TARGET_DIR must not equal DEPLOY_ROOT"
 	if [[ -n "${DEPLOY_PASSWORD}" ]]; then
 		DEPLOY_PASSWORD="$(read_secret_value "${DEPLOY_PASSWORD}")"
 	fi
@@ -241,6 +259,13 @@ load_env() {
 	fi
 	if is_truthy "${PUBLIC_MEDIA_UPLOAD_ENABLED}"; then
 		die "PUBLIC_MEDIA_UPLOAD_ENABLED must remain disabled for alpha"
+	fi
+	if [[ "${ETERRA_RELEASE_VERSION}" != "dev" ]]; then
+		! is_truthy "${ALLOW_DIRTY_DEPLOY}" || die "ALLOW_DIRTY_DEPLOY is forbidden for release deploys"
+		[[ "${RUNTIME_SPEC_VERSION}" == "104" ]] || die "release deploy requires runtime spec 104"
+		[[ "${RUNTIME_CODE_HASH}" =~ ^0x[0-9a-fA-F]{64}$ ]] || die "release deploy requires a verified runtime code hash"
+		[[ "${KUBO_IMAGE}" == *@sha256:* ]] || die "release deploy requires KUBO_IMAGE pinned by registry digest"
+		[[ -n "${MEDIA_RELEASE_CONTENT_SMOKE_URL}" ]] || die "release deploy requires MEDIA_RELEASE_CONTENT_SMOKE_URL"
 	fi
 
 	SSH_TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
@@ -534,11 +559,17 @@ EOF
 
 write_media_env() {
 	local path="$1"
+	local media_node_env="production"
+	if [[ "${ETERRA_RELEASE_VERSION}" == "dev" ]]; then
+		media_node_env="development"
+	fi
 	cat >"${path}" <<EOF
-ETERRA_RELEASE_VERSION=${ETERRA_RELEASE_VERSION}
-ETERRA_SOURCE_COMMIT=${MEDIA_SOURCE_COMMIT:-unknown}
+RELEASE_VERSION=${ETERRA_RELEASE_VERSION}
+SOURCE_COMMIT=${MEDIA_SOURCE_COMMIT:-unknown}
+RUNTIME_SPEC_VERSION=${RUNTIME_SPEC_VERSION}
+RUNTIME_CODE_HASH=${RUNTIME_CODE_HASH}
 DOCKERIZED=1
-NODE_ENV=production
+NODE_ENV=${media_node_env}
 KUBO_IMAGE=${KUBO_IMAGE}
 CHAIN_WS=ws://host.docker.internal:${CHAIN_RPC_PORT}
 MEDIA_SIGNER_SEED=${MEDIA_SIGNER_SEED}

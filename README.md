@@ -89,11 +89,18 @@ The `deploy/alpha/macmini2010/` toolkit keeps alpha chain state by default.
 - `deploy/alpha/macmini2010/reset-node.sh --yes` and `deploy/alpha/macmini2010/purge-node-state.sh` are the explicit destructive paths
 - alpha spec/genesis changes are intentionally deferred on normal deploys and only apply when you run `deploy-node.sh --purge-state` or `deploy-all.sh --purge-state`
 
-The alpha node deploy also keeps build caches on the 2010 mini:
+The alpha node deploy installs the built node binary, verifies the service, and then removes its
+reproducible Cargo target directory by default:
 
-- shared Cargo target dir: `/opt/eterra-alpha/cache/cargo-target`
+- temporary Cargo target dir: `/opt/eterra-alpha/cache/cargo-target`
 - optional `sccache` dir: `/opt/eterra-alpha/cache/sccache`
 - no-change deploys now skip the Rust rebuild and only restart when runtime config actually changed
+- set `REMOTE_CARGO_CLEAN_AFTER_DEPLOY=0` only when retaining build objects is intentionally useful
+
+Local `scripts/deploy.sh pipeline-check` runs also remove this checkout's `target/` directory on
+completion or failure. Set `ETERRA_KEEP_BUILD_ARTIFACTS=1` for a diagnostic run, or use
+`scripts/deploy.sh clean-build` after an ad-hoc build. These cleanup paths never remove chain data,
+installed node binaries, generated release bundles, or deployment evidence.
 
 `scripts/run-node.sh` defaults to exposed RPC on `dev`/`testnet` (so dockerized services can connect; validator uses `--unsafe-rpc-external` per Substrate CLI rules) and local-only RPC on `production` unless explicitly overridden.
 

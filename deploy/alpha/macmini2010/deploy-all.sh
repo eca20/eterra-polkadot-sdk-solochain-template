@@ -28,9 +28,26 @@ while [[ $# -gt 0 ]]; do
 		--seed-nova-rail-config)
 			seed_nova_rail_config=1
 			;;
+		--build-media-candidate)
+			[[ $# -ge 2 ]] || { echo "--build-media-candidate requires an output path" >&2; exit 2; }
+			media_args+=("--build-candidate" "$2")
+			shift
+			;;
+		--promote-media-candidate)
+			[[ $# -ge 2 ]] || { echo "--promote-media-candidate requires a manifest" >&2; exit 2; }
+			media_args+=("--promote-candidate" "$2")
+			shift
+			;;
+		--media-evidence)
+			[[ $# -ge 2 ]] || { echo "--media-evidence requires an output path" >&2; exit 2; }
+			media_args+=("--evidence" "$2")
+			shift
+			;;
 		--help|-h)
 			cat <<'EOF'
 Usage: deploy-all.sh [--purge-state] [--fresh] [--with-arcade-authority] [--authorize-arcade-authority] [--seed-nova-rail-config]
+                     [--build-media-candidate OUTPUT.json]
+                     [--promote-media-candidate CANDIDATE.json --media-evidence OUTPUT.json]
 
 Normal deploys preserve alpha chain state.
 Pass --purge-state to wipe the remote alpha node base path before restart.
@@ -40,6 +57,7 @@ Pass --with-arcade-authority to deploy the Nova Rail authority relay API/operato
 Pass --authorize-arcade-authority to deploy and run the one-shot relay authorization operator.
 Pass --seed-nova-rail-config to run the explicit idempotent ArcadeCore seed after deploy.
 Normal deploys never mutate live chain configuration beyond a separately authorized runtime upgrade.
+Release media deployment requires a candidate build followed by a separate immutable promotion.
 EOF
 			exit 0
 			;;

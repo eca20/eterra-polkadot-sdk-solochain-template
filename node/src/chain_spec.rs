@@ -259,6 +259,7 @@ fn testnet_genesis(
     let asset_owner: AccountId = sudo_key.clone().unwrap_or_else(|| treasury_account.clone());
     let dev_coin_id: u32 = 1;
     let beta_coin_id: u32 = 2;
+    let arcade_ticket_id: u32 = 3;
     // Give the initial owner a large supply of each asset for testing/distribution.
     let initial_asset_supply: u128 = 1_000_000_000u128.saturating_mul(UNIT);
     // `pallet-assets` requires a non-zero minimum balance.
@@ -301,19 +302,25 @@ fn testnet_genesis(
             "assets": [
                 [dev_coin_id, asset_owner, false, asset_min_balance],
                 [beta_coin_id, asset_owner, false, asset_min_balance],
+                [arcade_ticket_id, asset_owner, true, asset_min_balance],
             ],
             // Genesis metadata: (id, name, symbol, decimals)
             "metadata": [
                 [dev_coin_id, b"devCOIN".to_vec(), b"devCOIN".to_vec(), 12],
                 [beta_coin_id, b"betaCOIN".to_vec(), b"betaCOIN".to_vec(), 12],
+                [arcade_ticket_id, b"Eterra Arcade Ticket".to_vec(), b"TICKET".to_vec(), 0],
             ],
             // Genesis balances: (id, account, amount)
             "accounts": [
                 [dev_coin_id, asset_owner, initial_asset_supply],
                 [beta_coin_id, asset_owner, initial_asset_supply],
             ],
-            // Reserve ids 1 and 2; future assets should start at 3.
-            "nextAssetId": 3,
+            // Reserve ids 1, 2, and 3; future assets should start at 4.
+            "nextAssetId": 4,
+        },
+        "eterraEconomy": {
+            "ticketAsset": [arcade_ticket_id, 1],
+            "paused": true,
         },
         "eterraFaucet": {
             "faucetAccount": faucet_account,

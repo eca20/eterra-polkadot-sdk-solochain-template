@@ -5,11 +5,12 @@ use crate::{
     CollectionCard, Element, ElementProfile, Error, Event, GearItem, GearItemTemplates,
     GearSlotType, GearTier, ListedByOwner, NextCardId, NextStarterGrantId, NexusAccountStates,
     NexusCardKind, NexusCardOrigin, NexusCollectionCards, NexusGearItems, NexusOverflowCards,
-    NexusOverflowSubjectCounts, NexusSpellbook, NexusStorageLocation, NexusSubjectCopyCounts,
-    PackCardInProgress, PackInProgress, PlayerPacks, ProgressionNode, ProgressionNodeKind,
-    ProgressionNodeStatus, ProgressionTreeBySubject, ProgressionTreeIds, ProgressionTreeUseCounts,
-    ProgressionTrees, RankStyleLabel, RankValue, SeasonCollectionIds, SeasonCollectionStatus,
-    SeasonCollections, SpellEntry, SpellSlotEntry, StarterCardTemplate, StarterGrants, StarterPath,
+    NexusOverflowSubjectCounts, NexusPrizeKind, NexusPrizePools, NexusPrizeTemplate,
+    NexusSpellbook, NexusStorageLocation, NexusSubjectCopyCounts, PackCardInProgress,
+    PackInProgress, PlayerPacks, ProgressionNode, ProgressionNodeKind, ProgressionNodeStatus,
+    ProgressionTreeBySubject, ProgressionTreeIds, ProgressionTreeUseCounts, ProgressionTrees,
+    RankStyleLabel, RankValue, SeasonCollectionIds, SeasonCollectionStatus, SeasonCollections,
+    SpellEntry, SpellSlotEntry, StarterCardTemplate, StarterGrants, StarterPath,
     StarterTeamConfigs,
 };
 use frame_support::traits::Get;
@@ -328,6 +329,90 @@ fn invalid_starter_team_config_is_rejected() {
             ),
             Error::<Test>::InvalidStarterTeamConfig
         );
+    });
+}
+
+#[test]
+fn nexus_prize_pack_fulfills_atomically_and_routes_sixth_copy_to_overflow() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let template = NexusPrizeTemplate {
+            kind: NexusCardKind::Echo,
+            card: starter_template(2, 18),
+        };
+        assert_ok!(EterraSlots::set_nexus_prize_pool(
+            RuntimeOrigin::root(),
+            9,
+            vec![template],
+            1,
+        ));
+        assert_noop!(
+            EterraSlots::set_nexus_prize_pool(RuntimeOrigin::root(), 9, vec![template], 2,),
+            Error::<Test>::NexusPrizePoolAlreadyExists
+        );
+        let card_ids = EterraSlots::try_fulfill_nexus_prize(
+            &player,
+            NexusPrizeKind::RandomPack,
+            9,
+            None,
+            [2u8; 32],
+            NexusCardOrigin::Claim,
+        )
+        .expect("pack fulfillment succeeds");
+        assert_eq!(card_ids.len(), CardsPerPack::get() as usize);
+        assert_eq!(NexusSubjectCopyCounts::<Test>::get(player, 2), 5);
+        assert_eq!(NexusOverflowSubjectCounts::<Test>::get(player, 2), 1);
+        assert_eq!(NexusOverflowCards::<Test>::get(player).len(), 1);
+        for (index, card_id) in card_ids.iter().enumerate() {
+            let card = NexusCollectionCards::<Test>::get(card_id).expect("collection record");
+            assert_eq!(card.subject_id, 2);
+            assert_eq!(card.origin, NexusCardOrigin::Claim);
+            assert!(!card.account_bound);
+            assert_eq!(
+                card.location,
+                if index < 5 {
+                    NexusStorageLocation::Collection
+                } else {
+                    NexusStorageLocation::Overflow
+                }
+            );
+            assert!(Cards::<Test>::get(card_id).expect("card").is_finalized());
+        }
+    });
+}
+
+#[test]
+fn featured_prize_guarantees_subject_but_resolves_traits_once() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let baseline = starter_template(2, 18);
+        assert_ok!(EterraSlots::set_nexus_prize_pool(
+            RuntimeOrigin::root(),
+            11,
+            vec![NexusPrizeTemplate {
+                kind: NexusCardKind::Monster,
+                card: baseline,
+            }],
+            1,
+        ));
+        let card_ids = EterraSlots::try_fulfill_nexus_prize(
+            &player,
+            NexusPrizeKind::FeaturedSubject,
+            11,
+            Some(2),
+            [2u8; 32],
+            NexusCardOrigin::Pull,
+        )
+        .expect("featured fulfillment succeeds");
+        assert_eq!(card_ids.len(), 1);
+        let card = NexusCollectionCards::<Test>::get(card_ids[0]).expect("collection record");
+        assert_eq!(card.subject_id, 2);
+        assert_eq!(card.kind, NexusCardKind::Monster);
+        assert_eq!(card.origin, NexusCardOrigin::Pull);
+        assert_ne!(card.base_ranks, baseline.base_ranks);
+        assert_ne!(card.genes, baseline.genes);
+        assert!(card.apex_side.is_none());
+        assert!(NexusPrizePools::<Test>::contains_key(11));
     });
 }
 

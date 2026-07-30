@@ -1,8 +1,7 @@
-//! Eterra Economy pallet MVP scaffold.
+//! Eterra Economy pallet.
 //!
-//! Purpose: products, entitlements, credits, developer sponsor pools, and
-//! revenue accounting. Production integration should wire real token movement
-//! through the runtime's chosen fungible asset/currency traits.
+//! Purpose: products, entitlements, credits, developer sponsor pools, revenue
+//! accounting, Arcade Tickets, and the chain-authoritative arcade prize catalog.
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(clippy::too_many_arguments)]
 
@@ -10,22 +9,134 @@ pub use pallet::*;
 pub mod weights;
 pub use weights::WeightInfo;
 
+use codec::{Decode, Encode, MaxEncodedLen};
+use frame_support::dispatch::DispatchResult;
+use scale_info::TypeInfo;
+use sp_runtime::{DispatchError, RuntimeDebug};
+use sp_std::vec::Vec;
+
+pub type TicketBalance = u128;
+pub type AssetId = u32;
+pub type SubjectId = u32;
+pub type PoolId = u32;
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum PrizeFulfillmentKind {
+    RandomSingle,
+    RandomPack,
+    FeaturedSubject,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum PrizeAcquisitionSource {
+    TicketClaim,
+    NativePull,
+}
+
+/// Runtime adapter over the configured `pallet-assets` ticket class.
+pub trait TicketAssetProvider<AccountId> {
+    fn asset_exists(asset_id: AssetId) -> bool;
+    fn decimals(asset_id: AssetId) -> u8;
+    fn balance(asset_id: AssetId, account: &AccountId) -> TicketBalance;
+    fn mint(asset_id: AssetId, account: &AccountId, amount: TicketBalance) -> DispatchResult;
+    fn burn(asset_id: AssetId, account: &AccountId, amount: TicketBalance) -> DispatchResult;
+    fn transfer(
+        asset_id: AssetId,
+        from: &AccountId,
+        to: &AccountId,
+        amount: TicketBalance,
+    ) -> DispatchResult;
+}
+
+/// Runtime adapter that transfers native-token vending revenue to Treasury.
+pub trait NativePaymentProvider<AccountId> {
+    fn pay_treasury(account: &AccountId, amount: u128) -> DispatchResult;
+}
+
+/// Runtime adapter into the Nexus TCG acquisition implementation.
+pub trait PrizeFulfillmentProvider<AccountId> {
+    fn validate_pool(pool_id: PoolId, featured_subjects: &[SubjectId]) -> DispatchResult;
+
+    fn fulfill(
+        account: &AccountId,
+        kind: PrizeFulfillmentKind,
+        pool_id: PoolId,
+        subject_id: Option<SubjectId>,
+        entropy: [u8; 32],
+        source: PrizeAcquisitionSource,
+    ) -> Result<Vec<u32>, DispatchError>;
+}
+
+impl<AccountId> PrizeFulfillmentProvider<AccountId> for () {
+    fn validate_pool(_pool_id: PoolId, _featured_subjects: &[SubjectId]) -> DispatchResult {
+        Ok(())
+    }
+
+    fn fulfill(
+        _account: &AccountId,
+        _kind: PrizeFulfillmentKind,
+        _pool_id: PoolId,
+        _subject_id: Option<SubjectId>,
+        _entropy: [u8; 32],
+        _source: PrizeAcquisitionSource,
+    ) -> Result<Vec<u32>, DispatchError> {
+        Ok(Vec::new())
+    }
+}
+
+pub trait AccountEligibilityProvider<AccountId> {
+    fn eligible(account: &AccountId) -> bool;
+}
+
+impl<AccountId> AccountEligibilityProvider<AccountId> for () {
+    fn eligible(_account: &AccountId) -> bool {
+        true
+    }
+}
+
+/// Replaceable randomness boundary. Alpha may use consensus entropy; valuable
+/// production catalogs must supply a reviewed manipulation-resistant provider.
+pub trait ArcadeRandomnessProvider {
+    fn random(domain: &[u8], payload: &[u8]) -> [u8; 32];
+}
+
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
 #[frame_support::pallet]
 pub mod pallet {
-    use super::weights::WeightInfo;
+    use super::{
+        weights::WeightInfo, AccountEligibilityProvider, ArcadeRandomnessProvider, AssetId,
+        NativePaymentProvider, PoolId, PrizeAcquisitionSource, PrizeFulfillmentKind,
+        PrizeFulfillmentProvider, SubjectId, TicketAssetProvider, TicketBalance,
+    };
     use frame_support::{
-        dispatch::DispatchResult, pallet_prelude::*, traits::StorageVersion, transactional,
+        dispatch::DispatchResult,
+        pallet_prelude::*,
+        traits::{BuildGenesisConfig, Get, StorageVersion},
+        transactional,
+        weights::Weight,
     };
     use frame_system::pallet_prelude::*;
+    use sp_runtime::traits::{SaturatedConversion, Saturating};
+    use sp_std::vec::Vec;
 
     pub type GameId = u64;
     pub type ProductId = u64;
     pub type EntitlementId = u32;
     pub type CreditTypeId = u32;
     pub type Balance = u128;
+    pub type SkuId = u64;
+    pub type RotationId = u64;
+
+    pub type ScoreTiersOf<T> = BoundedVec<ScoreTier, <T as Config>::MaxScoreTiers>;
+    pub type EligibleRewardModesOf<T> =
+        BoundedVec<TicketRewardMode, <T as Config>::MaxEligibleRewardModes>;
+    pub type EligibleEndedReasonsOf<T> = BoundedVec<u8, <T as Config>::MaxEligibleEndedReasons>;
+    pub type EligibleSubjectsOf<T> = BoundedVec<SubjectId, <T as Config>::MaxFeaturedPoolSubjects>;
+    pub type FeaturedSubjectsOf<T> = BoundedVec<SubjectId, <T as Config>::MaxFeaturedSlots>;
+    pub type FeaturedOffersOf<T> = BoundedVec<FeaturedOffer, <T as Config>::MaxFeaturedSlots>;
+    pub type PrizeCardIdsOf<T> = BoundedVec<u32, <T as Config>::MaxPrizeCards>;
 
     #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, PartialEq, Eq, RuntimeDebug)]
     pub enum ProductType {
@@ -59,11 +170,139 @@ pub mod pallet {
         pub metadata_hash: Hash,
     }
 
+    #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, Copy, PartialEq, Eq, RuntimeDebug)]
+    pub struct TicketAssetConfig {
+        pub asset_id: AssetId,
+        pub config_version: u32,
+    }
+
+    #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, Copy, PartialEq, Eq, RuntimeDebug)]
+    pub struct ScoreTier {
+        pub min_score: u64,
+        pub tickets: TicketBalance,
+    }
+
+    #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, Copy, PartialEq, Eq, RuntimeDebug)]
+    pub enum TicketRewardMode {
+        Ranked,
+        Unranked,
+    }
+
+    #[derive(
+        Encode, Decode, MaxEncodedLen, TypeInfo, CloneNoBound, PartialEqNoBound, RuntimeDebugNoBound,
+    )]
+    #[scale_info(skip_type_params(T))]
+    pub struct TicketRewardPolicy<T: Config> {
+        pub enabled: bool,
+        pub eligible_modes: EligibleRewardModesOf<T>,
+        pub eligible_ended_reasons: EligibleEndedReasonsOf<T>,
+        pub score_tiers: ScoreTiersOf<T>,
+        pub per_result_cap: TicketBalance,
+        pub window_blocks: BlockNumberFor<T>,
+        pub per_account_window_cap: TicketBalance,
+        pub config_version: u32,
+    }
+
+    #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, Copy, PartialEq, Eq, RuntimeDebug)]
+    pub enum PauseDomain {
+        TicketEarning,
+        TicketTransfers,
+        TicketRedemption,
+        RandomVending,
+        FeaturedVending,
+    }
+
+    impl PauseDomain {
+        pub const ALL: [Self; 5] = [
+            Self::TicketEarning,
+            Self::TicketTransfers,
+            Self::TicketRedemption,
+            Self::RandomVending,
+            Self::FeaturedVending,
+        ];
+    }
+
+    #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, Copy, PartialEq, Eq, RuntimeDebug)]
+    pub enum PrizeKind {
+        RandomSingle,
+        RandomPack,
+    }
+
+    #[derive(
+        Encode, Decode, MaxEncodedLen, TypeInfo, CloneNoBound, PartialEqNoBound, RuntimeDebugNoBound,
+    )]
+    #[scale_info(skip_type_params(T))]
+    pub struct PrizeSku<T: Config> {
+        pub kind: PrizeKind,
+        pub pool_id: PoolId,
+        pub ticket_price: Option<TicketBalance>,
+        pub native_price: Option<Balance>,
+        pub enabled: bool,
+        pub total_cap: Option<u64>,
+        pub per_account_window_cap: u32,
+        pub window_blocks: BlockNumberFor<T>,
+        pub config_version: u32,
+    }
+
+    #[derive(
+        Encode, Decode, MaxEncodedLen, TypeInfo, CloneNoBound, PartialEqNoBound, RuntimeDebugNoBound,
+    )]
+    #[scale_info(skip_type_params(T))]
+    pub struct FeaturedRotationConfig<T: Config> {
+        pub enabled: bool,
+        pub pool_id: PoolId,
+        pub eligible_subjects: EligibleSubjectsOf<T>,
+        pub period_blocks: BlockNumberFor<T>,
+        pub native_price: Balance,
+        pub per_slot_cap: u32,
+        pub per_account_limit: u32,
+        pub config_version: u32,
+    }
+
+    #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, Copy, PartialEq, Eq, RuntimeDebug)]
+    pub struct FeaturedOffer {
+        pub subject_id: SubjectId,
+        pub native_price: Balance,
+        pub stock_cap: u32,
+        pub sold: u32,
+        pub config_version: u32,
+    }
+
+    #[derive(
+        Encode, Decode, MaxEncodedLen, TypeInfo, CloneNoBound, PartialEqNoBound, RuntimeDebugNoBound,
+    )]
+    #[scale_info(skip_type_params(T))]
+    pub struct FeaturedRotation<T: Config> {
+        pub rotation_id: RotationId,
+        pub starts_at: BlockNumberFor<T>,
+        pub ends_at: BlockNumberFor<T>,
+        pub pool_id: PoolId,
+        pub per_account_limit: u32,
+        pub offers: FeaturedOffersOf<T>,
+        pub config_version: u32,
+    }
+
+    #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, PartialEq, Eq, RuntimeDebug)]
+    pub enum PurchaseTarget {
+        CatalogSku(SkuId),
+        FeaturedSlot { rotation_id: RotationId, slot: u8 },
+    }
+
+    #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, Copy, PartialEq, Eq, RuntimeDebug)]
+    pub enum FeaturedRotationFailureReason {
+        UnsafeOrInvalidConfiguration,
+    }
+
     #[pallet::config]
     pub trait Config: frame_system::Config {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
         type WeightInfo: WeightInfo;
         type AdminOrigin: EnsureOrigin<Self::RuntimeOrigin>;
+        type TicketAssets: TicketAssetProvider<Self::AccountId>;
+        type NativePayments: NativePaymentProvider<Self::AccountId>;
+        type PrizeFulfillment: PrizeFulfillmentProvider<Self::AccountId>;
+        type AccountEligibility: AccountEligibilityProvider<Self::AccountId>;
+        type RandomnessProvider: ArcadeRandomnessProvider;
 
         #[pallet::constant]
         type ArcadeCreditFaucetGameId: Get<GameId>;
@@ -71,9 +310,55 @@ pub mod pallet {
         type ArcadeCreditFaucetType: Get<CreditTypeId>;
         #[pallet::constant]
         type ArcadeCreditFaucetAmount: Get<u64>;
+        #[pallet::constant]
+        type MaxScoreTiers: Get<u32>;
+        #[pallet::constant]
+        type MaxEligibleRewardModes: Get<u32>;
+        #[pallet::constant]
+        type MaxEligibleEndedReasons: Get<u32>;
+        #[pallet::constant]
+        type MaxFeaturedPoolSubjects: Get<u32>;
+        #[pallet::constant]
+        type MaxFeaturedSlots: Get<u32>;
+        #[pallet::constant]
+        type FeaturedSlotCount: Get<u32>;
+        #[pallet::constant]
+        type MaxPrizeCards: Get<u32>;
     }
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
+
+    #[pallet::genesis_config]
+    pub struct GenesisConfig<T: Config> {
+        pub ticket_asset: Option<(AssetId, u32)>,
+        pub paused: bool,
+        pub _phantom: PhantomData<T>,
+    }
+
+    impl<T: Config> Default for GenesisConfig<T> {
+        fn default() -> Self {
+            Self {
+                ticket_asset: None,
+                paused: true,
+                _phantom: PhantomData,
+            }
+        }
+    }
+
+    #[pallet::genesis_build]
+    impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
+        fn build(&self) {
+            if let Some((asset_id, config_version)) = self.ticket_asset {
+                TicketAsset::<T>::put(TicketAssetConfig {
+                    asset_id,
+                    config_version,
+                });
+            }
+            for domain in PauseDomain::ALL {
+                PausedDomains::<T>::insert(domain, self.paused);
+            }
+        }
+    }
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -131,6 +416,138 @@ pub mod pallet {
         ValueQuery,
     >;
 
+    #[pallet::storage]
+    #[pallet::getter(fn ticket_asset_config)]
+    pub type TicketAsset<T: Config> = StorageValue<_, TicketAssetConfig, OptionQuery>;
+
+    #[pallet::storage]
+    #[pallet::getter(fn ticket_reward_policy)]
+    pub type TicketRewardPolicies<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        GameId,
+        Blake2_128Concat,
+        u32,
+        TicketRewardPolicy<T>,
+        OptionQuery,
+    >;
+
+    #[pallet::storage]
+    pub type TicketEarningWindows<T: Config> = StorageNMap<
+        _,
+        (
+            NMapKey<Blake2_128Concat, GameId>,
+            NMapKey<Blake2_128Concat, u32>,
+            NMapKey<Blake2_128Concat, T::AccountId>,
+            NMapKey<Blake2_128Concat, u64>,
+        ),
+        TicketBalance,
+        ValueQuery,
+    >;
+
+    #[pallet::storage]
+    pub type TicketRewardedResults<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::Hash, bool, ValueQuery>;
+
+    #[pallet::type_value]
+    pub fn DefaultPaused() -> bool {
+        true
+    }
+
+    #[pallet::storage]
+    #[pallet::getter(fn domain_paused)]
+    pub type PausedDomains<T: Config> =
+        StorageMap<_, Blake2_128Concat, PauseDomain, bool, ValueQuery, DefaultPaused>;
+
+    #[pallet::storage]
+    #[pallet::getter(fn account_restricted)]
+    pub type RestrictedAccounts<T: Config> =
+        StorageMap<_, Blake2_128Concat, T::AccountId, bool, ValueQuery>;
+
+    #[pallet::storage]
+    #[pallet::getter(fn prize_sku)]
+    pub type PrizeSkus<T: Config> =
+        StorageMap<_, Blake2_128Concat, SkuId, PrizeSku<T>, OptionQuery>;
+
+    #[pallet::storage]
+    pub type PrizeSkuSold<T: Config> = StorageMap<_, Blake2_128Concat, SkuId, u64, ValueQuery>;
+
+    #[pallet::storage]
+    pub type PrizeSkuAccountWindows<T: Config> = StorageNMap<
+        _,
+        (
+            NMapKey<Blake2_128Concat, SkuId>,
+            NMapKey<Blake2_128Concat, T::AccountId>,
+            NMapKey<Blake2_128Concat, u64>,
+        ),
+        u32,
+        ValueQuery,
+    >;
+
+    #[pallet::storage]
+    #[pallet::getter(fn featured_rotation_config)]
+    pub type FeaturedRotationSettings<T: Config> =
+        StorageValue<_, FeaturedRotationConfig<T>, OptionQuery>;
+
+    #[pallet::storage]
+    #[pallet::getter(fn current_featured_rotation)]
+    pub type CurrentFeaturedRotation<T: Config> = StorageValue<_, FeaturedRotation<T>, OptionQuery>;
+
+    #[pallet::storage]
+    pub type NextFeaturedRotationId<T: Config> = StorageValue<_, RotationId, ValueQuery>;
+
+    #[pallet::storage]
+    pub type FeaturedAccountPurchases<T: Config> = StorageNMap<
+        _,
+        (
+            NMapKey<Blake2_128Concat, RotationId>,
+            NMapKey<Blake2_128Concat, u8>,
+            NMapKey<Blake2_128Concat, T::AccountId>,
+        ),
+        u32,
+        ValueQuery,
+    >;
+
+    #[pallet::hooks]
+    impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        fn on_runtime_upgrade() -> Weight {
+            let mut weight = T::DbWeight::get().reads(1);
+            if StorageVersion::get::<Pallet<T>>() < STORAGE_VERSION {
+                for domain in PauseDomain::ALL {
+                    PausedDomains::<T>::insert(domain, true);
+                }
+                STORAGE_VERSION.put::<Pallet<T>>();
+                weight = weight.saturating_add(T::DbWeight::get().writes(6));
+            }
+            weight
+        }
+
+        fn on_initialize(now: BlockNumberFor<T>) -> Weight {
+            let Some(config) = FeaturedRotationSettings::<T>::get() else {
+                return T::DbWeight::get().reads(1);
+            };
+            if !config.enabled {
+                return T::DbWeight::get().reads(1);
+            }
+            let due = CurrentFeaturedRotation::<T>::get()
+                .map(|rotation| now >= rotation.ends_at)
+                .unwrap_or(true);
+            if !due {
+                return T::DbWeight::get().reads(2);
+            }
+            if Self::try_rotate_featured(now, &config).is_err() {
+                PausedDomains::<T>::insert(PauseDomain::FeaturedVending, true);
+                Self::deposit_event(Event::FeaturedRotationFailed {
+                    rotation_id: NextFeaturedRotationId::<T>::get().saturating_add(1),
+                    attempted_at: now,
+                    reason: FeaturedRotationFailureReason::UnsafeOrInvalidConfiguration,
+                    config_version: config.config_version,
+                });
+            }
+            T::WeightInfo::rotate_featured()
+        }
+    }
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
@@ -185,6 +602,76 @@ pub mod pallet {
             account: T::AccountId,
             receipt_hash: T::Hash,
         },
+        TicketAssetConfigured {
+            asset_id: AssetId,
+            config_version: u32,
+        },
+        TicketRewardPolicyUpdated {
+            game_id: GameId,
+            ruleset_version: u32,
+            config_version: u32,
+            enabled: bool,
+        },
+        GameplayTicketsGranted {
+            account: T::AccountId,
+            game_id: GameId,
+            ruleset_version: u32,
+            result_id_hash: T::Hash,
+            amount: TicketBalance,
+            window_index: u64,
+            config_version: u32,
+        },
+        TicketsTransferred {
+            from: T::AccountId,
+            to: T::AccountId,
+            amount: TicketBalance,
+        },
+        ArcadeEconomyPauseChanged {
+            domain: PauseDomain,
+            paused: bool,
+        },
+        ArcadeEconomyAccountRestrictionChanged {
+            account: T::AccountId,
+            restricted: bool,
+        },
+        PrizeSkuUpdated {
+            sku_id: SkuId,
+            kind: PrizeKind,
+            config_version: u32,
+            enabled: bool,
+        },
+        FeaturedRotationConfigured {
+            config_version: u32,
+            period_blocks: BlockNumberFor<T>,
+            slot_count: u32,
+        },
+        FeaturedRotationAdvanced {
+            rotation_id: RotationId,
+            starts_at: BlockNumberFor<T>,
+            ends_at: BlockNumberFor<T>,
+            subject_ids: FeaturedSubjectsOf<T>,
+            config_version: u32,
+        },
+        FeaturedRotationFailed {
+            rotation_id: RotationId,
+            attempted_at: BlockNumberFor<T>,
+            reason: FeaturedRotationFailureReason,
+            config_version: u32,
+        },
+        PrizeRedeemed {
+            account: T::AccountId,
+            sku_id: SkuId,
+            ticket_amount: TicketBalance,
+            card_ids: PrizeCardIdsOf<T>,
+            config_version: u32,
+        },
+        PrizePurchased {
+            account: T::AccountId,
+            target: PurchaseTarget,
+            native_amount: Balance,
+            card_ids: PrizeCardIdsOf<T>,
+            config_version: u32,
+        },
     }
 
     #[pallet::error]
@@ -196,6 +683,27 @@ pub mod pallet {
         InsufficientSponsorFunds,
         ReceiptAlreadyFulfilled,
         ArithmeticOverflow,
+        TicketAssetNotConfigured,
+        TicketAssetDoesNotExist,
+        TicketAssetMustBeIndivisible,
+        InvalidRewardPolicy,
+        RewardResultAlreadyProcessed,
+        SubsystemPaused,
+        AccountNotEligible,
+        AccountRestricted,
+        InvalidAmount,
+        InvalidConfigVersion,
+        PrizeSkuNotFound,
+        PrizeSkuDisabled,
+        PrizePaymentNotSupported,
+        PrizeSoldOut,
+        PrizeAccountLimitReached,
+        InvalidFeaturedRotationConfig,
+        FeaturedRotationUnavailable,
+        FeaturedSlotNotFound,
+        StaleRotation,
+        TooManyPrizeCards,
+        PrizeFulfillmentFailed,
     }
 
     #[pallet::call]
@@ -358,6 +866,201 @@ pub mod pallet {
                 amount,
             });
             Ok(())
+        }
+
+        #[pallet::call_index(10)]
+        #[pallet::weight(T::WeightInfo::set_ticket_asset())]
+        pub fn set_ticket_asset(
+            origin: OriginFor<T>,
+            asset_id: AssetId,
+            config_version: u32,
+        ) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            ensure!(config_version > 0, Error::<T>::InvalidConfigVersion);
+            ensure!(
+                T::TicketAssets::asset_exists(asset_id),
+                Error::<T>::TicketAssetDoesNotExist
+            );
+            ensure!(
+                T::TicketAssets::decimals(asset_id) == 0,
+                Error::<T>::TicketAssetMustBeIndivisible
+            );
+            if let Some(current) = TicketAsset::<T>::get() {
+                ensure!(
+                    config_version > current.config_version,
+                    Error::<T>::InvalidConfigVersion
+                );
+            }
+            TicketAsset::<T>::put(TicketAssetConfig {
+                asset_id,
+                config_version,
+            });
+            Self::deposit_event(Event::TicketAssetConfigured {
+                asset_id,
+                config_version,
+            });
+            Ok(())
+        }
+
+        #[pallet::call_index(11)]
+        #[pallet::weight(T::WeightInfo::set_ticket_reward_policy())]
+        pub fn set_ticket_reward_policy(
+            origin: OriginFor<T>,
+            game_id: GameId,
+            ruleset_version: u32,
+            policy: TicketRewardPolicy<T>,
+        ) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            Self::validate_reward_policy(&policy)?;
+            if let Some(current) = TicketRewardPolicies::<T>::get(game_id, ruleset_version) {
+                ensure!(
+                    policy.config_version > current.config_version,
+                    Error::<T>::InvalidConfigVersion
+                );
+            }
+            let config_version = policy.config_version;
+            let enabled = policy.enabled;
+            TicketRewardPolicies::<T>::insert(game_id, ruleset_version, policy);
+            Self::deposit_event(Event::TicketRewardPolicyUpdated {
+                game_id,
+                ruleset_version,
+                config_version,
+                enabled,
+            });
+            Ok(())
+        }
+
+        #[pallet::call_index(12)]
+        #[pallet::weight(T::WeightInfo::set_arcade_economy_pause())]
+        pub fn set_arcade_economy_pause(
+            origin: OriginFor<T>,
+            domain: PauseDomain,
+            paused: bool,
+        ) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            PausedDomains::<T>::insert(domain, paused);
+            Self::deposit_event(Event::ArcadeEconomyPauseChanged { domain, paused });
+            Ok(())
+        }
+
+        #[pallet::call_index(13)]
+        #[pallet::weight(T::WeightInfo::set_arcade_account_restriction())]
+        pub fn set_arcade_account_restriction(
+            origin: OriginFor<T>,
+            account: T::AccountId,
+            restricted: bool,
+        ) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            RestrictedAccounts::<T>::insert(&account, restricted);
+            Self::deposit_event(Event::ArcadeEconomyAccountRestrictionChanged {
+                account,
+                restricted,
+            });
+            Ok(())
+        }
+
+        #[pallet::call_index(14)]
+        #[pallet::weight(T::WeightInfo::transfer_tickets())]
+        #[transactional]
+        pub fn transfer_tickets(
+            origin: OriginFor<T>,
+            to: T::AccountId,
+            amount: TicketBalance,
+        ) -> DispatchResult {
+            let from = ensure_signed(origin)?;
+            ensure!(
+                !PausedDomains::<T>::get(PauseDomain::TicketTransfers),
+                Error::<T>::SubsystemPaused
+            );
+            ensure!(amount > 0, Error::<T>::InvalidAmount);
+            Self::ensure_account_eligible(&from)?;
+            Self::ensure_account_eligible(&to)?;
+            let asset = TicketAsset::<T>::get().ok_or(Error::<T>::TicketAssetNotConfigured)?;
+            T::TicketAssets::transfer(asset.asset_id, &from, &to, amount)?;
+            Self::deposit_event(Event::TicketsTransferred { from, to, amount });
+            Ok(())
+        }
+
+        #[pallet::call_index(15)]
+        #[pallet::weight(T::WeightInfo::upsert_prize_sku())]
+        pub fn upsert_prize_sku(
+            origin: OriginFor<T>,
+            sku_id: SkuId,
+            sku: PrizeSku<T>,
+        ) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            Self::validate_prize_sku(&sku)?;
+            T::PrizeFulfillment::validate_pool(sku.pool_id, &[])?;
+            if let Some(current) = PrizeSkus::<T>::get(sku_id) {
+                ensure!(
+                    sku.config_version > current.config_version,
+                    Error::<T>::InvalidConfigVersion
+                );
+            }
+            let kind = sku.kind;
+            let config_version = sku.config_version;
+            let enabled = sku.enabled;
+            PrizeSkus::<T>::insert(sku_id, sku);
+            Self::deposit_event(Event::PrizeSkuUpdated {
+                sku_id,
+                kind,
+                config_version,
+                enabled,
+            });
+            Ok(())
+        }
+
+        #[pallet::call_index(16)]
+        #[pallet::weight(T::WeightInfo::set_featured_rotation_config())]
+        pub fn set_featured_rotation_config(
+            origin: OriginFor<T>,
+            config: FeaturedRotationConfig<T>,
+        ) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            Self::validate_featured_rotation_config(&config)?;
+            T::PrizeFulfillment::validate_pool(
+                config.pool_id,
+                config.eligible_subjects.as_slice(),
+            )?;
+            if let Some(current) = FeaturedRotationSettings::<T>::get() {
+                ensure!(
+                    config.config_version > current.config_version,
+                    Error::<T>::InvalidConfigVersion
+                );
+            }
+            let config_version = config.config_version;
+            let period_blocks = config.period_blocks;
+            FeaturedRotationSettings::<T>::put(config);
+            Self::deposit_event(Event::FeaturedRotationConfigured {
+                config_version,
+                period_blocks,
+                slot_count: T::FeaturedSlotCount::get(),
+            });
+            Ok(())
+        }
+
+        #[pallet::call_index(17)]
+        #[pallet::weight(T::WeightInfo::redeem_prize_with_tickets())]
+        #[transactional]
+        pub fn redeem_prize_with_tickets(
+            origin: OriginFor<T>,
+            sku_id: SkuId,
+            expected_version: u32,
+        ) -> DispatchResult {
+            let account = ensure_signed(origin)?;
+            Self::try_redeem_prize_with_tickets(&account, sku_id, expected_version)
+        }
+
+        #[pallet::call_index(18)]
+        #[pallet::weight(T::WeightInfo::purchase_prize_with_native())]
+        #[transactional]
+        pub fn purchase_prize_with_native(
+            origin: OriginFor<T>,
+            target: PurchaseTarget,
+            expected_version: u32,
+        ) -> DispatchResult {
+            let account = ensure_signed(origin)?;
+            Self::try_purchase_prize_with_native(&account, target, expected_version)
         }
     }
 
@@ -525,6 +1228,461 @@ pub mod pallet {
                 Ok(())
             })
         }
+
+        pub fn ticket_balance(account: &T::AccountId) -> TicketBalance {
+            TicketAsset::<T>::get()
+                .map(|config| T::TicketAssets::balance(config.asset_id, account))
+                .unwrap_or_default()
+        }
+
+        #[transactional]
+        pub fn try_grant_gameplay_tickets(
+            account: &T::AccountId,
+            game_id: GameId,
+            ruleset_version: u32,
+            result_id_hash: T::Hash,
+            score: u64,
+            ranked: bool,
+            ended_reason: u8,
+        ) -> Result<TicketBalance, sp_runtime::DispatchError> {
+            if PausedDomains::<T>::get(PauseDomain::TicketEarning) {
+                return Ok(0);
+            }
+            let Some(policy) = TicketRewardPolicies::<T>::get(game_id, ruleset_version) else {
+                return Ok(0);
+            };
+            let reward_mode = if ranked {
+                TicketRewardMode::Ranked
+            } else {
+                TicketRewardMode::Unranked
+            };
+            if !policy.enabled
+                || !policy.eligible_modes.contains(&reward_mode)
+                || !policy.eligible_ended_reasons.contains(&ended_reason)
+                || RestrictedAccounts::<T>::get(account)
+                || !T::AccountEligibility::eligible(account)
+            {
+                return Ok(0);
+            }
+            if TicketRewardedResults::<T>::get(&result_id_hash) {
+                return Ok(0);
+            }
+
+            let tier_award = policy
+                .score_tiers
+                .iter()
+                .rev()
+                .find(|tier| score >= tier.min_score)
+                .map(|tier| tier.tickets)
+                .unwrap_or_default();
+            let desired = tier_award.min(policy.per_result_cap);
+            let window_index = Self::window_index(policy.window_blocks);
+            let issued =
+                TicketEarningWindows::<T>::get((game_id, ruleset_version, account, window_index));
+            let remaining = policy.per_account_window_cap.saturating_sub(issued);
+            let amount = desired.min(remaining);
+
+            TicketRewardedResults::<T>::insert(&result_id_hash, true);
+            if amount == 0 {
+                return Ok(0);
+            }
+            let asset = TicketAsset::<T>::get().ok_or(Error::<T>::TicketAssetNotConfigured)?;
+            T::TicketAssets::mint(asset.asset_id, account, amount)?;
+            TicketEarningWindows::<T>::insert(
+                (game_id, ruleset_version, account, window_index),
+                issued
+                    .checked_add(amount)
+                    .ok_or(Error::<T>::ArithmeticOverflow)?,
+            );
+            Self::deposit_event(Event::GameplayTicketsGranted {
+                account: account.clone(),
+                game_id,
+                ruleset_version,
+                result_id_hash,
+                amount,
+                window_index,
+                config_version: policy.config_version,
+            });
+            Ok(amount)
+        }
+
+        fn validate_reward_policy(policy: &TicketRewardPolicy<T>) -> DispatchResult {
+            ensure!(policy.config_version > 0, Error::<T>::InvalidConfigVersion);
+            ensure!(
+                policy.window_blocks.saturated_into::<u64>() > 0
+                    && policy.per_result_cap > 0
+                    && policy.per_account_window_cap >= policy.per_result_cap
+                    && !policy.score_tiers.is_empty()
+                    && !policy.eligible_modes.is_empty()
+                    && !policy.eligible_ended_reasons.is_empty(),
+                Error::<T>::InvalidRewardPolicy
+            );
+            for (index, mode) in policy.eligible_modes.iter().enumerate() {
+                ensure!(
+                    !policy
+                        .eligible_modes
+                        .iter()
+                        .skip(index + 1)
+                        .any(|other| other == mode),
+                    Error::<T>::InvalidRewardPolicy
+                );
+            }
+            let mut previous = None;
+            for tier in policy.score_tiers.iter() {
+                ensure!(tier.tickets > 0, Error::<T>::InvalidRewardPolicy);
+                if let Some(min_score) = previous {
+                    ensure!(tier.min_score > min_score, Error::<T>::InvalidRewardPolicy);
+                }
+                previous = Some(tier.min_score);
+            }
+            Ok(())
+        }
+
+        fn validate_prize_sku(sku: &PrizeSku<T>) -> DispatchResult {
+            ensure!(sku.config_version > 0, Error::<T>::InvalidConfigVersion);
+            let ticket_valid = sku.ticket_price.map(|price| price > 0).unwrap_or(false);
+            let native_valid = sku.native_price.map(|price| price > 0).unwrap_or(false);
+            ensure!(ticket_valid || native_valid, Error::<T>::InvalidAmount);
+            ensure!(
+                sku.window_blocks.saturated_into::<u64>() > 0
+                    && sku.per_account_window_cap > 0
+                    && sku.total_cap.map(|cap| cap > 0).unwrap_or(true),
+                Error::<T>::InvalidAmount
+            );
+            Ok(())
+        }
+
+        fn validate_featured_rotation_config(config: &FeaturedRotationConfig<T>) -> DispatchResult {
+            ensure!(config.config_version > 0, Error::<T>::InvalidConfigVersion);
+            let slot_count = T::FeaturedSlotCount::get();
+            ensure!(
+                slot_count > 0
+                    && slot_count <= T::MaxFeaturedSlots::get()
+                    && config.eligible_subjects.len() as u32 >= slot_count
+                    && config.period_blocks.saturated_into::<u64>() > 0
+                    && config.native_price > 0
+                    && config.per_slot_cap > 0
+                    && config.per_account_limit > 0,
+                Error::<T>::InvalidFeaturedRotationConfig
+            );
+            for (index, subject) in config.eligible_subjects.iter().enumerate() {
+                ensure!(
+                    !config
+                        .eligible_subjects
+                        .iter()
+                        .skip(index + 1)
+                        .any(|other| other == subject),
+                    Error::<T>::InvalidFeaturedRotationConfig
+                );
+            }
+            Ok(())
+        }
+
+        fn ensure_account_eligible(account: &T::AccountId) -> DispatchResult {
+            ensure!(
+                !RestrictedAccounts::<T>::get(account),
+                Error::<T>::AccountRestricted
+            );
+            ensure!(
+                T::AccountEligibility::eligible(account),
+                Error::<T>::AccountNotEligible
+            );
+            Ok(())
+        }
+
+        fn window_index(window_blocks: BlockNumberFor<T>) -> u64 {
+            let now: u64 = frame_system::Pallet::<T>::block_number().saturated_into();
+            let window: u64 = window_blocks.saturated_into::<u64>().max(1);
+            now / window
+        }
+
+        fn fulfillment_kind(kind: PrizeKind) -> PrizeFulfillmentKind {
+            match kind {
+                PrizeKind::RandomSingle => PrizeFulfillmentKind::RandomSingle,
+                PrizeKind::RandomPack => PrizeFulfillmentKind::RandomPack,
+            }
+        }
+
+        fn bounded_card_ids(card_ids: Vec<u32>) -> Result<PrizeCardIdsOf<T>, DispatchError> {
+            ensure!(!card_ids.is_empty(), Error::<T>::PrizeFulfillmentFailed);
+            PrizeCardIdsOf::<T>::try_from(card_ids)
+                .map_err(|_| Error::<T>::TooManyPrizeCards.into())
+        }
+
+        fn entropy(account: &T::AccountId, target: &PurchaseTarget, nonce: u64) -> [u8; 32] {
+            let payload = (
+                account,
+                target,
+                nonce,
+                frame_system::Pallet::<T>::block_number(),
+            )
+                .encode();
+            T::RandomnessProvider::random(b"eterra/arcade-prize/v1", &payload)
+        }
+
+        fn ensure_sku_capacity(
+            account: &T::AccountId,
+            sku_id: SkuId,
+            sku: &PrizeSku<T>,
+        ) -> Result<(u64, u32, u64), DispatchError> {
+            let sold = PrizeSkuSold::<T>::get(sku_id);
+            if let Some(cap) = sku.total_cap {
+                ensure!(sold < cap, Error::<T>::PrizeSoldOut);
+            }
+            let window = Self::window_index(sku.window_blocks);
+            let account_count = PrizeSkuAccountWindows::<T>::get((sku_id, account, window));
+            ensure!(
+                account_count < sku.per_account_window_cap,
+                Error::<T>::PrizeAccountLimitReached
+            );
+            Ok((sold, account_count, window))
+        }
+
+        #[transactional]
+        fn try_redeem_prize_with_tickets(
+            account: &T::AccountId,
+            sku_id: SkuId,
+            expected_version: u32,
+        ) -> DispatchResult {
+            ensure!(
+                !PausedDomains::<T>::get(PauseDomain::TicketRedemption),
+                Error::<T>::SubsystemPaused
+            );
+            Self::ensure_account_eligible(account)?;
+            let sku = PrizeSkus::<T>::get(sku_id).ok_or(Error::<T>::PrizeSkuNotFound)?;
+            ensure!(sku.enabled, Error::<T>::PrizeSkuDisabled);
+            ensure!(
+                sku.config_version == expected_version,
+                Error::<T>::InvalidConfigVersion
+            );
+            let price = sku
+                .ticket_price
+                .ok_or(Error::<T>::PrizePaymentNotSupported)?;
+            let (sold, account_count, window) = Self::ensure_sku_capacity(account, sku_id, &sku)?;
+            let target = PurchaseTarget::CatalogSku(sku_id);
+            let cards = T::PrizeFulfillment::fulfill(
+                account,
+                Self::fulfillment_kind(sku.kind),
+                sku.pool_id,
+                None,
+                Self::entropy(account, &target, sold),
+                PrizeAcquisitionSource::TicketClaim,
+            )?;
+            let card_ids = Self::bounded_card_ids(cards)?;
+            let asset = TicketAsset::<T>::get().ok_or(Error::<T>::TicketAssetNotConfigured)?;
+            T::TicketAssets::burn(asset.asset_id, account, price)?;
+            PrizeSkuSold::<T>::insert(
+                sku_id,
+                sold.checked_add(1).ok_or(Error::<T>::ArithmeticOverflow)?,
+            );
+            PrizeSkuAccountWindows::<T>::insert(
+                (sku_id, account, window),
+                account_count
+                    .checked_add(1)
+                    .ok_or(Error::<T>::ArithmeticOverflow)?,
+            );
+            Self::deposit_event(Event::PrizeRedeemed {
+                account: account.clone(),
+                sku_id,
+                ticket_amount: price,
+                card_ids,
+                config_version: sku.config_version,
+            });
+            Ok(())
+        }
+
+        #[transactional]
+        fn try_purchase_prize_with_native(
+            account: &T::AccountId,
+            target: PurchaseTarget,
+            expected_version: u32,
+        ) -> DispatchResult {
+            Self::ensure_account_eligible(account)?;
+            match target.clone() {
+                PurchaseTarget::CatalogSku(sku_id) => {
+                    ensure!(
+                        !PausedDomains::<T>::get(PauseDomain::RandomVending),
+                        Error::<T>::SubsystemPaused
+                    );
+                    let sku = PrizeSkus::<T>::get(sku_id).ok_or(Error::<T>::PrizeSkuNotFound)?;
+                    ensure!(sku.enabled, Error::<T>::PrizeSkuDisabled);
+                    ensure!(
+                        sku.config_version == expected_version,
+                        Error::<T>::InvalidConfigVersion
+                    );
+                    let price = sku
+                        .native_price
+                        .ok_or(Error::<T>::PrizePaymentNotSupported)?;
+                    let (sold, account_count, window) =
+                        Self::ensure_sku_capacity(account, sku_id, &sku)?;
+                    let cards = T::PrizeFulfillment::fulfill(
+                        account,
+                        Self::fulfillment_kind(sku.kind),
+                        sku.pool_id,
+                        None,
+                        Self::entropy(account, &target, sold),
+                        PrizeAcquisitionSource::NativePull,
+                    )?;
+                    let card_ids = Self::bounded_card_ids(cards)?;
+                    T::NativePayments::pay_treasury(account, price)?;
+                    PrizeSkuSold::<T>::insert(
+                        sku_id,
+                        sold.checked_add(1).ok_or(Error::<T>::ArithmeticOverflow)?,
+                    );
+                    PrizeSkuAccountWindows::<T>::insert(
+                        (sku_id, account, window),
+                        account_count
+                            .checked_add(1)
+                            .ok_or(Error::<T>::ArithmeticOverflow)?,
+                    );
+                    Self::deposit_event(Event::PrizePurchased {
+                        account: account.clone(),
+                        target,
+                        native_amount: price,
+                        card_ids,
+                        config_version: sku.config_version,
+                    });
+                }
+                PurchaseTarget::FeaturedSlot { rotation_id, slot } => {
+                    ensure!(
+                        !PausedDomains::<T>::get(PauseDomain::FeaturedVending),
+                        Error::<T>::SubsystemPaused
+                    );
+                    let mut rotation = CurrentFeaturedRotation::<T>::get()
+                        .ok_or(Error::<T>::FeaturedRotationUnavailable)?;
+                    ensure!(
+                        rotation.rotation_id == rotation_id,
+                        Error::<T>::StaleRotation
+                    );
+                    ensure!(
+                        rotation.config_version == expected_version,
+                        Error::<T>::InvalidConfigVersion
+                    );
+                    let now = frame_system::Pallet::<T>::block_number();
+                    ensure!(
+                        now >= rotation.starts_at && now < rotation.ends_at,
+                        Error::<T>::StaleRotation
+                    );
+                    let rotation_pool_id = rotation.pool_id;
+                    let rotation_account_limit = rotation.per_account_limit;
+                    let offer = rotation
+                        .offers
+                        .get_mut(slot as usize)
+                        .ok_or(Error::<T>::FeaturedSlotNotFound)?;
+                    ensure!(offer.sold < offer.stock_cap, Error::<T>::PrizeSoldOut);
+                    let account_count =
+                        FeaturedAccountPurchases::<T>::get((rotation_id, slot, account));
+                    ensure!(
+                        account_count < rotation_account_limit,
+                        Error::<T>::PrizeAccountLimitReached
+                    );
+                    let subject_id = offer.subject_id;
+                    let price = offer.native_price;
+                    let offer_version = offer.config_version;
+                    let cards = T::PrizeFulfillment::fulfill(
+                        account,
+                        PrizeFulfillmentKind::FeaturedSubject,
+                        rotation_pool_id,
+                        Some(subject_id),
+                        Self::entropy(account, &target, u64::from(offer.sold)),
+                        PrizeAcquisitionSource::NativePull,
+                    )?;
+                    let card_ids = Self::bounded_card_ids(cards)?;
+                    T::NativePayments::pay_treasury(account, price)?;
+                    offer.sold = offer
+                        .sold
+                        .checked_add(1)
+                        .ok_or(Error::<T>::ArithmeticOverflow)?;
+                    CurrentFeaturedRotation::<T>::put(rotation);
+                    FeaturedAccountPurchases::<T>::insert(
+                        (rotation_id, slot, account),
+                        account_count
+                            .checked_add(1)
+                            .ok_or(Error::<T>::ArithmeticOverflow)?,
+                    );
+                    Self::deposit_event(Event::PrizePurchased {
+                        account: account.clone(),
+                        target,
+                        native_amount: price,
+                        card_ids,
+                        config_version: offer_version,
+                    });
+                }
+            }
+            Ok(())
+        }
+
+        fn try_rotate_featured(
+            now: BlockNumberFor<T>,
+            config: &FeaturedRotationConfig<T>,
+        ) -> DispatchResult {
+            Self::validate_featured_rotation_config(config)?;
+            let rotation_id = NextFeaturedRotationId::<T>::get()
+                .checked_add(1)
+                .ok_or(Error::<T>::ArithmeticOverflow)?;
+            let seed = T::RandomnessProvider::random(
+                b"eterra/featured-rotation/v1",
+                &(rotation_id, now, config.config_version).encode(),
+            );
+            let mut offers = FeaturedOffersOf::<T>::default();
+            let mut chosen: Vec<SubjectId> = Vec::new();
+            let pool_len = config.eligible_subjects.len();
+            for slot in 0..T::FeaturedSlotCount::get() {
+                let slot_entropy = T::RandomnessProvider::random(
+                    b"eterra/featured-slot/v1",
+                    &(seed, rotation_id, slot).encode(),
+                );
+                let mut index = u32::from_le_bytes([
+                    slot_entropy[0],
+                    slot_entropy[1],
+                    slot_entropy[2],
+                    slot_entropy[3],
+                ]) as usize
+                    % pool_len;
+                for _ in 0..pool_len {
+                    let subject = config.eligible_subjects[index];
+                    if !chosen.contains(&subject) {
+                        chosen.push(subject);
+                        offers
+                            .try_push(FeaturedOffer {
+                                subject_id: subject,
+                                native_price: config.native_price,
+                                stock_cap: config.per_slot_cap,
+                                sold: 0,
+                                config_version: config.config_version,
+                            })
+                            .map_err(|_| Error::<T>::InvalidFeaturedRotationConfig)?;
+                        break;
+                    }
+                    index = (index + 1) % pool_len;
+                }
+            }
+            ensure!(
+                offers.len() as u32 == T::FeaturedSlotCount::get(),
+                Error::<T>::InvalidFeaturedRotationConfig
+            );
+            let subject_ids = FeaturedSubjectsOf::<T>::try_from(chosen)
+                .map_err(|_| Error::<T>::InvalidFeaturedRotationConfig)?;
+            let ends_at = now.saturating_add(config.period_blocks);
+            CurrentFeaturedRotation::<T>::put(FeaturedRotation::<T> {
+                rotation_id,
+                starts_at: now,
+                ends_at,
+                pool_id: config.pool_id,
+                per_account_limit: config.per_account_limit,
+                offers,
+                config_version: config.config_version,
+            });
+            NextFeaturedRotationId::<T>::put(rotation_id);
+            Self::deposit_event(Event::FeaturedRotationAdvanced {
+                rotation_id,
+                starts_at: now,
+                ends_at,
+                subject_ids,
+                config_version: config.config_version,
+            });
+            Ok(())
+        }
     }
 }
 
@@ -533,14 +1691,15 @@ mod tests {
     use super::*;
     use frame_support::{
         assert_noop, assert_ok, construct_runtime, parameter_types,
-        traits::{ConstU32, Everything, GetStorageVersion, StorageVersion},
+        traits::{ConstU32, Everything, GetStorageVersion, Hooks, StorageVersion},
     };
     use frame_system as system;
     use sp_core::H256;
     use sp_runtime::{
         traits::{BlakeTwo256, IdentityLookup},
-        BuildStorage,
+        BuildStorage, TokenError,
     };
+    use std::{cell::RefCell, collections::BTreeMap};
 
     type AccountId = u64;
     type Block = system::mocking::MockBlock<Test>;
@@ -592,9 +1751,130 @@ mod tests {
         type RuntimeEvent = RuntimeEvent;
         type WeightInfo = ();
         type AdminOrigin = frame_system::EnsureRoot<AccountId>;
+        type TicketAssets = MockTicketAssets;
+        type NativePayments = MockNativePayments;
+        type PrizeFulfillment = MockPrizeFulfillment;
+        type AccountEligibility = MockAccountEligibility;
+        type RandomnessProvider = MockRandomness;
         type ArcadeCreditFaucetGameId = ArcadeCreditFaucetGameId;
         type ArcadeCreditFaucetType = ArcadeCreditFaucetType;
         type ArcadeCreditFaucetAmount = ArcadeCreditFaucetAmount;
+        type MaxScoreTiers = ConstU32<16>;
+        type MaxEligibleRewardModes = ConstU32<2>;
+        type MaxEligibleEndedReasons = ConstU32<16>;
+        type MaxFeaturedPoolSubjects = ConstU32<128>;
+        type MaxFeaturedSlots = ConstU32<12>;
+        type FeaturedSlotCount = ConstU32<12>;
+        type MaxPrizeCards = ConstU32<6>;
+    }
+
+    pub struct MockTicketAssets;
+    thread_local! {
+        static MOCK_TICKET_BALANCES: RefCell<BTreeMap<AccountId, TicketBalance>> = RefCell::new(BTreeMap::new());
+        static MOCK_NATIVE_PAYMENTS: RefCell<Vec<(AccountId, u128)>> = const { RefCell::new(Vec::new()) };
+        static MOCK_MINT_FAILS: RefCell<bool> = const { RefCell::new(false) };
+        static MOCK_NATIVE_PAYMENT_FAILS: RefCell<bool> = const { RefCell::new(false) };
+        static MOCK_FULFILLMENT_FAILS: RefCell<bool> = const { RefCell::new(false) };
+    }
+
+    impl TicketAssetProvider<AccountId> for MockTicketAssets {
+        fn asset_exists(asset_id: AssetId) -> bool {
+            matches!(asset_id, 3 | 4)
+        }
+        fn decimals(asset_id: AssetId) -> u8 {
+            if asset_id == 3 {
+                0
+            } else {
+                2
+            }
+        }
+        fn balance(_asset_id: AssetId, account: &AccountId) -> TicketBalance {
+            MOCK_TICKET_BALANCES
+                .with(|balances| balances.borrow().get(account).copied().unwrap_or_default())
+        }
+        fn mint(_asset_id: AssetId, account: &AccountId, amount: TicketBalance) -> DispatchResult {
+            if MOCK_MINT_FAILS.with(|fails| *fails.borrow()) {
+                return Err(TokenError::FundsUnavailable.into());
+            }
+            MOCK_TICKET_BALANCES.with(|balances| {
+                let current = balances.borrow().get(account).copied().unwrap_or_default();
+                let next = current
+                    .checked_add(amount)
+                    .ok_or(Error::<Test>::ArithmeticOverflow)?;
+                balances.borrow_mut().insert(*account, next);
+                Ok(())
+            })
+        }
+        fn burn(_asset_id: AssetId, account: &AccountId, amount: TicketBalance) -> DispatchResult {
+            MOCK_TICKET_BALANCES.with(|balances| {
+                let current = balances.borrow().get(account).copied().unwrap_or_default();
+                let next = current
+                    .checked_sub(amount)
+                    .ok_or(TokenError::FundsUnavailable)?;
+                balances.borrow_mut().insert(*account, next);
+                Ok(())
+            })
+        }
+        fn transfer(
+            _asset_id: AssetId,
+            from: &AccountId,
+            to: &AccountId,
+            amount: TicketBalance,
+        ) -> DispatchResult {
+            Self::burn(3, from, amount)?;
+            Self::mint(3, to, amount)
+        }
+    }
+
+    pub struct MockNativePayments;
+    impl NativePaymentProvider<AccountId> for MockNativePayments {
+        fn pay_treasury(account: &AccountId, amount: u128) -> DispatchResult {
+            if MOCK_NATIVE_PAYMENT_FAILS.with(|fails| *fails.borrow()) {
+                return Err(TokenError::FundsUnavailable.into());
+            }
+            MOCK_NATIVE_PAYMENTS.with(|payments| payments.borrow_mut().push((*account, amount)));
+            Ok(())
+        }
+    }
+
+    pub struct MockPrizeFulfillment;
+    impl PrizeFulfillmentProvider<AccountId> for MockPrizeFulfillment {
+        fn validate_pool(_pool_id: PoolId, _featured_subjects: &[SubjectId]) -> DispatchResult {
+            Ok(())
+        }
+
+        fn fulfill(
+            _account: &AccountId,
+            kind: PrizeFulfillmentKind,
+            _pool_id: PoolId,
+            _subject_id: Option<SubjectId>,
+            _entropy: [u8; 32],
+            _source: PrizeAcquisitionSource,
+        ) -> Result<Vec<u32>, sp_runtime::DispatchError> {
+            if MOCK_FULFILLMENT_FAILS.with(|fails| *fails.borrow()) {
+                return Err(Error::<Test>::PrizeFulfillmentFailed.into());
+            }
+            Ok(match kind {
+                PrizeFulfillmentKind::RandomPack => vec![1, 2, 3, 4, 5, 6],
+                _ => vec![1],
+            })
+        }
+    }
+
+    pub struct MockAccountEligibility;
+    impl AccountEligibilityProvider<AccountId> for MockAccountEligibility {
+        fn eligible(account: &AccountId) -> bool {
+            *account != 99
+        }
+    }
+
+    pub struct MockRandomness;
+    impl ArcadeRandomnessProvider for MockRandomness {
+        fn random(domain: &[u8], payload: &[u8]) -> [u8; 32] {
+            let mut bytes = domain.to_vec();
+            bytes.extend_from_slice(payload);
+            sp_io::hashing::blake2_256(&bytes)
+        }
     }
 
     parameter_types! {
@@ -608,7 +1888,14 @@ mod tests {
             .build_storage()
             .expect("frame-system storage build should not fail");
         let mut ext = sp_io::TestExternalities::new(storage);
-        ext.execute_with(|| System::set_block_number(1));
+        ext.execute_with(|| {
+            System::set_block_number(1);
+            MOCK_TICKET_BALANCES.with(|balances| balances.borrow_mut().clear());
+            MOCK_NATIVE_PAYMENTS.with(|payments| payments.borrow_mut().clear());
+            MOCK_MINT_FAILS.with(|fails| *fails.borrow_mut() = false);
+            MOCK_NATIVE_PAYMENT_FAILS.with(|fails| *fails.borrow_mut() = false);
+            MOCK_FULFILLMENT_FAILS.with(|fails| *fails.borrow_mut() = false);
+        });
         ext
     }
 
@@ -696,12 +1983,41 @@ mod tests {
     }
 
     #[test]
-    fn storage_version_is_declared_without_migration_requirement() {
+    fn v2_migration_pauses_every_new_domain_and_is_idempotent() {
         new_test_ext().execute_with(|| {
+            StorageVersion::new(1).put::<Pallet<Test>>();
+            for domain in PauseDomain::ALL {
+                PausedDomains::<Test>::insert(domain, false);
+                assert!(!PausedDomains::<Test>::get(domain));
+            }
+
+            <Pallet<Test> as Hooks<u64>>::on_runtime_upgrade();
             assert_eq!(
-                Pallet::<Test>::in_code_storage_version(),
-                StorageVersion::new(1)
+                Pallet::<Test>::on_chain_storage_version(),
+                StorageVersion::new(2)
             );
+            for domain in PauseDomain::ALL {
+                assert!(PausedDomains::<Test>::get(domain));
+            }
+
+            PausedDomains::<Test>::insert(PauseDomain::TicketTransfers, false);
+            <Pallet<Test> as Hooks<u64>>::on_runtime_upgrade();
+            assert!(!PausedDomains::<Test>::get(PauseDomain::TicketTransfers));
+        });
+    }
+
+    #[test]
+    fn default_genesis_starts_every_arcade_economy_domain_paused() {
+        let mut storage = system::GenesisConfig::<Test>::default()
+            .build_storage()
+            .expect("frame-system storage build should not fail");
+        GenesisConfig::<Test>::default()
+            .assimilate_storage(&mut storage)
+            .expect("economy genesis should assimilate");
+        sp_io::TestExternalities::new(storage).execute_with(|| {
+            for domain in PauseDomain::ALL {
+                assert!(PausedDomains::<Test>::get(domain));
+            }
         });
     }
 
@@ -831,6 +2147,756 @@ mod tests {
                 EterraEconomy::grant_credit(RuntimeOrigin::root(), 10, 42, 9, 1),
                 Error::<Test>::ArithmeticOverflow
             );
+        });
+    }
+
+    fn reward_policy() -> TicketRewardPolicy<Test> {
+        TicketRewardPolicy::<Test> {
+            enabled: true,
+            eligible_modes: vec![TicketRewardMode::Ranked]
+                .try_into()
+                .expect("mode bound"),
+            eligible_ended_reasons: vec![0u8].try_into().expect("reason bound"),
+            score_tiers: vec![
+                ScoreTier {
+                    min_score: 100,
+                    tickets: 10,
+                },
+                ScoreTier {
+                    min_score: 1_000,
+                    tickets: 40,
+                },
+            ]
+            .try_into()
+            .expect("tier bound"),
+            per_result_cap: 50,
+            window_blocks: 100,
+            per_account_window_cap: 70,
+            config_version: 1,
+        }
+    }
+
+    fn configure_ticket_rewards() {
+        assert_ok!(EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 3, 1));
+        assert_ok!(EterraEconomy::set_ticket_reward_policy(
+            RuntimeOrigin::root(),
+            1003,
+            1,
+            reward_policy(),
+        ));
+        assert_ok!(EterraEconomy::set_arcade_economy_pause(
+            RuntimeOrigin::root(),
+            PauseDomain::TicketEarning,
+            false,
+        ));
+    }
+
+    fn random_pack_sku(config_version: u32) -> PrizeSku<Test> {
+        PrizeSku::<Test> {
+            kind: PrizeKind::RandomPack,
+            pool_id: 9,
+            ticket_price: Some(20),
+            native_price: Some(500),
+            enabled: true,
+            total_cap: Some(10),
+            per_account_window_cap: 2,
+            window_blocks: 100,
+            config_version,
+        }
+    }
+
+    fn featured_config(config_version: u32) -> FeaturedRotationConfig<Test> {
+        FeaturedRotationConfig::<Test> {
+            enabled: true,
+            pool_id: 5,
+            eligible_subjects: (1u32..=20)
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("pool bound"),
+            period_blocks: 5,
+            native_price: 250,
+            per_slot_cap: 2,
+            per_account_limit: 1,
+            config_version,
+        }
+    }
+
+    #[test]
+    fn ticket_asset_configuration_requires_zero_decimals() {
+        new_test_ext().execute_with(|| {
+            assert_noop!(
+                EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 3, 0),
+                Error::<Test>::InvalidConfigVersion
+            );
+            assert_noop!(
+                EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 99, 1),
+                Error::<Test>::TicketAssetDoesNotExist
+            );
+            assert_noop!(
+                EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 4, 1),
+                Error::<Test>::TicketAssetMustBeIndivisible
+            );
+            assert_ok!(EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 3, 1));
+            assert_noop!(
+                EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 3, 1),
+                Error::<Test>::InvalidConfigVersion
+            );
+        });
+    }
+
+    #[test]
+    fn chain_configuration_rejects_zero_stale_and_malformed_versions() {
+        new_test_ext().execute_with(|| {
+            let mut policy = reward_policy();
+            policy.config_version = 0;
+            assert_noop!(
+                EterraEconomy::set_ticket_reward_policy(RuntimeOrigin::root(), 1003, 1, policy),
+                Error::<Test>::InvalidConfigVersion
+            );
+
+            let mut policy = reward_policy();
+            policy.eligible_modes = vec![TicketRewardMode::Ranked, TicketRewardMode::Ranked]
+                .try_into()
+                .expect("mode bound");
+            assert_noop!(
+                EterraEconomy::set_ticket_reward_policy(RuntimeOrigin::root(), 1003, 1, policy),
+                Error::<Test>::InvalidRewardPolicy
+            );
+            assert_ok!(EterraEconomy::set_ticket_reward_policy(
+                RuntimeOrigin::root(),
+                1003,
+                1,
+                reward_policy(),
+            ));
+            assert_noop!(
+                EterraEconomy::set_ticket_reward_policy(
+                    RuntimeOrigin::root(),
+                    1003,
+                    1,
+                    reward_policy(),
+                ),
+                Error::<Test>::InvalidConfigVersion
+            );
+
+            assert_noop!(
+                EterraEconomy::upsert_prize_sku(RuntimeOrigin::root(), 77, random_pack_sku(0)),
+                Error::<Test>::InvalidConfigVersion
+            );
+            let mut no_price = random_pack_sku(1);
+            no_price.ticket_price = None;
+            no_price.native_price = None;
+            assert_noop!(
+                EterraEconomy::upsert_prize_sku(RuntimeOrigin::root(), 77, no_price),
+                Error::<Test>::InvalidAmount
+            );
+            assert_ok!(EterraEconomy::upsert_prize_sku(
+                RuntimeOrigin::root(),
+                77,
+                random_pack_sku(1),
+            ));
+            assert_noop!(
+                EterraEconomy::upsert_prize_sku(RuntimeOrigin::root(), 77, random_pack_sku(1),),
+                Error::<Test>::InvalidConfigVersion
+            );
+
+            assert_noop!(
+                EterraEconomy::set_featured_rotation_config(
+                    RuntimeOrigin::root(),
+                    featured_config(0),
+                ),
+                Error::<Test>::InvalidConfigVersion
+            );
+            let mut duplicate_pool = featured_config(1);
+            duplicate_pool.eligible_subjects = vec![7u32; 12]
+                .try_into()
+                .expect("duplicate pool is bounded");
+            assert_noop!(
+                EterraEconomy::set_featured_rotation_config(RuntimeOrigin::root(), duplicate_pool,),
+                Error::<Test>::InvalidFeaturedRotationConfig
+            );
+        });
+    }
+
+    #[test]
+    fn verified_score_tiers_issue_integer_tickets_once_and_apply_window_cap() {
+        new_test_ext().execute_with(|| {
+            configure_ticket_rewards();
+            let first = H256::repeat_byte(1);
+            assert_eq!(
+                EterraEconomy::try_grant_gameplay_tickets(&42, 1003, 1, first, 1_500, true, 0)
+                    .expect("reward succeeds"),
+                40
+            );
+            assert_eq!(EterraEconomy::ticket_balance(&42), 40);
+            assert_eq!(
+                EterraEconomy::try_grant_gameplay_tickets(&42, 1003, 1, first, 1_500, true, 0)
+                    .expect("duplicate is ignored"),
+                0
+            );
+            assert_eq!(
+                EterraEconomy::try_grant_gameplay_tickets(
+                    &42,
+                    1003,
+                    1,
+                    H256::repeat_byte(2),
+                    1_500,
+                    true,
+                    0,
+                )
+                .expect("second reward succeeds"),
+                30
+            );
+            assert_eq!(EterraEconomy::ticket_balance(&42), 70);
+            assert_eq!(
+                EterraEconomy::try_grant_gameplay_tickets(
+                    &42,
+                    1003,
+                    1,
+                    H256::repeat_byte(3),
+                    1_500,
+                    false,
+                    0,
+                )
+                .expect("unranked result is ineligible"),
+                0
+            );
+        });
+    }
+
+    #[test]
+    fn earning_enforces_eligibility_and_rolls_windows_forward() {
+        new_test_ext().execute_with(|| {
+            configure_ticket_rewards();
+            let ineligible_cases = [
+                (99, true, 0, H256::repeat_byte(10)),
+                (42, false, 0, H256::repeat_byte(11)),
+                (42, true, 9, H256::repeat_byte(12)),
+            ];
+            for (account, ranked, ended_reason, result) in ineligible_cases {
+                assert_eq!(
+                    EterraEconomy::try_grant_gameplay_tickets(
+                        &account,
+                        1003,
+                        1,
+                        result,
+                        1_500,
+                        ranked,
+                        ended_reason,
+                    )
+                    .expect("ineligible results are ignored"),
+                    0
+                );
+                assert!(!TicketRewardedResults::<Test>::get(result));
+            }
+
+            assert_ok!(EterraEconomy::set_arcade_account_restriction(
+                RuntimeOrigin::root(),
+                42,
+                true,
+            ));
+            let restricted = H256::repeat_byte(13);
+            assert_eq!(
+                EterraEconomy::try_grant_gameplay_tickets(
+                    &42,
+                    1003,
+                    1,
+                    restricted,
+                    1_500,
+                    true,
+                    0,
+                )
+                .expect("restricted result is ignored"),
+                0
+            );
+            assert!(!TicketRewardedResults::<Test>::get(restricted));
+            assert_ok!(EterraEconomy::set_arcade_account_restriction(
+                RuntimeOrigin::root(),
+                42,
+                false,
+            ));
+
+            System::set_block_number(99);
+            assert_eq!(
+                EterraEconomy::try_grant_gameplay_tickets(
+                    &42,
+                    1003,
+                    1,
+                    H256::repeat_byte(14),
+                    1_500,
+                    true,
+                    0,
+                )
+                .expect("first window reward"),
+                40
+            );
+            System::set_block_number(100);
+            assert_eq!(
+                EterraEconomy::try_grant_gameplay_tickets(
+                    &42,
+                    1003,
+                    1,
+                    H256::repeat_byte(15),
+                    1_500,
+                    true,
+                    0,
+                )
+                .expect("next window reward"),
+                40
+            );
+            assert_eq!(TicketEarningWindows::<Test>::get((1003, 1, 42, 0)), 40);
+            assert_eq!(TicketEarningWindows::<Test>::get((1003, 1, 42, 1)), 40);
+        });
+    }
+
+    #[test]
+    fn failed_ticket_mint_rolls_back_replay_marker_and_cap_accounting() {
+        new_test_ext().execute_with(|| {
+            configure_ticket_rewards();
+            let result = H256::repeat_byte(20);
+            MOCK_MINT_FAILS.with(|fails| *fails.borrow_mut() = true);
+            assert_eq!(
+                EterraEconomy::try_grant_gameplay_tickets(&42, 1003, 1, result, 1_500, true, 0,),
+                Err(TokenError::FundsUnavailable.into())
+            );
+            assert!(!TicketRewardedResults::<Test>::get(result));
+            assert_eq!(TicketEarningWindows::<Test>::get((1003, 1, 42, 0)), 0);
+            assert_eq!(EterraEconomy::ticket_balance(&42), 0);
+
+            MOCK_MINT_FAILS.with(|fails| *fails.borrow_mut() = false);
+            assert_eq!(
+                EterraEconomy::try_grant_gameplay_tickets(&42, 1003, 1, result, 1_500, true, 0,)
+                    .expect("retry succeeds"),
+                40
+            );
+            assert!(TicketRewardedResults::<Test>::get(result));
+        });
+    }
+
+    #[test]
+    fn direct_ticket_transfer_uses_asset_balance_without_changing_earned_window() {
+        new_test_ext().execute_with(|| {
+            configure_ticket_rewards();
+            assert_eq!(
+                EterraEconomy::try_grant_gameplay_tickets(
+                    &42,
+                    1003,
+                    1,
+                    H256::repeat_byte(4),
+                    1_500,
+                    true,
+                    0,
+                )
+                .expect("reward succeeds"),
+                40
+            );
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::TicketTransfers,
+                false,
+            ));
+            assert_ok!(EterraEconomy::transfer_tickets(
+                RuntimeOrigin::signed(42),
+                7,
+                15,
+            ));
+            assert_eq!(EterraEconomy::ticket_balance(&42), 25);
+            assert_eq!(EterraEconomy::ticket_balance(&7), 15);
+            assert_eq!(TicketEarningWindows::<Test>::get((1003, 1, 42, 0)), 40);
+            assert_eq!(TicketEarningWindows::<Test>::get((1003, 1, 7, 0)), 0);
+        });
+    }
+
+    #[test]
+    fn ticket_transfers_honor_pause_amount_and_account_controls() {
+        new_test_ext().execute_with(|| {
+            assert_ok!(EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 3, 1));
+            assert_ok!(MockTicketAssets::mint(3, &42, 100));
+            assert_noop!(
+                EterraEconomy::transfer_tickets(RuntimeOrigin::signed(42), 7, 1),
+                Error::<Test>::SubsystemPaused
+            );
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::TicketTransfers,
+                false,
+            ));
+            assert_noop!(
+                EterraEconomy::transfer_tickets(RuntimeOrigin::signed(42), 7, 0),
+                Error::<Test>::InvalidAmount
+            );
+            assert_noop!(
+                EterraEconomy::transfer_tickets(RuntimeOrigin::signed(42), 99, 1),
+                Error::<Test>::AccountNotEligible
+            );
+            assert_ok!(EterraEconomy::set_arcade_account_restriction(
+                RuntimeOrigin::root(),
+                7,
+                true,
+            ));
+            assert_noop!(
+                EterraEconomy::transfer_tickets(RuntimeOrigin::signed(42), 7, 1),
+                Error::<Test>::AccountRestricted
+            );
+            assert_eq!(EterraEconomy::ticket_balance(&42), 100);
+            assert_eq!(EterraEconomy::ticket_balance(&7), 0);
+        });
+    }
+
+    #[test]
+    fn ticket_and_native_catalog_payments_are_atomic_and_capped() {
+        new_test_ext().execute_with(|| {
+            configure_ticket_rewards();
+            assert_ok!(MockTicketAssets::mint(3, &42, 100));
+            let sku = PrizeSku::<Test> {
+                kind: PrizeKind::RandomPack,
+                pool_id: 9,
+                ticket_price: Some(20),
+                native_price: Some(500),
+                enabled: true,
+                total_cap: Some(2),
+                per_account_window_cap: 2,
+                window_blocks: 100,
+                config_version: 1,
+            };
+            assert_ok!(EterraEconomy::upsert_prize_sku(
+                RuntimeOrigin::root(),
+                77,
+                sku
+            ));
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::TicketRedemption,
+                false,
+            ));
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::RandomVending,
+                false,
+            ));
+            assert_ok!(EterraEconomy::redeem_prize_with_tickets(
+                RuntimeOrigin::signed(42),
+                77,
+                1,
+            ));
+            assert_eq!(EterraEconomy::ticket_balance(&42), 80);
+            assert_ok!(EterraEconomy::purchase_prize_with_native(
+                RuntimeOrigin::signed(42),
+                PurchaseTarget::CatalogSku(77),
+                1,
+            ));
+            MOCK_NATIVE_PAYMENTS.with(|payments| {
+                assert_eq!(payments.borrow().as_slice(), &[(42, 500)]);
+            });
+            assert_noop!(
+                EterraEconomy::redeem_prize_with_tickets(RuntimeOrigin::signed(42), 77, 1),
+                Error::<Test>::PrizeSoldOut
+            );
+        });
+    }
+
+    #[test]
+    fn failed_catalog_fulfillment_and_payment_leave_supply_and_limits_untouched() {
+        new_test_ext().execute_with(|| {
+            assert_ok!(EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 3, 1));
+            assert_ok!(EterraEconomy::upsert_prize_sku(
+                RuntimeOrigin::root(),
+                77,
+                random_pack_sku(1),
+            ));
+            for domain in [PauseDomain::TicketRedemption, PauseDomain::RandomVending] {
+                assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                    RuntimeOrigin::root(),
+                    domain,
+                    false,
+                ));
+            }
+
+            MOCK_FULFILLMENT_FAILS.with(|fails| *fails.borrow_mut() = true);
+            assert_noop!(
+                EterraEconomy::redeem_prize_with_tickets(RuntimeOrigin::signed(42), 77, 1),
+                Error::<Test>::PrizeFulfillmentFailed
+            );
+            assert_eq!(PrizeSkuSold::<Test>::get(77), 0);
+            assert_eq!(PrizeSkuAccountWindows::<Test>::get((77, 42, 0)), 0);
+
+            MOCK_FULFILLMENT_FAILS.with(|fails| *fails.borrow_mut() = false);
+            assert_eq!(
+                EterraEconomy::redeem_prize_with_tickets(RuntimeOrigin::signed(42), 77, 1),
+                Err(TokenError::FundsUnavailable.into())
+            );
+            assert_eq!(PrizeSkuSold::<Test>::get(77), 0);
+
+            MOCK_NATIVE_PAYMENT_FAILS.with(|fails| *fails.borrow_mut() = true);
+            assert_eq!(
+                EterraEconomy::purchase_prize_with_native(
+                    RuntimeOrigin::signed(42),
+                    PurchaseTarget::CatalogSku(77),
+                    1,
+                ),
+                Err(TokenError::FundsUnavailable.into())
+            );
+            assert_eq!(PrizeSkuSold::<Test>::get(77), 0);
+            assert_eq!(PrizeSkuAccountWindows::<Test>::get((77, 42, 0)), 0);
+            MOCK_NATIVE_PAYMENTS.with(|payments| assert!(payments.borrow().is_empty()));
+        });
+    }
+
+    #[test]
+    fn catalog_rejects_stale_disabled_unsupported_and_over_limit_purchases() {
+        new_test_ext().execute_with(|| {
+            assert_ok!(EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 3, 1));
+            let mut sku = random_pack_sku(1);
+            sku.native_price = None;
+            sku.per_account_window_cap = 1;
+            assert_ok!(EterraEconomy::upsert_prize_sku(
+                RuntimeOrigin::root(),
+                77,
+                sku,
+            ));
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::TicketRedemption,
+                false,
+            ));
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::RandomVending,
+                false,
+            ));
+            assert_noop!(
+                EterraEconomy::redeem_prize_with_tickets(RuntimeOrigin::signed(42), 77, 2),
+                Error::<Test>::InvalidConfigVersion
+            );
+            assert_noop!(
+                EterraEconomy::purchase_prize_with_native(
+                    RuntimeOrigin::signed(42),
+                    PurchaseTarget::CatalogSku(77),
+                    1,
+                ),
+                Error::<Test>::PrizePaymentNotSupported
+            );
+            assert_ok!(MockTicketAssets::mint(3, &42, 40));
+            assert_ok!(EterraEconomy::redeem_prize_with_tickets(
+                RuntimeOrigin::signed(42),
+                77,
+                1,
+            ));
+            assert_noop!(
+                EterraEconomy::redeem_prize_with_tickets(RuntimeOrigin::signed(42), 77, 1),
+                Error::<Test>::PrizeAccountLimitReached
+            );
+
+            let mut disabled = random_pack_sku(2);
+            disabled.enabled = false;
+            assert_ok!(EterraEconomy::upsert_prize_sku(
+                RuntimeOrigin::root(),
+                77,
+                disabled,
+            ));
+            assert_noop!(
+                EterraEconomy::redeem_prize_with_tickets(RuntimeOrigin::signed(7), 77, 2),
+                Error::<Test>::PrizeSkuDisabled
+            );
+        });
+    }
+
+    #[test]
+    fn featured_rotation_has_twelve_unique_subjects_and_rejects_stale_epoch() {
+        new_test_ext().execute_with(|| {
+            let config = FeaturedRotationConfig::<Test> {
+                enabled: true,
+                pool_id: 5,
+                eligible_subjects: (1u32..=20)
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .expect("pool bound"),
+                period_blocks: 5,
+                native_price: 250,
+                per_slot_cap: 3,
+                per_account_limit: 1,
+                config_version: 1,
+            };
+            assert_ok!(EterraEconomy::set_featured_rotation_config(
+                RuntimeOrigin::root(),
+                config
+            ));
+            System::set_block_number(2);
+            EterraEconomy::on_initialize(2);
+            let first = CurrentFeaturedRotation::<Test>::get().expect("rotation exists");
+            assert_eq!(first.offers.len(), 12);
+            let mut subjects = first
+                .offers
+                .iter()
+                .map(|offer| offer.subject_id)
+                .collect::<Vec<_>>();
+            subjects.sort_unstable();
+            subjects.dedup();
+            assert_eq!(subjects.len(), 12);
+            assert_eq!(first.pool_id, 5);
+            assert_eq!(first.per_account_limit, 1);
+            assert_eq!(first.offers[0].native_price, 250);
+            assert_ok!(EterraEconomy::set_featured_rotation_config(
+                RuntimeOrigin::root(),
+                FeaturedRotationConfig::<Test> {
+                    enabled: true,
+                    pool_id: 6,
+                    eligible_subjects: (21u32..=40)
+                        .collect::<Vec<_>>()
+                        .try_into()
+                        .expect("next pool bound"),
+                    period_blocks: 7,
+                    native_price: 300,
+                    per_slot_cap: 4,
+                    per_account_limit: 2,
+                    config_version: 2,
+                }
+            ));
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::FeaturedVending,
+                false,
+            ));
+            assert_ok!(EterraEconomy::purchase_prize_with_native(
+                RuntimeOrigin::signed(42),
+                PurchaseTarget::FeaturedSlot {
+                    rotation_id: first.rotation_id,
+                    slot: 0
+                },
+                1,
+            ));
+            System::set_block_number(first.ends_at);
+            EterraEconomy::on_initialize(first.ends_at);
+            let second = CurrentFeaturedRotation::<Test>::get().expect("next rotation exists");
+            assert_eq!(second.config_version, 2);
+            assert_eq!(second.pool_id, 6);
+            assert_eq!(second.per_account_limit, 2);
+            assert_eq!(second.offers[0].native_price, 300);
+            assert_noop!(
+                EterraEconomy::purchase_prize_with_native(
+                    RuntimeOrigin::signed(7),
+                    PurchaseTarget::FeaturedSlot {
+                        rotation_id: first.rotation_id,
+                        slot: 0
+                    },
+                    1,
+                ),
+                Error::<Test>::StaleRotation
+            );
+        });
+    }
+
+    #[test]
+    fn featured_vending_enforces_slot_stock_account_and_version_limits() {
+        new_test_ext().execute_with(|| {
+            assert_ok!(EterraEconomy::set_featured_rotation_config(
+                RuntimeOrigin::root(),
+                featured_config(1),
+            ));
+            System::set_block_number(2);
+            EterraEconomy::on_initialize(2);
+            let rotation = CurrentFeaturedRotation::<Test>::get().expect("rotation exists");
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::FeaturedVending,
+                false,
+            ));
+            assert_noop!(
+                EterraEconomy::purchase_prize_with_native(
+                    RuntimeOrigin::signed(42),
+                    PurchaseTarget::FeaturedSlot {
+                        rotation_id: rotation.rotation_id,
+                        slot: 12,
+                    },
+                    1,
+                ),
+                Error::<Test>::FeaturedSlotNotFound
+            );
+            assert_noop!(
+                EterraEconomy::purchase_prize_with_native(
+                    RuntimeOrigin::signed(42),
+                    PurchaseTarget::FeaturedSlot {
+                        rotation_id: rotation.rotation_id,
+                        slot: 0,
+                    },
+                    2,
+                ),
+                Error::<Test>::InvalidConfigVersion
+            );
+            assert_ok!(EterraEconomy::purchase_prize_with_native(
+                RuntimeOrigin::signed(42),
+                PurchaseTarget::FeaturedSlot {
+                    rotation_id: rotation.rotation_id,
+                    slot: 0,
+                },
+                1,
+            ));
+            assert_noop!(
+                EterraEconomy::purchase_prize_with_native(
+                    RuntimeOrigin::signed(42),
+                    PurchaseTarget::FeaturedSlot {
+                        rotation_id: rotation.rotation_id,
+                        slot: 0,
+                    },
+                    1,
+                ),
+                Error::<Test>::PrizeAccountLimitReached
+            );
+            assert_ok!(EterraEconomy::purchase_prize_with_native(
+                RuntimeOrigin::signed(7),
+                PurchaseTarget::FeaturedSlot {
+                    rotation_id: rotation.rotation_id,
+                    slot: 0,
+                },
+                1,
+            ));
+            assert_noop!(
+                EterraEconomy::purchase_prize_with_native(
+                    RuntimeOrigin::signed(8),
+                    PurchaseTarget::FeaturedSlot {
+                        rotation_id: rotation.rotation_id,
+                        slot: 0,
+                    },
+                    1,
+                ),
+                Error::<Test>::PrizeSoldOut
+            );
+            MOCK_NATIVE_PAYMENTS.with(|payments| {
+                assert_eq!(payments.borrow().as_slice(), &[(42, 250), (7, 250)]);
+            });
+        });
+    }
+
+    #[test]
+    fn failed_rotation_pauses_featured_sales_and_keeps_prior_roster() {
+        new_test_ext().execute_with(|| {
+            assert_ok!(EterraEconomy::set_featured_rotation_config(
+                RuntimeOrigin::root(),
+                featured_config(1),
+            ));
+            System::set_block_number(2);
+            EterraEconomy::on_initialize(2);
+            let prior = CurrentFeaturedRotation::<Test>::get().expect("rotation exists");
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::FeaturedVending,
+                false,
+            ));
+
+            let mut invalid = featured_config(2);
+            invalid.eligible_subjects = vec![1u32; 12].try_into().expect("invalid pool is bounded");
+            FeaturedRotationSettings::<Test>::put(invalid);
+            System::set_block_number(prior.ends_at);
+            EterraEconomy::on_initialize(prior.ends_at);
+
+            assert_eq!(CurrentFeaturedRotation::<Test>::get(), Some(prior));
+            assert!(PausedDomains::<Test>::get(PauseDomain::FeaturedVending));
+            assert_eq!(NextFeaturedRotationId::<Test>::get(), 1);
+            assert!(matches!(
+                System::events().last().map(|record| &record.event),
+                Some(RuntimeEvent::EterraEconomy(
+                    Event::FeaturedRotationFailed { .. }
+                ))
+            ));
         });
     }
 }

@@ -24,13 +24,19 @@
 // For more information, please refer to <http://unlicense.org>
 
 // Substrate and Polkadot dependencies
+use alloc::vec::Vec;
 use frame_support::PalletId;
 use frame_support::{
     derive_impl,
     dispatch::DispatchResult,
     parameter_types,
     traits::{
-        ConstBool, ConstU128, ConstU16, ConstU32, ConstU64, ConstU8, Currency,
+        fungibles::{
+            metadata::Inspect as FungiblesMetadataInspect, Inspect as FungiblesInspect,
+            Mutate as FungiblesMutate,
+        },
+        tokens::{Fortitude, Precision, Preservation},
+        ConstBool, ConstU128, ConstU16, ConstU32, ConstU64, ConstU8, Contains, Currency,
         ExistenceRequirement, ReservableCurrency, VariantCountOf, WithdrawReasons,
     },
     weights::{
@@ -43,7 +49,7 @@ use pallet_transaction_payment::{ConstFeeMultiplier, Multiplier};
 use scale_info::TypeInfo;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_runtime::{
-    traits::{AccountIdConversion, Morph, One},
+    traits::{AccountIdConversion, Hash as HashT, Morph, One},
     DispatchError, Perbill, Permill,
 };
 use sp_version::RuntimeVersion;
@@ -326,6 +332,162 @@ impl pallet_eterra_arcade_core::EconomyProvider<AccountId> for EterraArcadeEcono
     ) -> u64 {
         pallet_eterra_economy::Pallet::<Runtime>::credit_balance(account, game_id, credit_type)
     }
+
+    fn grant_gameplay_tickets(
+        account: &AccountId,
+        game_id: pallet_eterra_arcade_core::GameId,
+        ruleset_version: pallet_eterra_arcade_core::RulesetVersion,
+        result_id: &[u8],
+        score: u64,
+        ranked: bool,
+        ended_reason: u8,
+    ) -> DispatchResult {
+        let result_id_hash = <Runtime as frame_system::Config>::Hashing::hash(result_id);
+        pallet_eterra_economy::Pallet::<Runtime>::try_grant_gameplay_tickets(
+            account,
+            game_id,
+            ruleset_version,
+            result_id_hash,
+            score,
+            ranked,
+            ended_reason,
+        )
+        .map(|_| ())
+    }
+}
+
+pub struct EterraTicketAssetProvider;
+
+impl pallet_eterra_economy::TicketAssetProvider<AccountId> for EterraTicketAssetProvider {
+    fn asset_exists(asset_id: u32) -> bool {
+        <Assets as FungiblesInspect<AccountId>>::asset_exists(asset_id)
+    }
+
+    fn decimals(asset_id: u32) -> u8 {
+        <Assets as FungiblesMetadataInspect<AccountId>>::decimals(asset_id)
+    }
+
+    fn balance(asset_id: u32, account: &AccountId) -> u128 {
+        <Assets as FungiblesInspect<AccountId>>::balance(asset_id, account)
+    }
+
+    fn mint(asset_id: u32, account: &AccountId, amount: u128) -> DispatchResult {
+        <Assets as FungiblesMutate<AccountId>>::mint_into(asset_id, account, amount).map(|_| ())
+    }
+
+    fn burn(asset_id: u32, account: &AccountId, amount: u128) -> DispatchResult {
+        <Assets as FungiblesMutate<AccountId>>::burn_from(
+            asset_id,
+            account,
+            amount,
+            Preservation::Expendable,
+            Precision::Exact,
+            Fortitude::Polite,
+        )
+        .map(|_| ())
+    }
+
+    fn transfer(asset_id: u32, from: &AccountId, to: &AccountId, amount: u128) -> DispatchResult {
+        <Assets as FungiblesMutate<AccountId>>::transfer(
+            asset_id,
+            from,
+            to,
+            amount,
+            Preservation::Expendable,
+        )
+        .map(|_| ())
+    }
+}
+
+pub struct EterraNativePaymentProvider;
+
+impl pallet_eterra_economy::NativePaymentProvider<AccountId> for EterraNativePaymentProvider {
+    fn pay_treasury(account: &AccountId, amount: u128) -> DispatchResult {
+        <Balances as Currency<AccountId>>::transfer(
+            account,
+            &TreasuryAccount::get(),
+            amount,
+            ExistenceRequirement::KeepAlive,
+        )
+    }
+}
+
+pub struct EterraArcadeAccountEligibility;
+
+impl pallet_eterra_economy::AccountEligibilityProvider<AccountId>
+    for EterraArcadeAccountEligibility
+{
+    fn eligible(account: &AccountId) -> bool {
+        <super::AlphaAccess as pallet_alpha_access::AccessControl<AccountId>>::ensure_whitelisted(
+            account,
+        )
+        .is_ok()
+    }
+}
+
+pub struct EterraArcadeRandomness;
+
+impl pallet_eterra_economy::ArcadeRandomnessProvider for EterraArcadeRandomness {
+    fn random(domain: &[u8], payload: &[u8]) -> [u8; 32] {
+        let mut input = Vec::with_capacity(domain.len() + payload.len() + 32);
+        input.extend_from_slice(domain);
+        input.extend_from_slice(payload);
+        input.extend_from_slice(System::parent_hash().as_ref());
+        sp_io::hashing::blake2_256(&input)
+    }
+}
+
+pub struct EterraPrizeFulfillmentProvider;
+
+impl pallet_eterra_economy::PrizeFulfillmentProvider<AccountId> for EterraPrizeFulfillmentProvider {
+    fn validate_pool(pool_id: u32, featured_subjects: &[u32]) -> DispatchResult {
+        let pool = pallet_eterra_tcg::NexusPrizePools::<Runtime>::get(pool_id)
+            .ok_or(pallet_eterra_tcg::Error::<Runtime>::NexusPrizePoolMissing)?;
+        for subject_id in featured_subjects {
+            if !pool
+                .templates
+                .iter()
+                .any(|template| template.card.subject_id == *subject_id)
+            {
+                return Err(
+                    pallet_eterra_tcg::Error::<Runtime>::NexusPrizeSubjectUnavailable.into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn fulfill(
+        account: &AccountId,
+        kind: pallet_eterra_economy::PrizeFulfillmentKind,
+        pool_id: u32,
+        subject_id: Option<u32>,
+        entropy: [u8; 32],
+        source: pallet_eterra_economy::PrizeAcquisitionSource,
+    ) -> Result<Vec<u32>, DispatchError> {
+        let kind = match kind {
+            pallet_eterra_economy::PrizeFulfillmentKind::RandomSingle => {
+                pallet_eterra_tcg::NexusPrizeKind::RandomSingle
+            }
+            pallet_eterra_economy::PrizeFulfillmentKind::RandomPack => {
+                pallet_eterra_tcg::NexusPrizeKind::RandomPack
+            }
+            pallet_eterra_economy::PrizeFulfillmentKind::FeaturedSubject => {
+                pallet_eterra_tcg::NexusPrizeKind::FeaturedSubject
+            }
+        };
+        let origin = match source {
+            pallet_eterra_economy::PrizeAcquisitionSource::TicketClaim => {
+                pallet_eterra_tcg::NexusCardOrigin::Claim
+            }
+            pallet_eterra_economy::PrizeAcquisitionSource::NativePull => {
+                pallet_eterra_tcg::NexusCardOrigin::Pull
+            }
+        };
+        pallet_eterra_tcg::Pallet::<Runtime>::try_fulfill_nexus_prize(
+            account, kind, pool_id, subject_id, entropy, origin,
+        )
+    }
 }
 
 pub struct EterraArcadeAuthorityProvider;
@@ -492,6 +654,7 @@ parameter_types! {
 /// but overridden as needed.
 #[derive_impl(frame_system::config_preludes::SolochainDefaultConfig)]
 impl frame_system::Config for Runtime {
+    type BaseCallFilter = EterraRuntimeCallFilter;
     /// The block type for the runtime.
     type Block = Block;
     /// Block & extrinsics weights: base values and limits.
@@ -515,6 +678,28 @@ impl frame_system::Config for Runtime {
     /// This is used as an identifier of the chain. 42 is the generic substrate prefix.
     type SS58Prefix = SS58Prefix;
     type MaxConsumers = frame_support::traits::ConstU32<16>;
+}
+
+pub struct EterraRuntimeCallFilter;
+
+impl Contains<RuntimeCall> for EterraRuntimeCallFilter {
+    fn contains(call: &RuntimeCall) -> bool {
+        let Some(ticket) = pallet_eterra_economy::TicketAsset::<Runtime>::get() else {
+            return true;
+        };
+        match call {
+            RuntimeCall::Assets(pallet_assets::Call::transfer { id, .. })
+            | RuntimeCall::Assets(pallet_assets::Call::transfer_keep_alive { id, .. })
+            | RuntimeCall::Assets(pallet_assets::Call::force_transfer { id, .. })
+            | RuntimeCall::Assets(pallet_assets::Call::approve_transfer { id, .. })
+            | RuntimeCall::Assets(pallet_assets::Call::cancel_approval { id, .. })
+            | RuntimeCall::Assets(pallet_assets::Call::transfer_approved { id, .. })
+            | RuntimeCall::Assets(pallet_assets::Call::transfer_all { id, .. }) => {
+                *id != ticket.asset_id
+            }
+            _ => true,
+        }
+    }
 }
 
 impl pallet_aura::Config for Runtime {
@@ -1047,15 +1232,34 @@ parameter_types! {
     pub const EterraEconomyArcadeCreditFaucetType: pallet_eterra_economy::CreditTypeId =
         pallet_eterra_arcade_core::ARCADE_PLAY_CREDIT_TYPE;
     pub const EterraEconomyArcadeCreditFaucetAmount: u64 = 1000;
+    pub const EterraEconomyMaxScoreTiers: u32 = 16;
+    pub const EterraEconomyMaxEligibleRewardModes: u32 = 2;
+    pub const EterraEconomyMaxEligibleEndedReasons: u32 = 16;
+    pub const EterraEconomyMaxFeaturedPoolSubjects: u32 = 128;
+    pub const EterraEconomyMaxFeaturedSlots: u32 = 12;
+    pub const EterraEconomyFeaturedSlotCount: u32 = 12;
+    pub const EterraEconomyMaxPrizeCards: u32 = 6;
 }
 
 impl pallet_eterra_economy::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type WeightInfo = pallet_eterra_economy::weights::SubstrateWeight<Runtime>;
     type AdminOrigin = PrivilegedControlOrigin;
+    type TicketAssets = EterraTicketAssetProvider;
+    type NativePayments = EterraNativePaymentProvider;
+    type PrizeFulfillment = EterraPrizeFulfillmentProvider;
+    type AccountEligibility = EterraArcadeAccountEligibility;
+    type RandomnessProvider = EterraArcadeRandomness;
     type ArcadeCreditFaucetGameId = EterraEconomyArcadeCreditFaucetGameId;
     type ArcadeCreditFaucetType = EterraEconomyArcadeCreditFaucetType;
     type ArcadeCreditFaucetAmount = EterraEconomyArcadeCreditFaucetAmount;
+    type MaxScoreTiers = EterraEconomyMaxScoreTiers;
+    type MaxEligibleRewardModes = EterraEconomyMaxEligibleRewardModes;
+    type MaxEligibleEndedReasons = EterraEconomyMaxEligibleEndedReasons;
+    type MaxFeaturedPoolSubjects = EterraEconomyMaxFeaturedPoolSubjects;
+    type MaxFeaturedSlots = EterraEconomyMaxFeaturedSlots;
+    type FeaturedSlotCount = EterraEconomyFeaturedSlotCount;
+    type MaxPrizeCards = EterraEconomyMaxPrizeCards;
 }
 
 impl pallet_eterra_profile::Config for Runtime {

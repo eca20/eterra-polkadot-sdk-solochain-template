@@ -28,6 +28,16 @@ pub trait EconomyProvider<AccountId> {
     ) -> frame_support::dispatch::DispatchResult;
 
     fn credit_balance(account: &AccountId, game_id: GameId, credit_type: CreditTypeId) -> u64;
+
+    fn grant_gameplay_tickets(
+        account: &AccountId,
+        game_id: GameId,
+        ruleset_version: RulesetVersion,
+        result_id: &[u8],
+        score: u64,
+        ranked: bool,
+        ended_reason: u8,
+    ) -> frame_support::dispatch::DispatchResult;
 }
 
 impl<AccountId> EconomyProvider<AccountId> for () {
@@ -42,6 +52,18 @@ impl<AccountId> EconomyProvider<AccountId> for () {
 
     fn credit_balance(_account: &AccountId, _game_id: GameId, _credit_type: CreditTypeId) -> u64 {
         u64::MAX
+    }
+
+    fn grant_gameplay_tickets(
+        _account: &AccountId,
+        _game_id: GameId,
+        _ruleset_version: RulesetVersion,
+        _result_id: &[u8],
+        _score: u64,
+        _ranked: bool,
+        _ended_reason: u8,
+    ) -> frame_support::dispatch::DispatchResult {
+        Ok(())
     }
 }
 
@@ -132,6 +154,21 @@ pub mod pallet {
                     | EndedReason::TimerExpired
                     | EndedReason::HullDepleted
             )
+        }
+
+        pub fn reward_code(&self) -> u8 {
+            match self {
+                EndedReason::Completed => 0,
+                EndedReason::BossDefeated => 1,
+                EndedReason::TimerExpired => 2,
+                EndedReason::HullDepleted => 3,
+                EndedReason::Abandoned => 4,
+                EndedReason::Restarted => 5,
+                EndedReason::ReturnedToArcade => 6,
+                EndedReason::Expired => 7,
+                EndedReason::PracticeContinue => 8,
+                EndedReason::Other(code) => 128u8.saturating_add(*code),
+            }
         }
     }
 
@@ -749,6 +786,16 @@ pub mod pallet {
                 Self::maybe_update_player_best_and_leaderboard(&config, &record)?;
             }
 
+            T::EconomyProvider::grant_gameplay_tickets(
+                &record.player,
+                record.game_id,
+                record.ruleset_version,
+                record.result_id.as_slice(),
+                record.score,
+                record.ranked,
+                record.ended_reason.reward_code(),
+            )?;
+
             Self::deposit_event(Event::RunResultAccepted {
                 run_id: record.run_id,
                 game_id: record.game_id,
@@ -912,6 +959,8 @@ mod tests {
     thread_local! {
         static CREDITS: RefCell<BTreeMap<(AccountId, GameId, CreditTypeId), u64>> = const { RefCell::new(BTreeMap::new()) };
         static AUTHORITIES: RefCell<BTreeSet<(AccountId, GameId, RulesetVersion, AuthorityEventTypeId)>> = const { RefCell::new(BTreeSet::new()) };
+        static TICKET_REWARDS: RefCell<Vec<(AccountId, GameId, RulesetVersion, Vec<u8>, u64, bool, u8)>> = const { RefCell::new(Vec::new()) };
+        static FAIL_TICKET_REWARD: RefCell<bool> = const { RefCell::new(false) };
     }
 
     pub struct TestEconomyProvider;
@@ -942,6 +991,32 @@ mod tests {
                     .copied()
                     .unwrap_or_default()
             })
+        }
+
+        fn grant_gameplay_tickets(
+            account: &AccountId,
+            game_id: GameId,
+            ruleset_version: RulesetVersion,
+            result_id: &[u8],
+            score: u64,
+            ranked: bool,
+            ended_reason: u8,
+        ) -> DispatchResult {
+            if FAIL_TICKET_REWARD.with(|fail| *fail.borrow()) {
+                return Err(DispatchError::Other("ticket_reward_failed"));
+            }
+            TICKET_REWARDS.with(|rewards| {
+                rewards.borrow_mut().push((
+                    *account,
+                    game_id,
+                    ruleset_version,
+                    result_id.to_vec(),
+                    score,
+                    ranked,
+                    ended_reason,
+                ));
+            });
+            Ok(())
         }
     }
 
@@ -1009,6 +1084,8 @@ mod tests {
     fn new_test_ext() -> sp_io::TestExternalities {
         CREDITS.with(|credits| credits.borrow_mut().clear());
         AUTHORITIES.with(|authorities| authorities.borrow_mut().clear());
+        TICKET_REWARDS.with(|rewards| rewards.borrow_mut().clear());
+        FAIL_TICKET_REWARD.with(|fail| *fail.borrow_mut() = false);
         let storage = system::GenesisConfig::<Test>::default()
             .build_storage()
             .expect("frame-system storage build should not fail");
@@ -1022,6 +1099,8 @@ mod tests {
     ) -> sp_io::TestExternalities {
         CREDITS.with(|credits| credits.borrow_mut().clear());
         AUTHORITIES.with(|authorities| authorities.borrow_mut().clear());
+        TICKET_REWARDS.with(|rewards| rewards.borrow_mut().clear());
+        FAIL_TICKET_REWARD.with(|fail| *fail.borrow_mut() = false);
         let mut storage = system::GenesisConfig::<Test>::default()
             .build_storage()
             .expect("frame-system storage build should not fail");
@@ -1240,6 +1319,46 @@ mod tests {
                 &9,
                 ranked_result(run_id, 1001, "result-1", 500)
             ));
+            TICKET_REWARDS.with(|rewards| {
+                assert_eq!(
+                    rewards.borrow().as_slice(),
+                    &[(42, 1001, 1, b"result-1".to_vec(), 500, true, 1)]
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn ticket_reward_failure_rolls_back_result_and_leaderboard() {
+        new_test_ext().execute_with(|| {
+            configure_game(1001);
+            authorize(9, 1001, 1);
+            grant_credit(42, 1);
+            let run_id = ArcadeCore::start_run_for_game(
+                &42,
+                1001,
+                1,
+                client_run_id("client-reward-failure"),
+                H256::repeat_byte(1),
+            )
+            .expect("run starts");
+            FAIL_TICKET_REWARD.with(|fail| *fail.borrow_mut() = true);
+            assert_noop!(
+                ArcadeCore::submit_result_for_authority(
+                    &9,
+                    ranked_result(run_id, 1001, "result-reward-failure", 500),
+                ),
+                DispatchError::Other("ticket_reward_failed")
+            );
+            assert!(!ProcessedResultIds::<Test>::contains_key(result_id(
+                "result-reward-failure"
+            )));
+            assert!(!RunResultsByRun::<Test>::contains_key(run_id));
+            assert!(!PlayerBest::<Test>::contains_key((1001, 1, 0, 42)));
+            assert_eq!(
+                Runs::<Test>::get(run_id).expect("run remains").status,
+                RunStatus::Active
+            );
         });
     }
 

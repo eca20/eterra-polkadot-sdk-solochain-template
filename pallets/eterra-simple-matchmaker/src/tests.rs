@@ -135,31 +135,28 @@ fn join_queue_requires_current_hand() {
     });
 }
 
-#[cfg(feature = "dev_tests_with_try_match")]
 #[test]
-fn try_match_noop_with_fewer_than_two() {
+fn process_queue_noops_with_fewer_than_two() {
     new_test_ext().execute_with(|| {
         // 0 players
-        assert_ok!(Matchmaker::try_match(SystemOrigin::signed(99)));
+        assert_ok!(Matchmaker::process_queue(SystemOrigin::signed(99)));
         // 1 player
         set_has_hand(1, true);
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(1)));
-        assert_ok!(Matchmaker::try_match(SystemOrigin::signed(99)));
-        // No MatchFormed or Matched events
+        assert_ok!(Matchmaker::process_queue(SystemOrigin::signed(99)));
+        // No game or matched event can be produced without a pair.
+        assert!(created_games().is_empty());
         let mm = filter_matchmaker(&take_events());
-        assert!(mm.iter().all(|e| !matches!(
-            e,
-            RuntimeEvent::Matchmaker(Event::<Test>::MatchFormed { .. })
-                | RuntimeEvent::Matchmaker(Event::<Test>::Matched { .. })
-        )));
+        assert!(mm
+            .iter()
+            .all(|e| !matches!(e, RuntimeEvent::Matchmaker(Event::<Test>::Matched { .. }))));
     });
 }
 
-#[cfg(feature = "dev_tests_with_try_match")]
 #[test]
-fn try_match_forms_two_and_removes_from_head_fifo() {
+fn second_join_forms_pair_and_preserves_fifo() {
     new_test_ext().execute_with(|| {
-        // Join three to check FIFO (1,2 should be matched; 3 remains)
+        // Matching is automatic on the second join. The third player remains queued.
         set_has_hand(1, true);
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(1)));
         set_has_hand(2, true);
@@ -167,80 +164,49 @@ fn try_match_forms_two_and_removes_from_head_fifo() {
         set_has_hand(3, true);
         assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(3)));
 
-        assert_ok!(Matchmaker::try_match(SystemOrigin::signed(99)));
-
-        // Expect MatchFormed or Matched with [1,2]
-        let evs = take_events();
-        let formed = evs
+        let matched = take_events()
             .into_iter()
             .find_map(|ev| match ev {
-                RuntimeEvent::Matchmaker(Event::<Test>::MatchFormed { players })
-                | RuntimeEvent::Matchmaker(Event::<Test>::Matched { players }) => Some(players),
+                RuntimeEvent::Matchmaker(Event::<Test>::Matched { players }) => Some(players),
                 _ => None,
             })
-            .expect("match event expected");
-        assert_eq!(formed, vec![1, 2]);
+            .expect("matched event expected");
+        assert_eq!(matched, [1, 2]);
+        assert_eq!(created_games(), vec![(1, 2)]);
+        assert_eq!(LiveSize::<Test>::get(), 1);
+        assert!(InQueue::<Test>::contains_key(3));
     });
 }
 
-#[cfg(feature = "dev_tests_with_try_match")]
 #[test]
-fn multiple_try_match_calls_form_multiple_pairs_in_fifo_order() {
+fn repeated_joins_form_multiple_pairs_in_fifo_order() {
     new_test_ext().execute_with(|| {
-        // 1..=6 -> expect pairs (1,2), (3,4); then 5,6 remain until next call.
+        // Each even-numbered join completes the next FIFO pair.
         for who in 1..=6 {
             set_has_hand(who, true);
             assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(who)));
         }
 
-        assert_ok!(Matchmaker::try_match(SystemOrigin::signed(7)));
-        // First formed: 1,2
-        let first_pair = filter_matchmaker(&take_events())
-            .into_iter()
-            .find_map(|ev| match ev {
-                RuntimeEvent::Matchmaker(Event::<Test>::MatchFormed { players })
-                | RuntimeEvent::Matchmaker(Event::<Test>::Matched { players }) => Some(players),
-                _ => None,
-            })
-            .expect("first MatchFormed");
-        assert_eq!(first_pair, vec![1, 2]);
-
-        assert_ok!(Matchmaker::try_match(SystemOrigin::signed(7)));
-        let second_pair = filter_matchmaker(&take_events())
-            .into_iter()
-            .find_map(|ev| match ev {
-                RuntimeEvent::Matchmaker(Event::<Test>::MatchFormed { players })
-                | RuntimeEvent::Matchmaker(Event::<Test>::Matched { players }) => Some(players),
-                _ => None,
-            })
-            .expect("second MatchFormed");
-        assert_eq!(second_pair, vec![3, 4]);
+        assert_eq!(created_games(), vec![(1, 2), (3, 4), (5, 6)]);
+        assert_eq!(LiveSize::<Test>::get(), 0);
     });
 }
 
-#[cfg(feature = "dev_tests_with_try_match")]
 #[test]
-fn leaving_middle_preserves_order() {
+fn leaving_queued_player_preserves_fifo_for_later_joins() {
     new_test_ext().execute_with(|| {
-        // queue: [1,2,3,4]
-        for who in 1..=4 {
+        set_has_hand(1, true);
+        assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(1)));
+        assert_ok!(Matchmaker::leave_queue(SystemOrigin::signed(1)));
+
+        for who in 2..=4 {
             set_has_hand(who, true);
             assert_ok!(Matchmaker::join_queue(SystemOrigin::signed(who)));
         }
-        // 2 leaves -> [1,3,4]
-        assert_ok!(Matchmaker::leave_queue(SystemOrigin::signed(2)));
-        // match -> should pair (1,3), leaving [4]
-        assert_ok!(Matchmaker::try_match(SystemOrigin::signed(99)));
 
-        let formed = filter_matchmaker(&take_events())
-            .into_iter()
-            .find_map(|ev| match ev {
-                RuntimeEvent::Matchmaker(Event::<Test>::MatchFormed { players })
-                | RuntimeEvent::Matchmaker(Event::<Test>::Matched { players }) => Some(players),
-                _ => None,
-            })
-            .expect("MatchFormed");
-        assert_eq!(formed, vec![1, 3]);
+        assert_eq!(created_games(), vec![(2, 3)]);
+        assert_eq!(LiveSize::<Test>::get(), 1);
+        assert!(InQueue::<Test>::contains_key(4));
     });
 }
 
@@ -267,14 +233,11 @@ fn calls_require_signed_origin() {
             Matchmaker::leave_queue(SystemOrigin::none()),
             Err(DispatchError::BadOrigin)
         ));
-        // try_match
-        #[cfg(feature = "dev_tests_with_try_match")]
-        {
-            assert!(matches!(
-                Matchmaker::try_match(SystemOrigin::none()),
-                Err(DispatchError::BadOrigin)
-            ));
-        }
+        // process_queue
+        assert!(matches!(
+            Matchmaker::process_queue(SystemOrigin::none()),
+            Err(DispatchError::BadOrigin)
+        ));
     });
 }
 

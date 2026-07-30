@@ -16,6 +16,7 @@ Usage:
   scripts/deploy.sh try-runtime-check <default|production>
   scripts/deploy.sh smoke <default|production> [out_dir]
   scripts/deploy.sh pipeline-check <default|production>
+  scripts/deploy.sh clean-build
 
 Commands:
   build          Build runtime + node for selected runtime mode.
@@ -30,7 +31,9 @@ Commands:
   try-runtime-check
                  Run try-runtime compile + on_runtime_upgrade gate test for selected mode.
   smoke          Start local ephemeral validators on each generated raw spec and verify block production.
-  pipeline-check Run build + spec generation + spec verification + smoke tests.
+  pipeline-check Run build + spec generation + spec verification + smoke tests, then remove target/.
+                 Set ETERRA_KEEP_BUILD_ARTIFACTS=1 to retain target/ for debugging.
+  clean-build    Remove only this checkout's reproducible Cargo target/ directory.
 USAGE
 }
 
@@ -79,16 +82,16 @@ build_cmd() {
   if [[ "$profile" == "release" ]]; then
     echo "[deploy] building release binaries (${mode})"
     if [[ -n "$feature_args" ]]; then
-      cargo build --release -p solochain-eterra-runtime -p solochain-eterra-node $feature_args
+      cargo build --locked --release -p solochain-eterra-runtime -p solochain-eterra-node $feature_args
     else
-      cargo build --release -p solochain-eterra-runtime -p solochain-eterra-node
+      cargo build --locked --release -p solochain-eterra-runtime -p solochain-eterra-node
     fi
   else
     echo "[deploy] building debug binaries (${mode})"
     if [[ -n "$feature_args" ]]; then
-      cargo build -p solochain-eterra-runtime -p solochain-eterra-node $feature_args
+      cargo build --locked -p solochain-eterra-runtime -p solochain-eterra-node $feature_args
     else
-      cargo build -p solochain-eterra-runtime -p solochain-eterra-node
+      cargo build --locked -p solochain-eterra-runtime -p solochain-eterra-node
     fi
   fi
   popd >/dev/null
@@ -528,9 +531,9 @@ try_runtime_check_cmd() {
 
   pushd "$ROOT_DIR" >/dev/null
   echo "[deploy] try-runtime gate (${mode}) with features: ${features}"
-  cargo check -p solochain-eterra-runtime --features "$features"
-  cargo check -p solochain-eterra-node --features "$features"
-  cargo test -p solochain-eterra-runtime --features "$features" \
+  cargo check --locked -p solochain-eterra-runtime --features "$features"
+  cargo check --locked -p solochain-eterra-node --features "$features"
+  cargo test --locked -p solochain-eterra-runtime --features "$features" \
     try_runtime_upgrade_executes_on_genesis_state -- --nocapture
   popd >/dev/null
 }
@@ -684,6 +687,10 @@ pipeline_check_cmd() {
   local mode="$1"
   local out_dir="${ROOT_DIR}/chain-specs/generated/${mode}"
 
+  if [[ "${ETERRA_KEEP_BUILD_ARTIFACTS:-0}" != "1" ]]; then
+    trap '"${ROOT_DIR}/scripts/clean-build-artifacts.sh"' EXIT
+  fi
+
   build_cmd "$mode" debug
   specs_cmd "$mode" "$out_dir"
   verify_specs_cmd "$out_dir"
@@ -730,6 +737,10 @@ main() {
     pipeline-check)
       [[ $# -ge 1 ]] || { usage; exit 1; }
       pipeline_check_cmd "$1"
+      ;;
+    clean-build)
+      [[ $# -eq 0 ]] || { usage; exit 1; }
+      "${ROOT_DIR}/scripts/clean-build-artifacts.sh"
       ;;
     -h|--help|help)
       usage

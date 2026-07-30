@@ -41,6 +41,9 @@ jobs:
         run: SKIP_WASM_BUILD=1 cargo test
         timeout-minutes: 15
 
+      - name: Validate release script safety contracts
+        run: ./scripts/release/test-release-scripts.sh
+
       - name: Build the docs
         run: SKIP_WASM_BUILD=1 cargo doc --workspace --no-deps
         timeout-minutes: 15

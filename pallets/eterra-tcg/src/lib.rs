@@ -45,6 +45,7 @@ pub type ProgressionGameId = u64;
 pub type ProgressionVersionId = u32;
 pub type ProgressionEventTypeId = u32;
 pub type ProgressionAuthorityId = u64;
+pub type NexusPrizePoolId = u32;
 
 /// Provides a runtime-defined view of whether a given `card_id` is currently included
 /// in `owner`'s configured "current hand".
@@ -522,6 +523,25 @@ pub struct StarterCardTemplate {
     pub config_version: NexusConfigVersion,
 }
 
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub enum NexusPrizeKind {
+    RandomSingle,
+    RandomPack,
+    FeaturedSubject,
+}
+
+#[derive(Clone, Copy, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusPrizeTemplate {
+    pub kind: NexusCardKind,
+    pub card: StarterCardTemplate,
+}
+
+#[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
+pub struct NexusPrizePool<BTemplates> {
+    pub templates: BTemplates,
+    pub config_version: NexusConfigVersion,
+}
+
 #[derive(Clone, Encode, Decode, PartialEq, Eq, TypeInfo, MaxEncodedLen, RuntimeDebug)]
 pub struct CollectionCard<AccountId, BlockNumber> {
     pub owner: AccountId,
@@ -635,7 +655,7 @@ pub mod pallet {
     use pallet_alpha_access::AccessControl;
     use sp_runtime::traits::StaticLookup;
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(14);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(15);
     const ESCROW_PALLET_ID: PalletId = PalletId(*b"et/tcgsc");
     const WEIGHT_TOTAL_PERCENT: u32 = 100;
     const DEFAULT_WEIGHT_MULTIPLIER: WeightMultiplier = 100;
@@ -709,6 +729,8 @@ pub mod pallet {
     type NexusAccountStateOf<T> = NexusAccountState<BlockNumberFor<T>>;
     type StarterGrantStateOf<T> = StarterGrantState<BlockNumberFor<T>>;
     type BoundedStarterTeamCards<T> = BoundedVec<StarterCardTemplate, <T as Config>::NexusTeamSize>;
+    type BoundedNexusPrizeTemplates<T> = BoundedVec<NexusPrizeTemplate, <T as Config>::MaxSubjects>;
+    type NexusPrizePoolOf<T> = NexusPrizePool<BoundedNexusPrizeTemplates<T>>;
     type CollectionCardOf<T> =
         CollectionCard<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>;
     type VaultVariantOf<T> = VaultVariant<BlockNumberFor<T>, BoundedNexusMetadataUri<T>>;
@@ -1195,6 +1217,16 @@ pub mod pallet {
     pub type StarterTeamConfigs<T: Config> =
         StorageMap<_, Blake2_128Concat, StarterPath, BoundedStarterTeamCards<T>, OptionQuery>;
 
+    /// Versioned subject/result templates used by the shared Prize Counter and
+    /// Vending Machine acquisition path.
+    #[pallet::storage]
+    #[pallet::getter(fn nexus_prize_pool)]
+    pub type NexusPrizePools<T: Config> =
+        StorageMap<_, Blake2_128Concat, NexusPrizePoolId, NexusPrizePoolOf<T>, OptionQuery>;
+
+    #[pallet::storage]
+    pub type NextNexusPullId<T: Config> = StorageValue<_, u32, ValueQuery>;
+
     /// Nexus Collection card records keyed by runtime card id.
     #[pallet::storage]
     #[pallet::getter(fn nexus_collection_card)]
@@ -1484,6 +1516,11 @@ pub mod pallet {
         StarterTeamConfigSet {
             path: StarterPath,
             card_count: u32,
+            config_version: NexusConfigVersion,
+        },
+        NexusPrizePoolSet {
+            pool_id: NexusPrizePoolId,
+            subject_count: u32,
             config_version: NexusConfigVersion,
         },
         /// Nexus Starter path was swapped before grant finalization.
@@ -1816,6 +1853,7 @@ pub mod pallet {
         CardAlreadyFinalized,
         /// No more card IDs are available.
         CardIdExhausted,
+        ArithmeticOverflow,
         /// This action would exceed the account's configured card capacity.
         CardCapacityExceeded,
         /// Starter Grant state already exists for this account.
@@ -1824,6 +1862,10 @@ pub mod pallet {
         StarterTeamConfigMissing,
         /// Starter team config must contain exactly one valid fixed-rank template per team slot.
         InvalidStarterTeamConfig,
+        NexusPrizePoolMissing,
+        NexusPrizePoolAlreadyExists,
+        InvalidNexusPrizePool,
+        NexusPrizeSubjectUnavailable,
         /// Account-bound starter cards cannot be listed, transferred, converted, or escrowed.
         AccountBoundCardLocked,
         /// Nexus team must contain exactly the configured Season 1 team size.
@@ -2122,6 +2164,57 @@ pub mod pallet {
             Self::deposit_event(Event::StarterTeamConfigSet {
                 path,
                 card_count,
+                config_version,
+            });
+            Ok(())
+        }
+
+        /// Configure a versioned Prize Counter/Vending Machine subject pool.
+        /// Templates define subject identity and controlled trait baselines;
+        /// acquisitions resolve one final variation and never expose rerolls.
+        #[pallet::call_index(35)]
+        #[pallet::weight(<T as Config>::WeightInfo::set_starter_team_config())]
+        #[transactional]
+        pub fn set_nexus_prize_pool(
+            origin: OriginFor<T>,
+            pool_id: NexusPrizePoolId,
+            templates: Vec<NexusPrizeTemplate>,
+            config_version: NexusConfigVersion,
+        ) -> DispatchResult {
+            ensure_root(origin)?;
+            ensure!(
+                !NexusPrizePools::<T>::contains_key(pool_id),
+                Error::<T>::NexusPrizePoolAlreadyExists
+            );
+            ensure!(!templates.is_empty(), Error::<T>::InvalidNexusPrizePool);
+            let mut subjects = sp_std::vec::Vec::<SubjectId>::new();
+            for template in templates.iter() {
+                ensure!(
+                    template.card.config_version == config_version
+                        && template.card.apex_side.is_none()
+                        && !template
+                            .card
+                            .base_ranks
+                            .iter()
+                            .any(|rank| matches!(rank, RankValue::Apex))
+                        && !subjects.contains(&template.card.subject_id),
+                    Error::<T>::InvalidNexusPrizePool
+                );
+                subjects.push(template.card.subject_id);
+            }
+            let templates = BoundedNexusPrizeTemplates::<T>::try_from(templates)
+                .map_err(|_| Error::<T>::InvalidNexusPrizePool)?;
+            let subject_count = templates.len().saturated_into::<u32>();
+            NexusPrizePools::<T>::insert(
+                pool_id,
+                NexusPrizePool {
+                    templates,
+                    config_version,
+                },
+            );
+            Self::deposit_event(Event::NexusPrizePoolSet {
+                pool_id,
+                subject_count,
                 config_version,
             });
             Ok(())
@@ -3733,6 +3826,321 @@ pub mod pallet {
                 Error::<T>::NexusTeamSizeInvalid
             );
             Ok(())
+        }
+
+        /// Shared chain-authoritative fulfillment path for the arcade Prize
+        /// Counter, Vending Machine, and other catalog clients.
+        #[transactional]
+        pub fn try_fulfill_nexus_prize(
+            owner: &T::AccountId,
+            kind: NexusPrizeKind,
+            pool_id: NexusPrizePoolId,
+            featured_subject: Option<SubjectId>,
+            entropy: [u8; 32],
+            origin: NexusCardOrigin,
+        ) -> Result<Vec<u32>, DispatchError> {
+            T::AccessControl::ensure_whitelisted(owner)?;
+            ensure!(
+                matches!(origin, NexusCardOrigin::Claim | NexusCardOrigin::Pull),
+                Error::<T>::InvalidNexusPrizePool
+            );
+            let pool =
+                NexusPrizePools::<T>::get(pool_id).ok_or(Error::<T>::NexusPrizePoolMissing)?;
+            let card_count = match kind {
+                NexusPrizeKind::RandomPack => u32::from(T::CardsPerPack::get()),
+                NexusPrizeKind::RandomSingle | NexusPrizeKind::FeaturedSubject => 1,
+            };
+            ensure!(card_count > 0, Error::<T>::InvalidNexusPrizePool);
+            Self::ensure_can_receive_cards(owner, card_count)?;
+
+            let mut selected: Vec<(
+                NexusPrizeTemplate,
+                StarterCardTemplate,
+                NexusStorageLocation,
+                [u8; 32],
+            )> = Vec::new();
+            let mut simulated_counts: Vec<(SubjectId, u32, u32)> = Vec::new();
+            let mut simulated_overflow_total = NexusOverflowCards::<T>::get(owner).len() as u32;
+            let config = Self::current_nexus_config();
+
+            for card_index in 0..card_count {
+                let derived_hash = T::Hashing::hash_of(&(entropy, pool_id, card_index));
+                let mut card_entropy = [0u8; 32];
+                card_entropy.copy_from_slice(&derived_hash.as_ref()[..32]);
+                let template = match kind {
+                    NexusPrizeKind::FeaturedSubject => {
+                        let subject =
+                            featured_subject.ok_or(Error::<T>::NexusPrizeSubjectUnavailable)?;
+                        pool.templates
+                            .iter()
+                            .find(|candidate| candidate.card.subject_id == subject)
+                            .copied()
+                            .ok_or(Error::<T>::NexusPrizeSubjectUnavailable)?
+                    }
+                    NexusPrizeKind::RandomSingle | NexusPrizeKind::RandomPack => {
+                        let index = u32::from_le_bytes([
+                            card_entropy[0],
+                            card_entropy[1],
+                            card_entropy[2],
+                            card_entropy[3],
+                        ]) as usize
+                            % pool.templates.len();
+                        pool.templates[index]
+                    }
+                };
+                let resolved = Self::resolve_nexus_prize_template(&template.card, card_entropy)?;
+                let state_index = simulated_counts
+                    .iter()
+                    .position(|(subject, _, _)| *subject == resolved.subject_id);
+                let index = match state_index {
+                    Some(index) => index,
+                    None => {
+                        simulated_counts.push((
+                            resolved.subject_id,
+                            NexusSubjectCopyCounts::<T>::get(owner, resolved.subject_id),
+                            NexusOverflowSubjectCounts::<T>::get(owner, resolved.subject_id),
+                        ));
+                        simulated_counts.len() - 1
+                    }
+                };
+                let (_, collection_count, overflow_count) = &mut simulated_counts[index];
+                let location = if *collection_count < config.subject_copy_cap {
+                    *collection_count = collection_count
+                        .checked_add(1)
+                        .ok_or(Error::<T>::ArithmeticOverflow)?;
+                    NexusStorageLocation::Collection
+                } else {
+                    ensure!(
+                        simulated_overflow_total < config.overflow_total_capacity,
+                        Error::<T>::NexusOverflowCapacityExceeded
+                    );
+                    ensure!(
+                        *overflow_count < config.overflow_per_subject_capacity,
+                        Error::<T>::NexusOverflowSubjectCapacityExceeded
+                    );
+                    simulated_overflow_total = simulated_overflow_total
+                        .checked_add(1)
+                        .ok_or(Error::<T>::ArithmeticOverflow)?;
+                    *overflow_count = overflow_count
+                        .checked_add(1)
+                        .ok_or(Error::<T>::ArithmeticOverflow)?;
+                    NexusStorageLocation::Overflow
+                };
+                selected.push((template, resolved, location, card_entropy));
+            }
+
+            let pull_id = if origin == NexusCardOrigin::Pull {
+                let pull_id = NextNexusPullId::<T>::get();
+                NextNexusPullId::<T>::put(
+                    pull_id
+                        .checked_add(1)
+                        .ok_or(Error::<T>::ArithmeticOverflow)?,
+                );
+                Some(pull_id)
+            } else {
+                None
+            };
+            let mut card_ids = Vec::with_capacity(card_count as usize);
+            for (template, resolved, location, card_entropy) in selected {
+                let card_id = Self::create_nexus_prize_card(
+                    owner,
+                    template.kind,
+                    &resolved,
+                    location,
+                    card_entropy,
+                    origin,
+                    pull_id,
+                    pool.config_version,
+                )?;
+                card_ids.push(card_id);
+            }
+            Ok(card_ids)
+        }
+
+        fn resolve_nexus_prize_template(
+            template: &StarterCardTemplate,
+            entropy: [u8; 32],
+        ) -> Result<StarterCardTemplate, DispatchError> {
+            let mut base_ranks = template.base_ranks;
+            let mut original_total: i32 = 0;
+            let mut resolved_total: i32 = 0;
+            for (index, rank) in base_ranks.iter_mut().enumerate() {
+                let RankValue::Number(value) = *rank else {
+                    return Err(Error::<T>::InvalidNexusPrizePool.into());
+                };
+                original_total += i32::from(value);
+                let delta = i16::from(entropy[index] % 3) - 1;
+                let resolved = (i16::from(value) + delta).clamp(1, 9) as u8;
+                resolved_total += i32::from(resolved);
+                *rank = RankValue::Number(resolved);
+            }
+            let vary_gene = |value: u8, byte: u8| -> u8 {
+                let delta = i16::from(byte % 3) - 1;
+                (i16::from(value) + delta).clamp(0, 100) as u8
+            };
+            let genes = GeneProfile {
+                strength: vary_gene(template.genes.strength, entropy[8]),
+                agility: vary_gene(template.genes.agility, entropy[9]),
+                vitality: vary_gene(template.genes.vitality, entropy[10]),
+                defense: vary_gene(template.genes.defense, entropy[11]),
+                magic: vary_gene(template.genes.magic, entropy[12]),
+                resist: vary_gene(template.genes.resist, entropy[13]),
+            };
+            let numeric = base_ranks.map(|rank| match rank {
+                RankValue::Number(value) => value,
+                RankValue::Apex => 10,
+            });
+            let min = *numeric.iter().min().unwrap_or(&1);
+            let max = *numeric.iter().max().unwrap_or(&1);
+            let style_label = if max.saturating_sub(min) <= 2 {
+                RankStyleLabel::Balanced
+            } else if max >= 8 {
+                RankStyleLabel::Sharp
+            } else {
+                RankStyleLabel::Guarded
+            };
+            let power_delta = resolved_total - original_total;
+            let card_power =
+                (i32::from(template.card_power) + power_delta).clamp(1, i32::from(u16::MAX)) as u16;
+            Ok(StarterCardTemplate {
+                subject_id: template.subject_id,
+                base_ranks,
+                apex_side: None,
+                style_label,
+                genes,
+                element_profile: template.element_profile,
+                card_power,
+                config_version: template.config_version,
+            })
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn create_nexus_prize_card(
+            owner: &T::AccountId,
+            kind: NexusCardKind,
+            template: &StarterCardTemplate,
+            location: NexusStorageLocation,
+            _entropy: [u8; 32],
+            origin: NexusCardOrigin,
+            pull_id: Option<u32>,
+            pool_version: NexusConfigVersion,
+        ) -> Result<u32, DispatchError> {
+            let values = Self::starter_slot_values(template.base_ranks)?;
+            let card_id = NextCardId::<T>::get();
+            let next_card_id = card_id.checked_add(1).ok_or(Error::<T>::CardIdExhausted)?;
+            let now = frame_system::Pallet::<T>::block_number();
+            Cards::<T>::insert(
+                card_id,
+                CardInfo {
+                    owner: owner.clone(),
+                    finalized: true,
+                    slot_values: Some(values),
+                },
+            );
+            Self::record_card_mint(card_id, owner);
+            CardsByOwner::<T>::try_mutate(owner, |set| -> DispatchResult {
+                set.try_insert(card_id)
+                    .map_err(|_| Error::<T>::MaxOwnedCardsReached)?;
+                Ok(())
+            })?;
+            NextCardId::<T>::put(next_card_id);
+            Self::assign_starter_artwork_from_active_season(
+                card_id,
+                template.subject_id.saturated_into::<MediaId>(),
+            )?;
+            let _ = Self::ensure_card_genome(card_id)?;
+            NexusCollectionCards::<T>::insert(
+                card_id,
+                CollectionCard {
+                    owner: owner.clone(),
+                    subject_id: template.subject_id,
+                    kind,
+                    origin,
+                    base_ranks: template.base_ranks,
+                    apex_side: template.apex_side,
+                    genes: template.genes,
+                    element_profile: template.element_profile,
+                    card_power: template.card_power,
+                    location,
+                    account_bound: false,
+                    acquired_at: now,
+                    config_version: template.config_version,
+                },
+            );
+            match location {
+                NexusStorageLocation::Collection => {
+                    NexusSubjectCopyCounts::<T>::try_mutate(
+                        owner,
+                        template.subject_id,
+                        |count| -> DispatchResult {
+                            *count = count.checked_add(1).ok_or(Error::<T>::ArithmeticOverflow)?;
+                            Ok(())
+                        },
+                    )?;
+                }
+                NexusStorageLocation::Overflow => {
+                    NexusOverflowCards::<T>::try_mutate(owner, |cards| -> DispatchResult {
+                        cards
+                            .try_push(card_id)
+                            .map_err(|_| Error::<T>::NexusOverflowCapacityExceeded)?;
+                        Ok(())
+                    })?;
+                    NexusOverflowSubjectCounts::<T>::try_mutate(
+                        owner,
+                        template.subject_id,
+                        |count| -> DispatchResult {
+                            *count = count.checked_add(1).ok_or(Error::<T>::ArithmeticOverflow)?;
+                            Ok(())
+                        },
+                    )?;
+                    Self::deposit_event(Event::CardEnteredOverflow {
+                        account_id: owner.clone(),
+                        card_record_id: card_id,
+                        subject_id: template.subject_id,
+                        reason: OverflowReason::SubjectCopyCapExceeded,
+                    });
+                }
+                NexusStorageLocation::Vault => {
+                    return Err(Error::<T>::InvalidNexusPrizePool.into());
+                }
+            }
+            Self::try_assign_progression_tree_for_card(card_id)?;
+            match origin {
+                NexusCardOrigin::Claim => Self::deposit_event(Event::NexusCardClaimed {
+                    account_id: owner.clone(),
+                    card_record_id: card_id,
+                    subject_id: template.subject_id,
+                    source: origin,
+                    config_version: template.config_version,
+                }),
+                NexusCardOrigin::Pull => Self::deposit_event(Event::NexusCardPulled {
+                    account_id: owner.clone(),
+                    pull_id: pull_id.ok_or(Error::<T>::InvalidNexusPrizePool)?,
+                    card_record_id: card_id,
+                    subject_id: template.subject_id,
+                    pack_pool_version: pool_version,
+                }),
+                _ => return Err(Error::<T>::InvalidNexusPrizePool.into()),
+            }
+            Self::deposit_event(Event::RankSlotResolved {
+                card_record_id: card_id,
+                base_ranks: template.base_ranks,
+                apex_side: template.apex_side,
+                style_label: template.style_label,
+                card_power: template.card_power,
+                config_version: template.config_version,
+            });
+            Self::deposit_event(Event::GenesResolved {
+                card_record_id: card_id,
+                genes: template.genes,
+                element_profile: template.element_profile,
+                config_version: template.config_version,
+            });
+            Self::deposit_event(Event::CardMinted {
+                player: owner.clone(),
+                card_id,
+            });
+            Ok(card_id)
         }
 
         pub fn classify_nexus_card_location(

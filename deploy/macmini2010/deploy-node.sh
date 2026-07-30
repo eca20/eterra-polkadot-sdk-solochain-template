@@ -63,8 +63,24 @@ install -m 0644 "${remote_tmp_dir}/node.env" "${REMOTE_NODE_ENV_FILE}"
 chown root:root "${REMOTE_NODE_ENV_FILE}"
 systemctl daemon-reload
 systemctl restart "${REMOTE_NODE_SERVICE_NAME}.service"
+systemctl is-active --quiet "${REMOTE_NODE_SERVICE_NAME}.service"
 systemctl --no-pager --full status "${REMOTE_NODE_SERVICE_NAME}.service" || true
 rm -rf "${remote_tmp_dir}"
 EOF
+
+if [[ "${NODE_BUILD_MODE}" == "remote-native" ]] && [[ "${REMOTE_CARGO_CLEAN_AFTER_DEPLOY}" == "1" ]]; then
+	log "removing remote Cargo build directory after successful node installation"
+	remote_bash <<EOF
+set -euo pipefail
+target_dir="${REMOTE_NODE_DIR}/target"
+node_dir="${REMOTE_NODE_DIR}"
+if [[ "\${target_dir}" != "\${node_dir}/target" ]] || [[ "\${target_dir}" == "/" ]]; then
+	echo "[macmini2010] refusing unsafe Cargo cleanup path: \${target_dir}" >&2
+	exit 1
+fi
+rm -rf -- "\${target_dir}"
+echo "[macmini2010] removed Cargo build directory: \${target_dir}"
+EOF
+fi
 
 log "node deploy complete"

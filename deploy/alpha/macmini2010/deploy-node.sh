@@ -139,7 +139,7 @@ if [[ "${node_build_needed}" -eq 1 ]]; then
 	if [[ "${ENABLE_REMOTE_SCCACHE}" == "1" ]] && command -v sccache >/dev/null 2>&1; then
 		export RUSTC_WRAPPER="$(command -v sccache)"
 	fi
-	CARGO_TERM_COLOR=never cargo build -p solochain-eterra-node --release -j "${REMOTE_CARGO_JOBS}"
+	CARGO_TERM_COLOR=never cargo build --locked -p solochain-eterra-node --release -j "${REMOTE_CARGO_JOBS}"
 	install -m 0755 "${REMOTE_CARGO_TARGET_DIR}/release/solochain-eterra-node" "${REMOTE_NODE_BIN}"
 fi
 
@@ -203,5 +203,20 @@ chown root:root "${REMOTE_NODE_CODE_HASH_FILE}" "${REMOTE_NODE_RUNTIME_HASH_FILE
 systemctl --no-pager --full status "${REMOTE_NODE_SERVICE_NAME}.service" || true
 rm -rf "${remote_tmp_dir}"
 EOF
+
+if [[ "${REMOTE_CARGO_CLEAN_AFTER_DEPLOY}" == "1" ]]; then
+	log "removing remote Cargo build cache after successful node installation"
+	remote_bash <<EOF
+set -euo pipefail
+target_dir="${REMOTE_CARGO_TARGET_DIR}"
+deploy_root="${DEPLOY_ROOT}"
+if [[ "\${target_dir}" != "\${deploy_root}/"* ]] || [[ "\${target_dir}" == "\${deploy_root}" ]] || [[ "\${target_dir}" == "/" ]]; then
+	echo "[alpha-macmini2010] refusing unsafe Cargo cleanup path: \${target_dir}" >&2
+	exit 1
+fi
+rm -rf -- "\${target_dir}"
+echo "[alpha-macmini2010] removed Cargo build cache: \${target_dir}"
+EOF
+fi
 
 log "alpha node deploy complete release=${ETERRA_RELEASE_VERSION} source=${CHAIN_SOURCE_COMMIT} code_sha256=${node_code_hash} spec_sha256=${node_spec_hash} runtime_env_sha256=${node_runtime_hash}"

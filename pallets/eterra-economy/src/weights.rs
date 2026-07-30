@@ -46,6 +46,16 @@ pub trait WeightInfo {
 	fn record_revenue() -> Weight;
 	fn fulfill_product() -> Weight;
 	fn claim_arcade_credit() -> Weight;
+	fn set_ticket_asset() -> Weight;
+	fn set_ticket_reward_policy() -> Weight;
+	fn set_arcade_economy_pause() -> Weight;
+	fn set_arcade_account_restriction() -> Weight;
+	fn transfer_tickets() -> Weight;
+	fn upsert_prize_sku() -> Weight;
+	fn set_featured_rotation_config() -> Weight;
+	fn redeem_prize_with_tickets() -> Weight;
+	fn purchase_prize_with_native() -> Weight;
+	fn rotate_featured() -> Weight;
 }
 
 impl WeightInfo for () {
@@ -79,6 +89,16 @@ impl WeightInfo for () {
 	fn claim_arcade_credit() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
+	fn set_ticket_asset() -> Weight { Weight::from_parts(20_000, 0) }
+	fn set_ticket_reward_policy() -> Weight { Weight::from_parts(30_000, 0) }
+	fn set_arcade_economy_pause() -> Weight { Weight::from_parts(15_000, 0) }
+	fn set_arcade_account_restriction() -> Weight { Weight::from_parts(15_000, 0) }
+	fn transfer_tickets() -> Weight { Weight::from_parts(50_000, 0) }
+	fn upsert_prize_sku() -> Weight { Weight::from_parts(30_000, 0) }
+	fn set_featured_rotation_config() -> Weight { Weight::from_parts(60_000, 0) }
+	fn redeem_prize_with_tickets() -> Weight { Weight::from_parts(150_000, 0) }
+	fn purchase_prize_with_native() -> Weight { Weight::from_parts(180_000, 0) }
+	fn rotate_featured() -> Weight { Weight::from_parts(150_000, 0) }
 }
 
 /// Weight functions for `pallet_eterra_economy`.
@@ -202,5 +222,40 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(10_000_000, 0)
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
+	}
+	fn set_ticket_asset() -> Weight {
+		Weight::from_parts(20_000_000, 0).saturating_add(T::DbWeight::get().reads_writes(2, 1))
+	}
+	fn set_ticket_reward_policy() -> Weight {
+		Weight::from_parts(35_000_000, 0).saturating_add(T::DbWeight::get().reads_writes(1, 1))
+	}
+	fn set_arcade_economy_pause() -> Weight {
+		Weight::from_parts(15_000_000, 0).saturating_add(T::DbWeight::get().writes(1))
+	}
+	fn set_arcade_account_restriction() -> Weight {
+		Weight::from_parts(15_000_000, 0).saturating_add(T::DbWeight::get().writes(1))
+	}
+	fn transfer_tickets() -> Weight {
+		Weight::from_parts(70_000_000, 0).saturating_add(T::DbWeight::get().reads_writes(5, 2))
+	}
+	fn upsert_prize_sku() -> Weight {
+		Weight::from_parts(30_000_000, 0).saturating_add(T::DbWeight::get().reads_writes(1, 1))
+	}
+	fn set_featured_rotation_config() -> Weight {
+		Weight::from_parts(65_000_000, 0).saturating_add(T::DbWeight::get().reads_writes(1, 1))
+	}
+	fn redeem_prize_with_tickets() -> Weight {
+		Weight::from_parts(180_000_000, 0).saturating_add(T::DbWeight::get().reads_writes(12, 9))
+	}
+	fn purchase_prize_with_native() -> Weight {
+		Weight::from_parts(220_000_000, 0).saturating_add(T::DbWeight::get().reads_writes(14, 10))
+	}
+	/// Conservative upper bound for one bounded 12-slot rotation over the
+	/// configured subject pool. Production activation still requires regenerating
+	/// this file with the target release hardware benchmark profile.
+	fn rotate_featured() -> Weight {
+		Weight::from_parts(150_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 8_192))
+			.saturating_add(T::DbWeight::get().reads_writes(3, 3))
 	}
 }

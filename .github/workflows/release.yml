@@ -61,6 +61,9 @@ jobs:
         run: ./scripts/deploy.sh try-runtime-check production
         timeout-minutes: 45
 
+      - name: Validate release script safety contracts
+        run: ./scripts/release/test-release-scripts.sh
+
       - name: Validate checked-in production spec (optional)
         run: |
           if [ -f chain-specs/production-plain.json ]; then
