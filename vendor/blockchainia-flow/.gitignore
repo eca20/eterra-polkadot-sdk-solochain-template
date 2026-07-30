@@ -1,0 +1,7 @@
+/target/
+/node_modules/
+**/dist/
+**/test-dist/
+**/pkg/
+*.log
+.DS_Store

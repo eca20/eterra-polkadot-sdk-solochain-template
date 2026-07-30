@@ -1,0 +1,16 @@
+[package]
+name = "blockchainia-flow-core"
+version = "0.1.0-alpha.1"
+edition = "2021"
+license = "MIT-0"
+authors = ["Blockchainia"]
+homepage = "https://blockchainia.us/flow"
+repository = "https://github.com/blockchainia/blockchainia-flow"
+rust-version = "1.81"
+description = "Pure deterministic preview engine for Blockchainia Flow v0"
+
+[dependencies]
+blockchainia-flow-manifest = { path = "../blockchainia-flow-manifest" }
+
+[dev-dependencies]
+serde_json = "1.0"

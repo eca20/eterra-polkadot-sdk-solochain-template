@@ -1,0 +1,77 @@
+{
+  "schema": "blockchainia.flow.wire-contract.v0",
+  "release": "0.1.0-alpha.1",
+  "authoringLabels": {
+    "preferred": "blockchainia.flow.v0",
+    "permanentAliases": ["eterra.flow.v0"]
+  },
+  "runtimeManifestVersion": 0,
+  "eterraCompatibility": {
+    "runtimeAlias": "EterraFlow",
+    "palletIndex": 29,
+    "storageVersion": 2,
+    "callIndices": {
+      "create_game": 0,
+      "upload_version_chunk": 1,
+      "finalize_version": 2,
+      "activate_version": 3,
+      "create_instance": 4,
+      "submit_action": 5,
+      "submit_attested_event": 6
+    }
+  },
+  "enumDiscriminants": {
+    "Value": ["Bool", "U64", "I64", "Enum"],
+    "ValueType": ["Bool", "U64", "I64", "Enum"],
+    "VariableScope": ["Game", "Instance", "Actor", "Entity", "Passport"],
+    "Scope": ["Game", "Instance", "Actor", "Entity", "Passport"],
+    "ConditionAtom": [
+      "VarEquals",
+      "VarGreaterOrEqual",
+      "VarLessOrEqual",
+      "HasItem",
+      "HasCredit",
+      "HasEntitlement",
+      "MachineStateEquals"
+    ],
+    "Condition": ["All", "Any", "Not", "Atom"],
+    "EconomyGateAtom": [
+      "Free",
+      "DeveloperSponsored",
+      "RequiresPayment",
+      "RequiresEntitlement",
+      "ConsumesCredit"
+    ],
+    "EconomyGate": [
+      "Free",
+      "DeveloperSponsored",
+      "RequiresPayment",
+      "RequiresEntitlement",
+      "ConsumesCredit",
+      "All",
+      "Any"
+    ],
+    "Effect": [
+      "SetVar",
+      "IncVar",
+      "DecVar",
+      "GrantItem",
+      "ConsumeItem",
+      "GrantCredit",
+      "GrantEntitlement",
+      "RevokeEntitlement",
+      "UpdatePassportCounter",
+      "GrantPassportBadge",
+      "RevokePassportBadge",
+      "SetMachineState"
+    ],
+    "AttestedEffectPolicy": [
+      "UpdatePassportCounter",
+      "GrantPassportBadge",
+      "RevokePassportBadge",
+      "SetMachineState"
+    ]
+  },
+  "manifestHash": "blake2b-256(exact SCALE ManifestV0 bytes)"
+}
+

@@ -1,0 +1,34 @@
+{
+  "manifest_version": "blockchainia.flow.v0",
+  "game_id": 1,
+  "version_id": 1,
+  "machines": [
+    { "machine_id": 8, "initial_state": 1, "states": [1, 2] }
+  ],
+  "variables": [],
+  "actions": [1],
+  "transitions": [],
+  "event_definitions": [
+    {
+      "event_type": 8,
+      "policies": [
+        {
+          "update_passport_counter": { "field_id": 123, "amount": 1 }
+        },
+        {
+          "update_passport_counter": { "field_id": 124, "amount": 17 }
+        },
+        {
+          "grant_passport_badge": { "badge_id": 900 }
+        },
+        {
+          "set_machine_state": {
+            "scope": { "instance": true },
+            "machine_id": 8,
+            "state_id": 2
+          }
+        }
+      ]
+    }
+  ]
+}

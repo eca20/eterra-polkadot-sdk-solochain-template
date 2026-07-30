@@ -1,0 +1,40 @@
+{
+  "schema": "blockchainia.flow.locked-templates.v0",
+  "fixtures": [
+    {
+      "id": "zelda-door",
+      "input": "inputs/zelda-door.flow.json",
+      "scaleBytes": 151,
+      "blake2b256": "032251c5252f0d13230bd4a236cefcc6db32076502230fd03f70169cd402c433",
+      "sourceOutputSha256": "eee4c69e925eb12d4bb4a5e7d4da308bed5e4d199af0ddf3054169699a8195d5"
+    },
+    {
+      "id": "arcade-credit-run",
+      "input": "inputs/arcade-credit-run.flow.json",
+      "scaleBytes": 121,
+      "blake2b256": "ff8a969873aea32afeeba948773c2b4b5fdc977f4eb7265420875ef75c7fee47",
+      "sourceOutputSha256": "33305f5b406391e5fdcbac6f3797b46177cdc77e9fd886a781cca1fc13696531"
+    },
+    {
+      "id": "season-pass-reward",
+      "input": "inputs/season-pass-reward.flow.json",
+      "scaleBytes": 133,
+      "blake2b256": "a5868eba91236d0f3985ae961c4d8adec3518c0eb4142d91035dc43932e32c18",
+      "sourceOutputSha256": "11c0e9a3ca6e2eddcc18275441c74c9b1463a47f73af1f580fb7a4f85c377c19"
+    },
+    {
+      "id": "dungeon-run",
+      "input": "inputs/dungeon-run.flow.json",
+      "scaleBytes": 204,
+      "blake2b256": "4e9b0c6ef600274220e831291865746c53e772fad1d2456e961bbf7c46732e25",
+      "sourceOutputSha256": "bfbdb90c7fa5a448e4a1ea9dfd19e39affca17493e82a81c05609d1f20553898"
+    },
+    {
+      "id": "fps-attested-result",
+      "input": "inputs/fps-attested-result.flow.json",
+      "scaleBytes": 86,
+      "blake2b256": "99e1aff3fe84ca5e93e18310deada9edaa008fa375539ea291a0ddcf24de23f2",
+      "sourceOutputSha256": "17bb2ef078e93fcfa78dd79d59300e95cc8b9314b21751f23c3a63a0442bfdef"
+    }
+  ]
+}

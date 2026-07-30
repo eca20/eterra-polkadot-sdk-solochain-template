@@ -1,0 +1,25 @@
+{
+  "name": "blockchainia-flow-workspace",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "license": "MIT-0",
+  "type": "module",
+  "workspaces": [
+    "packages/flow-sdk",
+    "apps/builder"
+  ],
+  "scripts": {
+    "build": "npm run build:sdk && npm run build:wasm && npm run build:builder",
+    "build:sdk": "npm run build --workspace @blockchainia/flow-sdk",
+    "build:wasm": "./scripts/build-wasm.sh",
+    "build:builder": "npm run build --workspace @blockchainia/flow-builder",
+    "test": "npm run test:sdk && npm run test:builder",
+    "test:sdk": "npm run test --workspace @blockchainia/flow-sdk",
+    "test:builder": "npm run test --workspace @blockchainia/flow-builder",
+    "check": "npm run build && npm run test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "typescript": "^5.7.2"
+  }
+}

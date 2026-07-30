@@ -28,6 +28,66 @@ parameter_types! {
     pub const BlockHashCount: u64 = 250;
 }
 
+pub struct MockTicketAssets;
+
+impl pallet_eterra_economy::TicketAssetProvider<AccountId> for MockTicketAssets {
+    fn asset_exists(_asset_id: u32) -> bool {
+        true
+    }
+
+    fn decimals(_asset_id: u32) -> u8 {
+        0
+    }
+
+    fn balance(_asset_id: u32, _account: &AccountId) -> u128 {
+        0
+    }
+
+    fn mint(
+        _asset_id: u32,
+        _account: &AccountId,
+        _amount: u128,
+    ) -> frame_support::dispatch::DispatchResult {
+        Ok(())
+    }
+
+    fn burn(
+        _asset_id: u32,
+        _account: &AccountId,
+        _amount: u128,
+    ) -> frame_support::dispatch::DispatchResult {
+        Ok(())
+    }
+
+    fn transfer(
+        _asset_id: u32,
+        _from: &AccountId,
+        _to: &AccountId,
+        _amount: u128,
+    ) -> frame_support::dispatch::DispatchResult {
+        Ok(())
+    }
+}
+
+pub struct MockNativePayments;
+
+impl pallet_eterra_economy::NativePaymentProvider<AccountId> for MockNativePayments {
+    fn pay_treasury(
+        _account: &AccountId,
+        _amount: u128,
+    ) -> frame_support::dispatch::DispatchResult {
+        Ok(())
+    }
+}
+
+pub struct MockRandomness;
+
+impl pallet_eterra_economy::ArcadeRandomnessProvider for MockRandomness {
+    fn random(_domain: &[u8], _payload: &[u8]) -> [u8; 32] {
+        [0; 32]
+    }
+}
+
 impl system::Config for Test {
     type BaseCallFilter = Everything;
     type BlockWeights = ();
@@ -218,9 +278,21 @@ impl pallet_eterra_economy::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type WeightInfo = ();
     type AdminOrigin = frame_system::EnsureRoot<AccountId>;
+    type TicketAssets = MockTicketAssets;
+    type NativePayments = MockNativePayments;
+    type PrizeFulfillment = ();
+    type AccountEligibility = ();
+    type RandomnessProvider = MockRandomness;
     type ArcadeCreditFaucetGameId = ConstU64<1000>;
     type ArcadeCreditFaucetType = ConstU32<1>;
     type ArcadeCreditFaucetAmount = ConstU64<1000>;
+    type MaxScoreTiers = ConstU32<8>;
+    type MaxEligibleRewardModes = ConstU32<8>;
+    type MaxEligibleEndedReasons = ConstU32<8>;
+    type MaxFeaturedPoolSubjects = ConstU32<8>;
+    type MaxFeaturedSlots = ConstU32<8>;
+    type FeaturedSlotCount = ConstU32<4>;
+    type MaxPrizeCards = ConstU32<8>;
 }
 
 impl pallet_eterra_profile::Config for Test {

@@ -6,11 +6,12 @@ use crate::mock::{
 use codec::{Decode, Encode};
 use frame_support::{
     assert_noop, assert_ok,
-    traits::{Get, GetStorageVersion, StorageVersion},
+    traits::{Get, GetStorageVersion, Hooks, StorageVersion},
     BoundedVec,
 };
 use sp_core::H256;
 use sp_runtime::traits::Hash as HashT;
+use sp_runtime::StateVersion;
 use sp_std::vec;
 use sp_std::vec::Vec;
 
@@ -1163,6 +1164,125 @@ fn canonical_manifest_hash_is_exact_scale_bytes() {
             canonical_hash,
         ));
     });
+}
+
+#[test]
+fn vendored_wire_fixture_and_permanent_alias_are_byte_identical() {
+    let preferred_json = include_bytes!(
+        "../../../vendor/blockchainia-flow/fixtures/wire/v0/inputs/zelda-door.flow.json"
+    );
+    let locked_hex =
+        include_str!("../../../vendor/blockchainia-flow/fixtures/wire/v0/zelda-door.scale.hex");
+    let preferred = eterra_manifest_builder::compile_manifest_json(
+        preferred_json,
+        eterra_manifest_builder::CompilerLimits::default(),
+    )
+    .expect("preferred authoring contract compiles");
+    let mut aliased: eterra_manifest_builder::AuthoringManifest =
+        serde_json::from_slice(preferred_json).expect("fixture JSON parses");
+    aliased.manifest_version = eterra_manifest_builder::ETERRA_AUTHORING_ALIAS.into();
+    let aliased = eterra_manifest_builder::compile_manifest(
+        aliased,
+        eterra_manifest_builder::CompilerLimits::default(),
+    )
+    .expect("permanent Eterra alias compiles");
+
+    let expected = hex::decode(
+        locked_hex
+            .trim()
+            .strip_prefix("0x")
+            .expect("fixture uses 0x prefix"),
+    )
+    .expect("locked fixture is valid hex");
+    assert_eq!(preferred.scale_bytes, expected);
+    assert_eq!(aliased.scale_bytes, preferred.scale_bytes);
+    assert_eq!(aliased.manifest_hash, preferred.manifest_hash);
+
+    let mut input = preferred.scale_bytes.as_slice();
+    Manifest::<Test>::decode(&mut input).expect("vendored bytes decode through adapter");
+    assert!(input.is_empty(), "Manifest v0 forbids trailing bytes");
+}
+
+#[test]
+fn dispatch_call_indices_remain_zero_through_six() {
+    let calls = [
+        crate::pallet::Call::<Test>::create_game {
+            game_id: GAME,
+            metadata_hash: H256::zero(),
+            metadata_uri: uri(b"ipfs://flow"),
+        }
+        .encode(),
+        crate::pallet::Call::<Test>::upload_version_chunk {
+            game_id: GAME,
+            version_id: VERSION,
+            chunk_index: 0,
+            chunk: bvec::<_, MaxManifestChunkBytes>(vec![0]),
+        }
+        .encode(),
+        crate::pallet::Call::<Test>::finalize_version {
+            game_id: GAME,
+            version_id: VERSION,
+            manifest_hash: H256::zero(),
+        }
+        .encode(),
+        crate::pallet::Call::<Test>::activate_version {
+            game_id: GAME,
+            version_id: VERSION,
+        }
+        .encode(),
+        crate::pallet::Call::<Test>::create_instance {
+            game_id: GAME,
+            instance_id: INSTANCE,
+            version_id: Some(VERSION),
+            config_hash: H256::zero(),
+        }
+        .encode(),
+        crate::pallet::Call::<Test>::submit_action {
+            game_id: GAME,
+            instance_id: INSTANCE,
+            actor_id: ACTOR,
+            machine_id: MACHINE_DOOR,
+            action_id: ACTION_OPEN_DOOR,
+            expected_nonce: 0,
+            payload: empty_payload(),
+        }
+        .encode(),
+        crate::pallet::Call::<Test>::submit_attested_event {
+            game_id: GAME,
+            instance_id: INSTANCE,
+            event_type: EVENT_MATCH_FINALIZED,
+            sequence: 0,
+            payload: empty_attested_payload(),
+            replay_hash: None,
+            effects: empty_attested_effects(),
+        }
+        .encode(),
+    ];
+    for (expected, encoded) in calls.into_iter().enumerate() {
+        assert_eq!(encoded[0], expected as u8);
+    }
+}
+
+#[test]
+fn adapter_runtime_upgrade_hook_is_zero_write() {
+    new_test_ext().execute_with(|| {
+        System::set_block_number(1);
+        let before = sp_io::storage::root(StateVersion::V1);
+        let weight = <Pallet<Test> as Hooks<u64>>::on_runtime_upgrade();
+        let after = sp_io::storage::root(StateVersion::V1);
+        assert_eq!(
+            before, after,
+            "compatibility adapter must not migrate state"
+        );
+        assert_eq!(weight, frame_support::weights::Weight::zero());
+    });
+}
+
+#[test]
+fn runtime_source_keeps_eterra_flow_alias_at_index_29() {
+    let runtime_source = include_str!("../../../runtime/src/lib.rs");
+    assert!(runtime_source.contains("#[runtime::pallet_index(29)]"));
+    assert!(runtime_source.contains("pub type EterraFlow = pallet_eterra_flow;"));
 }
 
 #[test]

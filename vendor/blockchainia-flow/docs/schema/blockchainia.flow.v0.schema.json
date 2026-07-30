@@ -1,0 +1,311 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blockchainia.us/schemas/blockchainia.flow.v0.schema.json",
+  "title": "Blockchainia Flow v0 authoring manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "game_id",
+    "version_id",
+    "machines",
+    "variables",
+    "actions",
+    "transitions",
+    "event_definitions"
+  ],
+  "properties": {
+    "manifest_version": {
+      "enum": ["blockchainia.flow.v0", "eterra.flow.v0"]
+    },
+    "game_id": { "$ref": "#/$defs/u64" },
+    "version_id": { "$ref": "#/$defs/u32" },
+    "machines": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/machine" }
+    },
+    "variables": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": { "$ref": "#/$defs/variable" }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": { "$ref": "#/$defs/u32" }
+    },
+    "transitions": {
+      "type": "array",
+      "maxItems": 20000,
+      "items": { "$ref": "#/$defs/transition" }
+    },
+    "event_definitions": {
+      "type": "array",
+      "maxItems": 256,
+      "items": { "$ref": "#/$defs/eventDefinition" }
+    }
+  },
+  "$defs": {
+    "u32": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "u64": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "scope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["game"],
+          "properties": { "game": { "type": "boolean" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["instance"],
+          "properties": { "instance": { "type": "boolean" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["actor"],
+          "properties": { "actor": { "$ref": "#/$defs/u64" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["entity"],
+          "properties": { "entity": { "$ref": "#/$defs/u64" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["passport"],
+          "properties": { "passport": { "$ref": "#/$defs/u64" } }
+        }
+      ]
+    },
+    "variableRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "variable_id"],
+      "properties": {
+        "scope": { "$ref": "#/$defs/scope" },
+        "variable_id": { "$ref": "#/$defs/u32" }
+      }
+    },
+    "value": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bool"],
+          "properties": { "bool": { "type": "boolean" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["u64"],
+          "properties": { "u64": { "$ref": "#/$defs/u64" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["i64"],
+          "properties": { "i64": { "type": "integer" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enum"],
+          "properties": { "enum": { "$ref": "#/$defs/u32" } }
+        }
+      ]
+    },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["machine_id", "initial_state", "states"],
+      "properties": {
+        "machine_id": { "$ref": "#/$defs/u32" },
+        "initial_state": { "$ref": "#/$defs/u32" },
+        "states": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": { "$ref": "#/$defs/u32" }
+        }
+      }
+    },
+    "variable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["variable_id", "scope", "type"],
+      "properties": {
+        "variable_id": { "$ref": "#/$defs/u32" },
+        "scope": {
+          "enum": ["game", "instance", "actor", "entity", "passport"]
+        },
+        "type": { "enum": ["bool", "u64", "i64", "enum"] },
+        "min": { "type": "integer" },
+        "max": { "type": "integer" }
+      }
+    },
+    "condition": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "oneOf": [
+        {
+          "required": ["all"],
+          "properties": {
+            "all": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "items": { "$ref": "#/$defs/conditionAtom" }
+            }
+          }
+        },
+        {
+          "required": ["any"],
+          "properties": {
+            "any": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "items": { "$ref": "#/$defs/conditionAtom" }
+            }
+          }
+        },
+        {
+          "required": ["not"],
+          "properties": { "not": { "$ref": "#/$defs/conditionAtom" } }
+        },
+        {
+          "required": ["atom"],
+          "properties": { "atom": { "$ref": "#/$defs/conditionAtom" } }
+        }
+      ]
+    },
+    "conditionAtom": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "oneOf": [
+        { "required": ["var_equals"] },
+        { "required": ["var_gte"] },
+        { "required": ["var_lte"] },
+        { "required": ["has_item"] },
+        { "required": ["has_credit"] },
+        { "required": ["has_entitlement"] },
+        { "required": ["machine_state_equals"] }
+      ]
+    },
+    "economyGate": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "oneOf": [
+        { "required": ["free"] },
+        { "required": ["developer_sponsored"] },
+        { "required": ["requires_payment"] },
+        { "required": ["requires_entitlement"] },
+        { "required": ["consumes_credit"] },
+        { "required": ["all"] },
+        { "required": ["any"] }
+      ]
+    },
+    "effect": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "oneOf": [
+        { "required": ["set_var"] },
+        { "required": ["inc_var"] },
+        { "required": ["dec_var"] },
+        { "required": ["grant_item"] },
+        { "required": ["consume_item"] },
+        { "required": ["grant_credit"] },
+        { "required": ["grant_entitlement"] },
+        { "required": ["revoke_entitlement"] },
+        { "required": ["update_passport_counter"] },
+        { "required": ["grant_passport_badge"] },
+        { "required": ["revoke_passport_badge"] },
+        { "required": ["set_machine_state"] }
+      ]
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transition_id",
+        "machine_id",
+        "action_id",
+        "from_state",
+        "to_state",
+        "priority",
+        "economy_gate",
+        "conditions",
+        "effects"
+      ],
+      "properties": {
+        "transition_id": { "$ref": "#/$defs/u64" },
+        "machine_id": { "$ref": "#/$defs/u32" },
+        "action_id": { "$ref": "#/$defs/u32" },
+        "from_state": {
+          "oneOf": [{ "$ref": "#/$defs/u32" }, { "type": "null" }]
+        },
+        "to_state": {
+          "oneOf": [{ "$ref": "#/$defs/u32" }, { "type": "null" }]
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "economy_gate": { "$ref": "#/$defs/economyGate" },
+        "conditions": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/condition" }
+        },
+        "effects": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/effect" }
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "oneOf": [
+        { "required": ["update_passport_counter"] },
+        { "required": ["grant_passport_badge"] },
+        { "required": ["revoke_passport_badge"] },
+        { "required": ["set_machine_state"] }
+      ]
+    },
+    "eventDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_type", "policies"],
+      "properties": {
+        "event_type": { "$ref": "#/$defs/u32" },
+        "policies": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/policy" }
+        }
+      }
+    }
+  }
+}

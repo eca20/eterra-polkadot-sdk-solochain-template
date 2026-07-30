@@ -1,0 +1,17 @@
+{
+  "schema": "blockchainia.flow.source-lock.v1",
+  "eterraRuntimeBaseline": {
+    "commit": "faae2ab5c1721d27946ef2f0f76370f31e209666",
+    "palletLibSha256": "4defb80db438a4b4863f65e7900ad13d27f57e6cc4378c5192d36820b6bf0b0d",
+    "palletWeightsSha256": "983fef4b99a028afd823b943450b5143bc3fb8f516181428618618a5a1564b3c",
+    "declaredLicense": "MIT-0"
+  },
+  "behavioralReferenceOnly": {
+    "manifestCompilerSha256": "8edf7ae9fe6c6d64abac028bce7d26bd8665b8c204505842031c5c9daa1dc7fd",
+    "engineCoreSha256": "dadb9cca57ce0dbab6bffbdeadeab3e4b662211aa86fd07cb556dab9c77e2f17",
+    "schemaSha256": "3d4a0b0905a4a3ec639aa5d0eec9401ca17d0eef5a738f7911a7862df72e0eb3",
+    "declaredLicense": "Apache-2.0",
+    "copiedIntoMit0Target": false
+  }
+}
+

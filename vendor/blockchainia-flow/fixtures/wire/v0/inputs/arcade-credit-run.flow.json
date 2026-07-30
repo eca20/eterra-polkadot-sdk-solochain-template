@@ -1,0 +1,35 @@
+{
+  "manifest_version": "blockchainia.flow.v0",
+  "game_id": 1,
+  "version_id": 1,
+  "machines": [
+    { "machine_id": 20, "initial_state": 1, "states": [1, 2] }
+  ],
+  "variables": [
+    { "variable_id": 30, "scope": "actor", "type": "u64", "min": 0 }
+  ],
+  "actions": [21],
+  "transitions": [
+    {
+      "transition_id": 1,
+      "machine_id": 20,
+      "action_id": 21,
+      "from_state": 1,
+      "to_state": 2,
+      "priority": 0,
+      "economy_gate": {
+        "consumes_credit": { "credit_type": 55, "amount": 1 }
+      },
+      "conditions": [],
+      "effects": [
+        {
+          "inc_var": {
+            "variable": { "scope": { "actor": 42 }, "variable_id": 30 },
+            "amount": 1
+          }
+        }
+      ]
+    }
+  ],
+  "event_definitions": []
+}

@@ -1,0 +1,17 @@
+[package]
+name = "blockchainia-flow-manifest"
+version = "0.1.0-alpha.1"
+edition = "2021"
+license = "MIT-0"
+authors = ["Blockchainia"]
+homepage = "https://blockchainia.us/flow"
+repository = "https://github.com/blockchainia/blockchainia-flow"
+rust-version = "1.81"
+description = "Deterministic Blockchainia Flow v0 manifest compiler and SCALE wire types"
+
+[dependencies]
+blake2 = "0.10"
+codec = { package = "parity-scale-codec", version = "3.6.12", default-features = true, features = ["derive"] }
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

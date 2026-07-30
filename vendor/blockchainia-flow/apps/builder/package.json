@@ -1,0 +1,19 @@
+{
+  "name": "@blockchainia/flow-builder",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "license": "MIT-0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "test": "tsc -p tsconfig.test.json && node --test test-dist/test/model.test.js",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@blockchainia/flow-sdk": "0.1.0-alpha.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vite": "^7.0.0"
+  }
+}

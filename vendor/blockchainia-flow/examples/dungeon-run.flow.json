@@ -1,0 +1,65 @@
+{
+  "manifest_version": "blockchainia.flow.v0",
+  "game_id": 4,
+  "version_id": 1,
+  "machines": [
+    { "machine_id": 40, "initial_state": 1, "states": [1, 2, 3] }
+  ],
+  "variables": [
+    {
+      "variable_id": 400,
+      "scope": "actor",
+      "type": "u64",
+      "min": 0,
+      "max": 100
+    }
+  ],
+  "actions": [41, 42],
+  "transitions": [
+    {
+      "transition_id": 1,
+      "machine_id": 40,
+      "action_id": 41,
+      "from_state": 1,
+      "to_state": 2,
+      "priority": 0,
+      "economy_gate": {
+        "requires_entitlement": { "entitlement_id": 401 }
+      },
+      "conditions": [],
+      "effects": [
+        {
+          "inc_var": {
+            "variable": { "scope": { "actor": 42 }, "variable_id": 400 },
+            "amount": 1
+          }
+        }
+      ]
+    },
+    {
+      "transition_id": 2,
+      "machine_id": 40,
+      "action_id": 42,
+      "from_state": 2,
+      "to_state": 3,
+      "priority": 0,
+      "economy_gate": { "free": {} },
+      "conditions": [
+        {
+          "atom": {
+            "var_gte": {
+              "variable": { "scope": { "actor": 42 }, "variable_id": 400 },
+              "value": 1
+            }
+          }
+        }
+      ],
+      "effects": [
+        {
+          "grant_item": { "actor_id": 42, "item_id": 4100, "amount": 1 }
+        }
+      ]
+    }
+  ],
+  "event_definitions": []
+}

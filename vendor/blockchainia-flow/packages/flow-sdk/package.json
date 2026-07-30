@@ -1,0 +1,24 @@
+{
+  "name": "@blockchainia/flow-sdk",
+  "version": "0.1.0-alpha.1",
+  "description": "Typed keyless SDK for Blockchainia Flow v0",
+  "license": "MIT-0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/sdk.test.js"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
