@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Iterator
+from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -304,6 +305,10 @@ class CoordinatorTests(unittest.TestCase):
         self.bundle, self.manifest = self.make_bundle()
         self.restore = self.root / "restore-evidence.json"
         self.make_restore_evidence()
+        self.runtime_bundle = self.root / "runtime-bundle"
+        self.runtime_bundle.mkdir()
+        self.capture = self.root / "acceptance-boundary-capture.json"
+        self.ingress = self.root / "ingress-closed-evidence.json"
         self.observation = self.root / "post-cutover-observation.json"
         self.plan = self.root / "coordinator-plan.json"
         self.write_observation()
@@ -311,9 +316,81 @@ class CoordinatorTests(unittest.TestCase):
         self.state = self.root / "state"
         self.evidence = self.root / "evidence.json"
         self.trace = self.root / "driver-trace.txt"
+        self.boundary_patches = [
+            mock.patch.object(tool.boundary, "load_runtime_artifacts", return_value=object()),
+            mock.patch.object(
+                tool.boundary,
+                "derive_and_validate_artifacts",
+                side_effect=self.fake_derive_boundary,
+            ),
+            mock.patch.object(
+                tool.boundary,
+                "validate_ingress_evidence",
+                side_effect=self.fake_validate_ingress,
+            ),
+        ]
+        for patcher in self.boundary_patches:
+            patcher.start()
 
     def tearDown(self) -> None:
+        for patcher in reversed(self.boundary_patches):
+            patcher.stop()
         self.temp_context.cleanup()
+
+    def fake_derive_boundary(
+        self,
+        capture_path: Path,
+        gates_path: Path,
+        inventory_path: Path,
+        _artifacts: object,
+    ) -> dict[str, Any]:
+        capture = json.loads(capture_path.read_text())
+        gates = safety.validate_economic_gates(
+            gates_path,
+            RELEASE_ID,
+            self.chain_commit,
+        )
+        inventory_value = safety.validate_acceptance_inventory(
+            inventory_path,
+            RELEASE_ID,
+            self.chain_commit,
+        )
+        block = capture["observedAtFinalizedBlock"]
+        observed = (block["number"], block["hash"])
+        if observed != (gates["blockNumber"], gates["blockHash"]):
+            raise tool.boundary.BoundaryError("capture and gates use mixed blocks")
+        if observed != (inventory_value["blockNumber"], inventory_value["blockHash"]):
+            raise tool.boundary.BoundaryError("capture and inventory use mixed blocks")
+        return {
+            "releaseId": RELEASE_ID,
+            "sourceCommit": self.chain_commit,
+            "observedAtUtc": capture["observedAtUtc"],
+            "blockNumber": block["number"],
+            "blockHash": block["hash"],
+            "genesisHash": "0x" + "6" * 64,
+            "runtimeCodeSha256": tool.boundary.runtime_bundle.PRODUCTION_PINS.production_wasm_sha256,
+            "runtimeMetadataScaleSha256": tool.boundary.runtime_bundle.PRODUCTION_PINS.metadata_scale_sha256,
+            "captureSha256": file_hash(capture_path),
+            "gatesSha256": file_hash(gates_path),
+            "inventorySha256": file_hash(inventory_path),
+            "nonzero": inventory_value["nonzero"],
+        }
+
+    def fake_validate_ingress(
+        self,
+        path: Path,
+        expected_hash: str,
+        identity: dict[str, Any],
+    ) -> dict[str, Any]:
+        if file_hash(path) != expected_hash:
+            raise tool.boundary.BoundaryError("ingress evidence hash mismatch")
+        value = json.loads(path.read_text())
+        if value["observedAtFinalizedBlock"] != {
+            "number": identity["blockNumber"],
+            "hash": identity["blockHash"],
+        }:
+            raise tool.boundary.BoundaryError("ingress evidence block mismatch")
+        return value
 
     def make_repo(self, name: str, files: dict[str, str]) -> Path:
         root = self.root / name
@@ -411,6 +488,24 @@ class CoordinatorTests(unittest.TestCase):
     ) -> None:
         observed_at = observed_at or dt.datetime.now(dt.timezone.utc)
         paused_at = observed_at - dt.timedelta(seconds=30)
+        observed_block = {
+            "number": block_number,
+            "hash": BLOCK_HASH,
+        }
+        write_json(
+            self.capture,
+            {
+                "observedAtUtc": observed_at.isoformat(),
+                "observedAtFinalizedBlock": observed_block,
+            },
+        )
+        write_json(
+            self.ingress,
+            {
+                "mode": "AllExternalWriteIngressClosed",
+                "observedAtFinalizedBlock": observed_block,
+            },
+        )
         write_json(
             self.observation,
             {
@@ -419,10 +514,7 @@ class CoordinatorTests(unittest.TestCase):
                 "releaseId": RELEASE_ID,
                 "sourceCommit": self.chain_commit,
                 "componentSourceCommits": self.source_commits(),
-                "observedAtFinalizedBlock": {
-                    "number": block_number,
-                    "hash": BLOCK_HASH,
-                },
+                "observedAtFinalizedBlock": observed_block,
                 "observedAtUtc": observed_at.isoformat(),
                 "writeBarrier": {
                     "mode": "AllV2WritesPaused",
@@ -433,8 +525,10 @@ class CoordinatorTests(unittest.TestCase):
                     "inventoryObservedAfterPause": True,
                     "pausedAtUtc": paused_at.isoformat(),
                     "stabilityWindowSeconds": 30,
-                    "evidenceSha256": "8" * 64,
+                    "evidenceSha256": file_hash(self.ingress),
                 },
+                "acceptanceBoundaryCaptureSha256": file_hash(self.capture),
+                "ingressClosedEvidenceSha256": file_hash(self.ingress),
                 "economicGatesSha256": file_hash(self.gates),
                 "acceptanceInventorySha256": file_hash(self.acceptance),
             },
@@ -517,10 +611,16 @@ class CoordinatorTests(unittest.TestCase):
             "operationId": "nexus-v2-post-cutover-test",
             "releaseId": RELEASE_ID,
             "sourceCommit": self.chain_commit,
+            "genesisHash": "0x" + "6" * 64,
+            "runtimeCodeSha256": tool.boundary.runtime_bundle.PRODUCTION_PINS.production_wasm_sha256,
+            "runtimeMetadataScaleSha256": tool.boundary.runtime_bundle.PRODUCTION_PINS.metadata_scale_sha256,
+            "runtimeBundleManifestSha256": tool.boundary.runtime_bundle.PRODUCTION_PINS.manifest_sha256,
             "freshResetReadinessSha256": "9" * 64,
             "finalBackupManifestSha256": file_hash(self.manifest),
             "restoreEvidenceSha256": file_hash(self.restore),
             "postCutoverObservationSha256": file_hash(self.observation),
+            "acceptanceBoundaryCaptureSha256": file_hash(self.capture),
+            "ingressClosedEvidenceSha256": file_hash(self.ingress),
             "coordinatorSha256": file_hash(
                 SCRIPT_DIR / "nexus-v2-post-cutover-coordinator.py"
             ),
@@ -562,10 +662,16 @@ class CoordinatorTests(unittest.TestCase):
             str(self.manifest),
             "--bundle-root",
             str(self.bundle),
+            "--runtime-bundle-root",
+            str(self.runtime_bundle),
             "--restore-evidence",
             str(self.restore),
             "--observation",
             str(self.observation),
+            "--acceptance-boundary-capture",
+            str(self.capture),
+            "--ingress-closed-evidence",
+            str(self.ingress),
             "--economic-gates",
             str(self.gates),
             "--acceptance-inventory",
@@ -629,7 +735,37 @@ class CoordinatorTests(unittest.TestCase):
     def test_post_acceptance_failure_pauses_and_never_restores(self) -> None:
         write_json(
             self.acceptance,
-            inventory(self.chain_commit, lifetimeCardsV2Created=1),
+            inventory(
+                self.chain_commit,
+                lifetimeLegacyAuthorityGamesCreated=1,
+                lifetimeLegacyAuthorityAcceptanceWritesLowerBound=1,
+            ),
+        )
+        self.write_observation()
+        self.write_plan()
+        with self.environment(MOCK_POST_SMOKE_FAIL="1"):
+            self.assertEqual(tool.main(self.argv("--execute")), 0)
+        evidence = json.loads(self.evidence.read_text())
+        self.assertEqual(
+            evidence["decision"],
+            "post-acceptance-pause-and-forward-fix",
+        )
+        trace = self.trace.read_text()
+        self.assertIn("execute:chain-media:pause-v2-writes", trace)
+        self.assertIn("execute:site-indexer:pause-v2-writes", trace)
+        self.assertNotIn("execute:chain-media:restore-final-backup", trace)
+        self.assertNotIn("execute:site-indexer:restore-final-backup", trace)
+
+    def test_v2_game_results_write_also_pauses_and_never_restores(self) -> None:
+        write_json(
+            self.acceptance,
+            inventory(
+                self.chain_commit,
+                lifetimeV2SessionsAuthorized=1,
+                lifetimeV2SessionIdsAllocated=1,
+                lifetimeV2ResultsAccepted=1,
+                currentV2ProcessedResults=1,
+            ),
         )
         self.write_observation()
         self.write_plan()

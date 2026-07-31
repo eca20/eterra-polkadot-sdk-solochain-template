@@ -501,13 +501,13 @@ class ReleaseSafetyTests(unittest.TestCase):
             },
         )
 
-    def make_pre_v16_readiness(self) -> tuple[Path, Path, Path]:
+    def make_pre_v16_readiness(self, **inventory_overrides: int) -> tuple[Path, Path, Path]:
         bundle, manifest = self.make_pre_v16_bundle()
         restore = self.make_restore_evidence(bundle, manifest)
         migration = self.make_migration_evidence(bundle, manifest)
         gates = bundle / "artifacts/config/economic-gates.bin"
         inventory = self.root / "pre-v16-inventory.json"
-        write_json(inventory, acceptance_inventory())
+        write_json(inventory, acceptance_inventory(**inventory_overrides))
         readiness = self.root / "pre-v16-readiness.json"
         self.assertEqual(
             tool.main(
@@ -858,12 +858,18 @@ class ReleaseSafetyTests(unittest.TestCase):
                     )
 
     def test_pre_v16_reset_readiness_binds_runtime_observation_and_frozen_block(self) -> None:
-        readiness_path, _, _ = self.make_pre_v16_readiness()
+        readiness_path, _, inventory_path = self.make_pre_v16_readiness(
+            currentLegacyAuthorityGames=1,
+            lifetimeLegacyAuthorityGamesCreated=4,
+            lifetimeLegacyAuthorityAcceptanceWritesLowerBound=4,
+        )
         readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
         self.assertEqual(readiness["economicGateMode"], tool.PRE_V16_FRESH_RESET_GATE_MODE)
         self.assertEqual(readiness["resetMode"], "fresh-genesis-replacement")
         self.assertTrue(readiness["freshGenesisReplacementOnly"])
         self.assertFalse(readiness["inPlaceRuntimeActivationAuthorized"])
+        observed = tool.validate_acceptance_inventory(inventory_path)
+        self.assertEqual(observed["nonzero"]["lifetimeLegacyAuthorityGamesCreated"], 4)
 
     def test_pre_v16_reset_rejects_runtime_artifact_hash_mismatch(self) -> None:
         observation = tcg_storage_version_observation()
@@ -1193,6 +1199,7 @@ class ReleaseSafetyTests(unittest.TestCase):
             executables,
             {
                 "alpha_v2_release.py",
+                "acceptance_boundary.py",
                 "final_freeze.py",
                 "frozen_snapshot_proof.py",
                 "node_candidate.py",
@@ -1205,6 +1212,11 @@ class ReleaseSafetyTests(unittest.TestCase):
         self.assertNotIn("shell=True", coordinator)
         for command in ('"ssh"', '"docker"', '"systemctl"', '"curl"'):
             self.assertNotIn(command, coordinator)
+        boundary = (directory / "acceptance_boundary.py").read_text(encoding="utf-8")
+        self.assertNotIn("subprocess", boundary)
+        self.assertNotIn("shell=True", boundary)
+        for command in ('"ssh"', '"docker"', '"systemctl"'):
+            self.assertNotIn(command, boundary)
 
     def test_documented_operator_inputs_match_the_validators(self) -> None:
         docs = tool.REPO_ROOT / "docs/nexus-v2-private-alpha"

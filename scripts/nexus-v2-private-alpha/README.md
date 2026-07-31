@@ -43,6 +43,21 @@ and role; it is never accepted as the deployable production Wasm.
 Run `./scripts/nexus-v2-private-alpha/alpha_v2_release.py COMMAND --help` for
 the complete arguments.
 
+The post-cutover boundary tool has four closed commands:
+
+```bash
+./scripts/nexus-v2-private-alpha/acceptance_boundary.py collect --help
+./scripts/nexus-v2-private-alpha/acceptance_boundary.py validate-capture --help
+./scripts/nexus-v2-private-alpha/acceptance_boundary.py create-receipt --help
+./scripts/nexus-v2-private-alpha/acceptance_boundary.py verify-receipt --help
+```
+
+`runtimeCodeSha256` and `runtimeMetadataScaleSha256` are SHA-256 digests with
+64 lowercase hexadecimal characters and no `0x` prefix. The release genesis
+and finalized block hashes are 32-byte chain hashes with a lowercase `0x`
+prefix. Do not substitute the Blake2 runtime code hash from target identity for
+the production Wasm file SHA-256 used by this receipt.
+
 - `backup-manifest` requires the exact closed artifact-role set printed below
   and hashes every file.
 - `verify-backup` rehashes the complete private bundle and rejects tool drift.
@@ -83,27 +98,54 @@ the complete arguments.
   same-block pre-V16 gates and zero inventory only after the stable write
   barrier, then emits the complete backup manifest.
 - `automatic-rollback` invokes a separately reviewed, approval-hash-pinned
-  driver only while a fresh finalized inventory still contains no V2
-  acceptance asset. Monotonic lifetime event counters keep this gate closed
-  after an asset is later consumed or burned. Any nonzero count writes a
+  driver only while a fresh finalized replacement-chain inventory still
+  contains no V2 or legacy game-authority acceptance write. Monotonic lifetime
+  counters keep this gate closed after state is consumed, pruned, or burned.
+  Any nonzero count writes a
   blocked decision and never invokes the driver. Pre-V16 fresh-reset gates are
   never accepted for rollback; rollback requires post-V16 disabled-state
   gates from the replacement chain.
 - `deploy/alpha/macmini2010/nexus-v2-post-cutover-coordinator.py` closes the
   cross-host decision/orchestration gap. It revalidates the exact final
-  backup and restore rehearsal, requires a fresh post-V16 same-block gate and
-  inventory observation behind a stable all-V2-write barrier, pins distinct
-  clean chain/media/site commits, dry-runs every action adapter, archives both
-  failed V2 roots before restoring either host, and writes restart-safe
-  immutable phase markers. See
+  backup and restore rehearsal, requires a deterministic RPC capture whose
+  post-V16 gates and current/lifetime V2 and legacy inventory are rederived at
+  one finalized block behind a stable all-write-ingress barrier, pins the exact
+  frozen runtime and distinct clean chain/media/site commits, dry-runs every
+  action adapter, archives both failed V2 roots before restoring either host,
+  and writes restart-safe immutable phase markers. See
   `deploy/alpha/macmini2010/nexus-v2-post-cutover-rollback.md`.
+- `acceptance_boundary.py collect` talks only to the supplied HTTP(S) RPC,
+  pins one non-genesis finalized block, proves exact spec-106 `:code` and SCALE
+  metadata against the frozen Linux bundle, enumerates every relevant storage
+  prefix at that block, and writes canonical immutable capture/gate/inventory
+  JSON. `validate-capture` always rederives the latter two; hand-authored gate
+  or inventory claims cannot cross the boundary.
+- `acceptance_boundary.py create-receipt` is the one-way Phase-1 to Phase-2
+  transition. It requires zero current and lifetime counters, closed external
+  write ingress, a successful coordinator `--execute` decision of `keep-v2`,
+  and that coordinator evidence's immutable final marker. It emits a new
+  mode-0440 canonical receipt and refuses overwrite. `verify-receipt` requires
+  the receipt's separately supplied SHA-256 plus exact release, deployment
+  commit, genesis, production Wasm, and metadata identities.
 - Post-reset validation is two-phase with access closed. First, perform only
   base-stack read-only smoke with fresh post-V16 disabled gates and zero
-  current/lifetime acceptance inventory; the automatic-restore decision ends
-  there. Only after it passes may authority registration and the actual-chain
-  FPS proof create a first session/result. That first record permanently moves
-  recovery to pause-and-forward-fix before authority/FPS/full-loop smoke and
-  access reopening.
+  current/lifetime acceptance inventory. Issue the acceptance-boundary receipt
+  only after the coordinator execute evidence says `keep-v2`; receipt issuance
+  itself permanently retires archive restoration before the first bootstrap
+  write. Only then may the bounded Phase-2 scope register authority, grant one
+  ManualAdmin AlphaAccess entry while mode remains `Enforced`, and run the
+  actual-chain FPS proof. Any legacy `EterraGameAuthority` game write or V2
+  GameResults session/result also makes all inventory-based restore checks
+  nonzero forever. Later failure means pause-and-forward-fix.
+
+The receipt authorizes no general seeding. Before the first proof, its only
+reward policy is a proof-only Ability Deathmatch (`gameId=1005`, version `1`,
+mode `1`) Training/practice policy with zero reward liability, zero XP, empty
+persistent loadout, and all paid/public flags false. Deactivate that policy
+after the proof. A separate post-proof inventory/readback must bind the exact
+nonzero session/result IDs and hashes. Only a canonical seeder bound to those
+exact values may proceed; zero, omitted, wildcard, or arbitrary proof baselines
+are invalid. AlphaAccess may never be switched to `Open` by this receipt.
 
 Required artifact roles:
 

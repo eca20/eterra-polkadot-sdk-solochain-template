@@ -1,5 +1,6 @@
 {
   "automaticRestoreApproved": true,
+  "acceptanceBoundaryCaptureSha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "components": [
     {
       "driverPath": "deploy/alpha/macmini2010/nexus-v2-rollback-component-driver",
@@ -89,6 +90,8 @@
   "expiresAtUtc": "1970-01-01T00:15:00Z",
   "finalBackupManifestSha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "freshResetReadinessSha256": "9999999999999999999999999999999999999999999999999999999999999999",
+  "genesisHash": "0x67556081fc3400e10591f6857e89ce37014b8ba39c539f559f6959b4afa00e5b",
+  "ingressClosedEvidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "kind": "nexus-v2-private-alpha-post-cutover-coordinator-plan",
   "maxObservationAgeSeconds": 600,
   "operationId": "replace-post-cutover-operation-id",
@@ -96,6 +99,9 @@
   "postCutoverObservationSha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "releaseId": "replace-private-alpha-release-id",
   "restoreEvidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "runtimeBundleManifestSha256": "79359a961d065bd189f9b585cd57d339b6f58d8855b4d1d156c03b3e0b3feb5c",
+  "runtimeCodeSha256": "0b0c7c52b38ea880fa626784846164752aa256b9f30d83ed0b45d25277f38243",
+  "runtimeMetadataScaleSha256": "26ed50d186a0cb134cb8ef6b9f619cd04195b52cf4d06fb3f2c31050b103ee68",
   "schemaVersion": 1,
   "sourceCommit": "0000000000000000000000000000000000000000"
 }

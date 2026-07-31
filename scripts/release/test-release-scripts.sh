@@ -12,6 +12,8 @@ DEPLOY_LIB="${ROOT_DIR}/deploy/alpha/macmini2010/lib.sh"
 RESET_NODE="${ROOT_DIR}/deploy/alpha/macmini2010/reset-node.sh"
 RESET_MEDIA="${ROOT_DIR}/deploy/alpha/macmini2010/reset-media.sh"
 READINESS_VERIFIER="${ROOT_DIR}/scripts/nexus-v2-private-alpha/verify_reset_readiness.py"
+ACCEPTANCE_BOUNDARY="${ROOT_DIR}/scripts/nexus-v2-private-alpha/acceptance_boundary.py"
+ACCEPTANCE_BOUNDARY_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_acceptance_boundary.py"
 POST_CUTOVER_COORDINATOR="${ROOT_DIR}/deploy/alpha/macmini2010/nexus-v2-post-cutover-coordinator.py"
 POST_CUTOVER_COORDINATOR_TEST="${ROOT_DIR}/deploy/alpha/macmini2010/test_nexus_v2_post_cutover_coordinator.py"
 FINAL_FREEZE="${ROOT_DIR}/scripts/nexus-v2-private-alpha/final_freeze.py"
@@ -37,6 +39,7 @@ bash -n "$BUILD" "$NEXUS_V2_BUNDLE" "$REHEARSE" "$MEDIA_DEPLOY" "$NODE_DEPLOY" "
 	"$LINUX_AMD64_NODE_BUILD" "$LINUX_AMD64_NODE_RUNNER" "$LINUX_RUNTIME_PROBE_RUNNER"
 python3 -m unittest \
 	"${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_verify_reset_readiness.py"
+python3 -m unittest "$ACCEPTANCE_BOUNDARY_TEST"
 python3 -m unittest "${POST_CUTOVER_COORDINATOR_TEST}"
 python3 -m unittest "$FINAL_FREEZE_TEST" "$NODE_CANDIDATE_TEST" "$FROZEN_SNAPSHOT_PROOF_TEST" \
 	"$FINAL_FREEZE_CHAIN_DRIVER_TEST" "$FINAL_FREEZE_RUNTIME_BUNDLE_TEST"
@@ -46,6 +49,7 @@ python3 -m unittest "$LINUX_RUNTIME_BUNDLE_TEST"
 "$REHEARSE" --help >/dev/null
 "$LINUX_AMD64_NODE_BUILD" --help >/dev/null
 "$LINUX_RUNTIME_BUNDLE_ASSEMBLER" --help >/dev/null
+"$ACCEPTANCE_BOUNDARY" --help >/dev/null
 rg -q '948f9b08a66e7fe01b03a98ef1c7568292e07ec2e4fe90d88c07bb14563c84ff' \
 	"${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
 rg -Fq 'rustup component add rust-src --toolchain 1.89.0-x86_64-unknown-linux-gnu' \
@@ -141,6 +145,14 @@ rg -q 'direct release reset is forbidden' "$RESET_NODE"
 rg -q 'direct release reset is forbidden' "$RESET_MEDIA"
 rg -q 'nexus-v2-private-alpha-reset-readiness' "$READINESS_VERIFIER"
 rg -q 'pre-v16-fresh-reset-frozen' "$READINESS_VERIFIER"
+rg -q 'nexus-v2-private-alpha-acceptance-boundary-rpc-capture' "$ACCEPTANCE_BOUNDARY"
+rg -q 'nexus-v2-private-alpha-acceptance-boundary-receipt' "$ACCEPTANCE_BOUNDARY"
+rg -q 'AllExternalWriteIngressClosed' "$ACCEPTANCE_BOUNDARY"
+rg -q 'automaticRestorePermanentlyDisabled.*True' "$ACCEPTANCE_BOUNDARY"
+rg -q 'lifetimeLegacyAuthorityAcceptanceWritesLowerBound' "$ACCEPTANCE_BOUNDARY"
+rg -q 'lifetimeV2SessionIdsAllocated' "$ACCEPTANCE_BOUNDARY"
+rg -q '0b0c7c52b38ea880fa626784846164752aa256b9f30d83ed0b45d25277f38243' "$FINAL_FREEZE_RUNTIME_BUNDLE"
+rg -q '26ed50d186a0cb134cb8ef6b9f619cd04195b52cf4d06fb3f2c31050b103ee68' "$FINAL_FREEZE_RUNTIME_BUNDLE"
 rg -q 'NEXUS_V2_ROLLBACK_PLAN_SHA256' "$POST_CUTOVER_COORDINATOR"
 rg -q 'post-acceptance-pause-and-forward-fix' "$POST_CUTOVER_COORDINATOR"
 rg -q 'archive-failed-v2' "$POST_CUTOVER_COORDINATOR"
@@ -177,6 +189,13 @@ rg -q 'site-ingress' "$FINAL_FREEZE"
 rg -q 'site-indexer-mongo' "$FINAL_FREEZE"
 if rg -q "['\"](ssh|docker|systemctl|curl)['\"]" "$FINAL_FREEZE"; then
 	echo "final-freeze coordinator must delegate host operations to pinned drivers" >&2
+	exit 1
+fi
+
+if ! git -C "$ROOT_DIR" diff --quiet \
+	7338beff0c99ef72db43a6908f7bee07a181b50b -- \
+	runtime pallets primitives Cargo.toml Cargo.lock; then
+	echo "runtime source/Cargo surface drifted from the frozen spec-106 source" >&2
 	exit 1
 fi
 

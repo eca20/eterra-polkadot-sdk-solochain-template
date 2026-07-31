@@ -1,0 +1,28 @@
+{
+  "blockProductionContinues": true,
+  "components": {
+    "chain-media": {
+      "authorityOperatorIngressClosed": true,
+      "componentEvidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "gameplaySessionIngressClosed": true,
+      "publicRpcWriteIngressClosed": true
+    },
+    "site-indexer": {
+      "componentEvidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "indexerMutationIngressClosed": true,
+      "webMutationIngressClosed": true
+    }
+  },
+  "genesisHash": "0x67556081fc3400e10591f6857e89ce37014b8ba39c539f559f6959b4afa00e5b",
+  "kind": "nexus-v2-private-alpha-ingress-closed-evidence",
+  "mode": "AllExternalWriteIngressClosed",
+  "observedAtFinalizedBlock": {
+    "hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "number": 1
+  },
+  "observedAtUtc": "1970-01-01T00:00:00Z",
+  "paidOrPublicActivationAuthorized": false,
+  "releaseId": "replace-private-alpha-release-id",
+  "schemaVersion": 1,
+  "sourceCommit": "0000000000000000000000000000000000000000"
+}

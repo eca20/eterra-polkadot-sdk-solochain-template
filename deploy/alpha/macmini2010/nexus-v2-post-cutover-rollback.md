@@ -46,22 +46,32 @@ The coordinator revalidates all of these before invoking a component driver:
 
 1. The complete final backup manifest and every artifact in its bundle.
 2. The exact isolated restore-rehearsal evidence for that manifest.
-3. A closed post-cutover observation envelope no more than 900 seconds old.
-4. Post-V16 economic gates with all production, paid, marketplace, Ticket,
-   transfer, reforge, and production-randomness surfaces disabled.
-5. The V2 acceptance inventory from the same finalized block and block hash.
-6. A stable `AllV2WritesPaused` barrier established before the inventory was
-   captured.
-7. A SHA-256-pinned, unexpired coordinator plan with
+3. The exact frozen spec-106 Linux runtime bundle, including production Wasm
+   SHA-256 `0b0c7c52...8243`, Metadata SCALE SHA-256 `26ed50d1...ee68`, and
+   bundle-manifest SHA-256 `79359a96...feb5c`.
+4. A canonical RPC capture made at one non-genesis finalized block and pinned
+   to the fresh Alpha genesis, exact `:code`, and exact SCALE metadata.
+5. Economic gates and the complete current/lifetime V2 and legacy acceptance
+   inventory byte-for-byte rederived from that capture. Hand-authored evidence
+   is rejected.
+6. A closed post-cutover observation envelope no more than 900 seconds old.
+7. Separate hash-pinned evidence that chain/media and site/indexer external
+   write ingress is closed while block production remains available for
+   finalized readback.
+8. A stable `AllV2WritesPaused` barrier established before the inventory was
+   captured and bound to that ingress evidence.
+9. A SHA-256-pinned, unexpired coordinator plan with
    `automaticRestoreApproved: true` and
    `paidOrPublicActivationAuthorized: false`.
-8. The original node, media, and site reset archives keyed by the exact fresh
+10. The original node, media, and site reset archives keyed by the exact fresh
    reset-readiness hash.
 
 The example schemas are:
 
 - `docs/nexus-v2-private-alpha/post-cutover-observation.example.json`
 - `docs/nexus-v2-private-alpha/post-cutover-coordinator-plan.example.json`
+- `docs/nexus-v2-private-alpha/ingress-closed-evidence.example.json`
+- `docs/nexus-v2-private-alpha/acceptance-boundary-receipt.example.json`
 
 Examples contain placeholders and are never valid authorization.
 
@@ -218,7 +228,8 @@ are removed so they cannot masquerade as restored provenance.
 
 If post-cutover smoke passes, the coordinator records `keep-v2`.
 
-If smoke fails and every current and lifetime acceptance count remains zero, it:
+If smoke fails and every current and lifetime V2 and legacy acceptance count
+remains zero, it:
 
 1. reasserts the write pause on both hosts;
 2. archives both failed V2 roots;
@@ -226,8 +237,10 @@ If smoke fails and every current and lifetime acceptance count remains zero, it:
 4. runs restored-state smoke on both hosts; and
 5. records `pre-acceptance-automatic-restore`.
 
-If any current or lifetime V2 acceptance count is nonzero, archive and restore
-actions are never invoked. Both hosts receive only the idempotent pause action,
+If any count is nonzero, archive and restore actions are never invoked. This
+includes a legacy `EterraGameAuthority` game allocation/end/elimination write,
+a V2 GameResults session allocation, or an accepted V2 result even after its
+live maps are later pruned. Both hosts receive only the idempotent pause action,
 and the evidence records `post-acceptance-pause-and-forward-fix`.
 
 ## Invocation
@@ -248,8 +261,11 @@ Local validation invokes no driver:
   --plan /private/evidence/post-cutover-plan.json \
   --manifest /private/backup/backup-manifest.json \
   --bundle-root /private/backup \
+  --runtime-bundle-root /private/runtime/runtime-release-spec106-linux \
   --restore-evidence /private/evidence/restore.json \
   --observation /private/evidence/post-cutover-observation.json \
+  --acceptance-boundary-capture /private/evidence/acceptance-boundary-rpc-capture.json \
+  --ingress-closed-evidence /private/evidence/ingress-closed-evidence.json \
   --economic-gates /private/evidence/post-v16-economic-gates.json \
   --acceptance-inventory /private/evidence/post-v16-inventory.json \
   --state-dir /private/evidence/coordinator/validate \
@@ -265,8 +281,11 @@ adapter in dry-run mode:
   --plan /private/evidence/post-cutover-plan.json \
   --manifest /private/backup/backup-manifest.json \
   --bundle-root /private/backup \
+  --runtime-bundle-root /private/runtime/runtime-release-spec106-linux \
   --restore-evidence /private/evidence/restore.json \
   --observation /private/evidence/post-cutover-observation.json \
+  --acceptance-boundary-capture /private/evidence/acceptance-boundary-rpc-capture.json \
+  --ingress-closed-evidence /private/evidence/ingress-closed-evidence.json \
   --economic-gates /private/evidence/post-v16-economic-gates.json \
   --acceptance-inventory /private/evidence/post-v16-inventory.json \
   --state-dir /private/evidence/coordinator/dry-run \
@@ -287,8 +306,11 @@ pins every dry-run before executing anything:
   --plan /private/evidence/post-cutover-plan.json \
   --manifest /private/backup/backup-manifest.json \
   --bundle-root /private/backup \
+  --runtime-bundle-root /private/runtime/runtime-release-spec106-linux \
   --restore-evidence /private/evidence/restore.json \
   --observation /private/evidence/post-cutover-observation.json \
+  --acceptance-boundary-capture /private/evidence/acceptance-boundary-rpc-capture.json \
+  --ingress-closed-evidence /private/evidence/ingress-closed-evidence.json \
   --economic-gates /private/evidence/post-v16-economic-gates.json \
   --acceptance-inventory /private/evidence/post-v16-inventory.json \
   --state-dir /private/evidence/coordinator/execute \
@@ -299,6 +321,71 @@ pins every dry-run before executing anything:
 Protected execute uses the same environment selection as protected dry-run.
 Never reuse the dry-run state directory for execute, and never reuse an
 operation ID with different evidence.
+
+## One-way Phase-2 receipt
+
+The coordinator never invents the economic gates or inventory. With every
+external write path already closed, collect them from the replacement chain:
+
+```bash
+./scripts/nexus-v2-private-alpha/acceptance_boundary.py collect \
+  --rpc-url http://127.0.0.1:9944 \
+  --runtime-bundle-root /private/runtime/runtime-release-spec106-linux \
+  --runtime-bundle-manifest-sha256 79359a961d065bd189f9b585cd57d339b6f58d8855b4d1d156c03b3e0b3feb5c \
+  --release-id RELEASE_ID \
+  --source-commit 40_LOWERCASE_HEX_DEPLOYMENT_COMMIT \
+  --genesis-hash 0x67556081fc3400e10591f6857e89ce37014b8ba39c539f559f6959b4afa00e5b \
+  --capture /private/evidence/acceptance-boundary-rpc-capture.json \
+  --economic-gates /private/evidence/post-v16-economic-gates.json \
+  --acceptance-inventory /private/evidence/post-v16-inventory.json
+```
+
+All three outputs are exclusive-create, canonical, mode `0440`, and tied to
+one finalized block. The collector verifies deployed `:code` SHA-256
+`0b0c7c52b38ea880fa626784846164752aa256b9f30d83ed0b45d25277f38243`
+and Metadata SCALE SHA-256
+`26ed50d186a0cb134cb8ef6b9f619cd04195b52cf4d06fb3f2c31050b103ee68`.
+The first is the SHA-256 of the production Wasm bytes, not the chain's Blake2
+runtime-code hash.
+
+After coordinator `--execute` produces `decision: keep-v2`, issue exactly one
+receipt. The final marker is normally
+`STATE_DIR/final-evidence.marker.json`:
+
+```bash
+./scripts/nexus-v2-private-alpha/acceptance_boundary.py create-receipt \
+  --runtime-bundle-root /private/runtime/runtime-release-spec106-linux \
+  --runtime-bundle-manifest-sha256 79359a961d065bd189f9b585cd57d339b6f58d8855b4d1d156c03b3e0b3feb5c \
+  --release-id RELEASE_ID \
+  --source-commit 40_LOWERCASE_HEX_DEPLOYMENT_COMMIT \
+  --genesis-hash 0x67556081fc3400e10591f6857e89ce37014b8ba39c539f559f6959b4afa00e5b \
+  --capture /private/evidence/acceptance-boundary-rpc-capture.json \
+  --economic-gates /private/evidence/post-v16-economic-gates.json \
+  --acceptance-inventory /private/evidence/post-v16-inventory.json \
+  --observation /private/evidence/post-cutover-observation.json \
+  --ingress-closed-evidence /private/evidence/ingress-closed-evidence.json \
+  --ingress-closed-evidence-sha256 64_LOWERCASE_HEX \
+  --coordinator-evidence /private/evidence/coordinator/execute.json \
+  --coordinator-evidence-sha256 64_LOWERCASE_HEX \
+  --coordinator-final-marker /private/evidence/coordinator/execute/final-evidence.marker.json \
+  --coordinator-final-marker-sha256 64_LOWERCASE_HEX \
+  --output /private/evidence/acceptance-boundary-receipt.json
+```
+
+The returned receipt SHA-256 is a required independent input to every proof or
+bootstrap verifier. Issuance permanently retires automatic archive restoration
+before any operator write. The exact scope permits authority registration, one
+bounded `ManualAdmin` AlphaAccess grant while access remains `Enforced`, and a
+proof-only Ability Deathmatch Training/practice policy with zero XP, rewards,
+budget liability, or persistent assets. It forbids `Open` access, economically
+valued rewards, paid/public activation, and canonical policy seeding before the
+proof; the proof-only policy must be deactivated afterward.
+
+The actual proof creates the first exact session/result and therefore makes the
+boundary independently observable in `NextSessionId` and durable result/epoch
+counters. Capture a separate post-proof inventory/readback and bind canonical
+seeding to those exact nonzero proof IDs and result hashes. A zero, missing,
+wildcard, or arbitrary proof baseline must fail closed.
 
 ## Restart behavior
 

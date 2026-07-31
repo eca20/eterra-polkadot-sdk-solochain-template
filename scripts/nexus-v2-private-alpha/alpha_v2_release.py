@@ -118,7 +118,7 @@ REQUIRED_MIGRATION_CHECKS = {
     "boundedBatchWeightRespected",
 }
 
-ACCEPTANCE_COUNT_FIELDS = {
+V2_ACCEPTANCE_COUNT_FIELDS = {
     "cardsV2",
     "entitiesV2",
     "trainingPackCredits",
@@ -151,6 +151,40 @@ ACCEPTANCE_COUNT_FIELDS = {
     "lifetimeRankedTeamsCreated",
     "lifetimeProgressionRecordsCreated",
 }
+
+# Phase-1/Phase-2 cutover boundary signals.  The legacy authority pallet
+# predates Nexus V2 and therefore is not covered by the V2 asset counters
+# above.  These monotonic/current observations make any legacy FPS write a
+# restore-blocking acceptance write as well.  They do not retroactively prevent
+# the already-approved, backup-protected pre-V16 fresh-genesis replacement.
+LEGACY_AUTHORITY_ACCEPTANCE_COUNT_FIELDS = {
+    "currentLegacyAuthorityGames",
+    "currentLegacyAuthorityActivePlayerLocks",
+    "currentLegacyAuthorityEliminationRecords",
+    "lifetimeLegacyAuthorityGamesCreated",
+    "lifetimeLegacyAuthorityEndCommandsProcessed",
+    "lifetimeLegacyAuthorityEliminationEventsProcessed",
+    "lifetimeLegacyAuthorityAcceptanceWritesLowerBound",
+}
+
+# Explicit GameResults observations retain the distinction between live maps
+# and monotonic/session-history signals.  NextSessionId is the exact lifetime
+# authorization count for this runtime.  Sealed terminal sessions are
+# conservative: expiry/abort may be included, which is intentionally safe for
+# the one-way restore boundary.
+GAME_RESULTS_ACCEPTANCE_COUNT_FIELDS = {
+    "currentV2GameResultSessions",
+    "currentV2ProcessedResults",
+    "currentV2SettledSessions",
+    "lifetimeV2SessionIdsAllocated",
+    "conservativeSealedV2TerminalSessions",
+}
+
+ACCEPTANCE_COUNT_FIELDS = (
+    V2_ACCEPTANCE_COUNT_FIELDS
+    | LEGACY_AUTHORITY_ACCEPTANCE_COUNT_FIELDS
+    | GAME_RESULTS_ACCEPTANCE_COUNT_FIELDS
+)
 
 MIGRATION_COUNT_FIELDS = {
     "legacyCardsBefore",
@@ -1427,7 +1461,17 @@ def command_prepare_reset(args: argparse.Namespace) -> None:
         == (inventory["blockNumber"], inventory["blockHash"]),
         "economic gates and acceptance inventory must come from the same finalized block",
     )
-    require(not inventory["nonzero"], "reset readiness requires zero V2 acceptance assets")
+    reset_blocking = dict(inventory["nonzero"])
+    if gates["mode"] == PRE_V16_FRESH_RESET_GATE_MODE:
+        # Legacy GameAuthority history belongs to the backed-up source Alpha,
+        # not the fresh V2 state.  It must remain truthful in the inventory but
+        # does not cancel the separately approved fresh-genesis replacement.
+        for field in LEGACY_AUTHORITY_ACCEPTANCE_COUNT_FIELDS:
+            reset_blocking.pop(field, None)
+    require(
+        not reset_blocking,
+        "reset readiness requires zero V2 acceptance state",
+    )
     reset_mode = (
         "fresh-genesis-replacement"
         if gates["mode"] == PRE_V16_FRESH_RESET_GATE_MODE
@@ -1572,7 +1616,9 @@ def command_automatic_rollback(args: argparse.Namespace) -> None:
             "createdAtUtc": utc_now(),
         }
         write_new_json(output, blocked)
-        raise SafetyError("automatic rollback is permanently blocked after any V2 acceptance asset exists")
+        raise SafetyError(
+            "automatic rollback is permanently blocked after any V2 or legacy acceptance write exists"
+        )
 
     driver = validate_external_driver(Path(args.driver), "automatic rollback driver")
     driver_hash = sha256_file(driver)

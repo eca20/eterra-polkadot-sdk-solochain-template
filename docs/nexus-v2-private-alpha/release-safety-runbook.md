@@ -28,8 +28,8 @@ A reset is not ready until one packet contains all of the following:
 4. One finalized-block observation proving either that every V16 economic
    surface is disabled, or that the exact pre-V16 source is frozen behind a
    complete write-ingress stop for a fresh-genesis replacement only.
-5. An acceptance inventory from that same finalized block with every V2
-   acceptance-asset count equal to zero.
+5. An acceptance inventory from that same finalized block with every current
+   and lifetime V2 and legacy game-authority acceptance count equal to zero.
 
 `prepare-reset` only emits a readiness document. A separate operator approval
 and separately reviewed live procedure remain required.
@@ -319,9 +319,13 @@ stopped. This is a separate, mutually exclusive gate kind. It must record:
 - fresh-genesis-only scope with in-place upgrade, V2 activation, and
   paid/public activation all forbidden.
 
-Capture the zero V2 acceptance inventory from that frozen state. The gate,
-inventory, and pinned TCG storage-version observation must identify the same
-finalized block. If Alpha advanced after an earlier backup, take a final
+Capture a truthful acceptance inventory from that frozen state. Every V2 field
+must be zero because those interfaces are structurally absent; legacy
+game-authority counters may be nonzero and are preserved as source-Alpha
+history. Those legacy values do not cancel this backup-protected pre-V16
+fresh-genesis replacement, but the same fields are restore-blocking after V2
+cutover. The gate, inventory, and pinned TCG storage-version observation must
+identify the same finalized block. If Alpha advanced after an earlier backup, take a final
 recoverable backup and copied-state snapshot at this frozen boundary and
 repeat restore/migration evidence before reset. Do not represent an older
 backup as the frozen current state.
@@ -502,21 +506,38 @@ identity remain replacement values until that build finishes.
 Phase 1 is the recoverable base-stack window. Start only the fresh node, media,
 IPFS, indexer/API, and site required for read-only checks. Do not register the
 game authority and do not create a gameplay session or result. Capture fresh
-post-V16 disabled-economic gates, zero current and lifetime acceptance
-inventory, the all-V2-write barrier, and base-stack health/readback. If this
-base smoke fails while every acceptance count is still zero, the pinned
-post-cutover coordinator may select automatic restoration of the verified
-archive. Complete that decision before any actual-chain FPS proof.
+post-V16 disabled-economic gates, zero current and lifetime V2/legacy
+inventory, the all-write-ingress barrier, and base-stack health/readback. Use
+`acceptance_boundary.py collect`; it verifies the exact frozen Linux runtime
+bytes and metadata, captures every relevant storage key at one finalized
+block, and deterministically writes all three artifacts. Do not hand-author the
+gate or inventory. If this base smoke fails while every count is still zero,
+the pinned post-cutover coordinator may select automatic restoration of the
+verified archive. Complete the coordinator's actual `--execute` decision
+before any actual-chain FPS proof.
 
-Phase 2 begins only after Phase 1 passes and the automatic-restore decision is
-closed. Register the authority, then run the actual-chain FPS proof/candidate
-and AI seal. The first session or result is the irreversible acceptance
-boundary: record the new inventory immediately and change rollback policy to
-`post-acceptance-pause-and-forward-fix`. From that point, no archive restore is
-permitted even if the later authority, FPS, Legends, or full-loop smoke fails.
-Continue with authority/FPS/full-loop smoke under forward-fix policy, and reopen
-Alpha access only after those checks pass. Never precompute or submit the FPS
-proof during Phase 1.
+Phase 2 begins only after Phase 1 passes, coordinator execute evidence says
+`keep-v2`, all external write ingress is still closed, and
+`acceptance_boundary.py create-receipt` has written its hash-pinned immutable
+receipt. Receipt issuance itself permanently disables automatic restore before
+the first operator write. The receipt authorizes only bounded authority
+registration, one `ManualAdmin` AlphaAccess grant while mode stays `Enforced`,
+and a proof-only game `1005`/version `1`/mode `1` Ability Deathmatch
+Training/practice policy with zero XP, rewards, budget liability, and
+persistent loadout. `Open` access, valued rewards, paid/public activation, and
+canonical policy seeding remain forbidden.
+
+Run the actual-chain FPS proof/candidate and AI seal, then deactivate its
+temporary policy. Its exact session/result permanently moves recovery to
+`post-acceptance-pause-and-forward-fix`; `NextSessionId` and durable result
+history keep that true even after live maps are pruned. Legacy
+`EterraGameAuthority` game allocation/end/elimination writes have the same
+effect through `NextGameId` and durable command/event receipts. Record the
+post-proof inventory and authoritative readback immediately. The canonical
+seeder must require those exact nonzero proof session/result IDs and hashes;
+zero, omitted, wildcard, or arbitrary baselines are invalid. Reopen Alpha
+access only after later authority/FPS/Legends/full-loop checks pass, and never
+switch AlphaAccess to `Open`. Never precompute or submit the proof in Phase 1.
 
 ### Post-cutover coordinator
 
@@ -529,7 +550,10 @@ It accepts only a SHA-256-pinned, unexpired plan and revalidates:
 
 - the exact complete final backup and its isolated restore evidence;
 - an at-most-900-second-old post-V16 disabled-economics observation;
-- a current/lifetime V2 inventory from the same finalized block and hash;
+- a deterministic current/lifetime V2 and legacy inventory rederived from the
+  same finalized-block RPC capture as the disabled gates;
+- the exact frozen production Wasm, SCALE metadata, fresh genesis, and closed
+  external-write-ingress evidence;
 - a stable all-V2-write barrier established before inventory capture;
 - distinct clean exact commits for chain, media, and site/indexer;
 - exact hashes for the coordinator, component adapters, and existing
@@ -542,8 +566,8 @@ either restore starts. Each phase receives an immutable result and marker, so
 an interrupted run validates and skips completed phases. An adapter retry must
 return its remote idempotency marker without repeating the mutation.
 
-After any current or lifetime V2 acceptance count is nonzero, archive and
-restore actions are excluded. The coordinator only performs the idempotent
+After any current or lifetime V2 or legacy acceptance count is nonzero, archive
+and restore actions are excluded. The coordinator only performs the idempotent
 cross-host pause and records `post-acceptance-pause-and-forward-fix`.
 
 The exact schemas, action protocol, and validate/dry-run/execute commands are
@@ -566,12 +590,14 @@ Automatic rollback is a one-way safety boundary:
 - A pre-V16 fresh-reset gate is never valid rollback evidence. Rollback
   requires a new post-V16 `economic-gates.example.json` observation from the
   replacement chain.
-- Before any V2 acceptance asset exists, a fresh finalized zero inventory,
-  disabled economic gates, unexpired approval, readiness hash, and rollback
-  driver hash may authorize the external driver.
-- The instant any V2 card, entity, credit, opening, commitment, magic balance,
-  session/result, entitlement, ranked team, or progression record exists,
-  automatic rollback is permanently forbidden for that state.
+- Before any post-reset V2 or legacy acceptance write exists, a fresh finalized
+  zero inventory, disabled economic gates, unexpired approval, readiness hash,
+  and rollback driver hash may authorize the external driver.
+- Receipt issuance permanently closes automatic rollback before the first
+  Phase-2 operator write. Independently, the instant any V2 card, entity,
+  credit, opening, commitment, magic balance, session/result, entitlement,
+  ranked team, progression record, or legacy game-authority game write exists,
+  every inventory-based rollback check also remains closed.
 - After acceptance, pause new V2 writes and preserve cards, conversion
   commitments, entities, and result history. Recovery must move forward under
   a separately reviewed plan.

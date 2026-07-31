@@ -26,6 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SAFETY_TOOL_DIR = REPO_ROOT / "scripts/nexus-v2-private-alpha"
 sys.path.insert(0, str(SAFETY_TOOL_DIR))
 import alpha_v2_release as safety  # noqa: E402
+import acceptance_boundary as boundary  # noqa: E402
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -66,10 +67,16 @@ PLAN_KEYS = {
     "operationId",
     "releaseId",
     "sourceCommit",
+    "genesisHash",
+    "runtimeCodeSha256",
+    "runtimeMetadataScaleSha256",
+    "runtimeBundleManifestSha256",
     "freshResetReadinessSha256",
     "finalBackupManifestSha256",
     "restoreEvidenceSha256",
     "postCutoverObservationSha256",
+    "acceptanceBoundaryCaptureSha256",
+    "ingressClosedEvidenceSha256",
     "coordinatorSha256",
     "maxObservationAgeSeconds",
     "automaticRestoreApproved",
@@ -98,6 +105,8 @@ OBSERVATION_KEYS = {
     "observedAtFinalizedBlock",
     "observedAtUtc",
     "writeBarrier",
+    "acceptanceBoundaryCaptureSha256",
+    "ingressClosedEvidenceSha256",
     "economicGatesSha256",
     "acceptanceInventorySha256",
 }
@@ -156,6 +165,9 @@ EVIDENCE_KEYS = {
     "planSha256",
     "releaseId",
     "sourceCommit",
+    "genesisHash",
+    "runtimeCodeSha256",
+    "runtimeMetadataScaleSha256",
     "componentSourceCommits",
     "decision",
     "postCutoverSmokePassed",
@@ -164,6 +176,8 @@ EVIDENCE_KEYS = {
     "finalBackupManifestSha256",
     "restoreEvidenceSha256",
     "postCutoverObservationSha256",
+    "acceptanceBoundaryCaptureSha256",
+    "ingressClosedEvidenceSha256",
     "economicGatesSha256",
     "acceptanceInventorySha256",
     "observedAtFinalizedBlock",
@@ -438,6 +452,32 @@ def validate_plan(path: Path, expected_hash: str) -> dict[str, Any]:
     )
     release_id = safety.ensure_release_id(str(plan["releaseId"]))
     source_commit = safety.ensure_commit(str(plan["sourceCommit"]))
+    genesis_hash = safety.ensure_hash256(plan["genesisHash"], "coordinator genesis hash")
+    runtime_code_hash = ensure_sha256(
+        plan["runtimeCodeSha256"],
+        "coordinator runtime code SHA-256",
+    )
+    metadata_hash = ensure_sha256(
+        plan["runtimeMetadataScaleSha256"],
+        "coordinator runtime metadata SCALE SHA-256",
+    )
+    runtime_manifest_hash = ensure_sha256(
+        plan["runtimeBundleManifestSha256"],
+        "coordinator runtime bundle manifest SHA-256",
+    )
+    require(
+        runtime_code_hash
+        == boundary.runtime_bundle.PRODUCTION_PINS.production_wasm_sha256,
+        "coordinator runtime code is not the frozen production Wasm SHA-256",
+    )
+    require(
+        metadata_hash == boundary.runtime_bundle.PRODUCTION_PINS.metadata_scale_sha256,
+        "coordinator runtime metadata is not the frozen SCALE SHA-256",
+    )
+    require(
+        runtime_manifest_hash == boundary.runtime_bundle.PRODUCTION_PINS.manifest_sha256,
+        "coordinator runtime bundle is not the frozen Linux release",
+    )
     readiness_hash = ensure_sha256(
         plan["freshResetReadinessSha256"],
         "fresh-reset readiness SHA-256",
@@ -453,6 +493,14 @@ def validate_plan(path: Path, expected_hash: str) -> dict[str, Any]:
     observation_hash = ensure_sha256(
         plan["postCutoverObservationSha256"],
         "post-cutover observation SHA-256",
+    )
+    capture_hash = ensure_sha256(
+        plan["acceptanceBoundaryCaptureSha256"],
+        "acceptance-boundary capture SHA-256",
+    )
+    ingress_hash = ensure_sha256(
+        plan["ingressClosedEvidenceSha256"],
+        "ingress-closed evidence SHA-256",
     )
     coordinator_hash = ensure_sha256(plan["coordinatorSha256"], "coordinator SHA-256")
     require(
@@ -623,10 +671,16 @@ def validate_plan(path: Path, expected_hash: str) -> dict[str, Any]:
         "operationId": operation_id,
         "releaseId": release_id,
         "sourceCommit": source_commit,
+        "genesisHash": genesis_hash,
+        "runtimeCodeSha256": runtime_code_hash,
+        "runtimeMetadataScaleSha256": metadata_hash,
+        "runtimeBundleManifestSha256": runtime_manifest_hash,
         "freshResetReadinessSha256": readiness_hash,
         "finalBackupManifestSha256": manifest_hash,
         "restoreEvidenceSha256": restore_hash,
         "postCutoverObservationSha256": observation_hash,
+        "acceptanceBoundaryCaptureSha256": capture_hash,
+        "ingressClosedEvidenceSha256": ingress_hash,
         "maxObservationAgeSeconds": maximum_age,
         "components": components,
     }
@@ -681,6 +735,51 @@ def validate_inputs(args: argparse.Namespace, plan: Mapping[str, Any]) -> dict[s
         "restore rehearsal completion time is in the future",
     )
 
+    runtime_root = Path(args.runtime_bundle_root).resolve()
+    runtime_artifacts = boundary.load_runtime_artifacts(
+        runtime_root,
+        plan["runtimeBundleManifestSha256"],
+    )
+    capture_path = ensure_regular_file(
+        Path(args.acceptance_boundary_capture),
+        "acceptance-boundary RPC capture",
+    )
+    gates_path = ensure_regular_file(Path(args.economic_gates), "post-V16 economic gates")
+    inventory_path = ensure_regular_file(
+        Path(args.acceptance_inventory),
+        "V2 and legacy acceptance inventory",
+    )
+    derived = boundary.derive_and_validate_artifacts(
+        capture_path,
+        gates_path,
+        inventory_path,
+        runtime_artifacts,
+    )
+    require(
+        derived["captureSha256"] == plan["acceptanceBoundaryCaptureSha256"],
+        "acceptance-boundary capture does not match the coordinator plan",
+    )
+    require(derived["releaseId"] == plan["releaseId"], "acceptance capture release mismatch")
+    require(derived["sourceCommit"] == plan["sourceCommit"], "acceptance capture source mismatch")
+    require(derived["genesisHash"] == plan["genesisHash"], "acceptance capture genesis mismatch")
+    require(
+        derived["runtimeCodeSha256"] == plan["runtimeCodeSha256"],
+        "acceptance capture runtime code mismatch",
+    )
+    require(
+        derived["runtimeMetadataScaleSha256"] == plan["runtimeMetadataScaleSha256"],
+        "acceptance capture runtime metadata mismatch",
+    )
+    ingress_path = ensure_regular_file(
+        Path(args.ingress_closed_evidence),
+        "ingress-closed evidence",
+    )
+    ingress = boundary.validate_ingress_evidence(
+        ingress_path,
+        plan["ingressClosedEvidenceSha256"],
+        derived,
+    )
+
     observation_path = ensure_regular_file(
         Path(args.observation),
         "post-cutover observation",
@@ -699,6 +798,16 @@ def validate_inputs(args: argparse.Namespace, plan: Mapping[str, Any]) -> dict[s
     )
     require(observation["releaseId"] == plan["releaseId"], "post-cutover observation release mismatch")
     require(observation["sourceCommit"] == plan["sourceCommit"], "post-cutover observation source mismatch")
+    require(
+        observation["acceptanceBoundaryCaptureSha256"]
+        == plan["acceptanceBoundaryCaptureSha256"],
+        "post-cutover observation capture mismatch",
+    )
+    require(
+        observation["ingressClosedEvidenceSha256"]
+        == plan["ingressClosedEvidenceSha256"],
+        "post-cutover observation ingress evidence mismatch",
+    )
     expected_component_commits = {
         component_id: component["sourceCommits"]
         for component_id, component in plan["components"].items()
@@ -712,6 +821,10 @@ def validate_inputs(args: argparse.Namespace, plan: Mapping[str, Any]) -> dict[s
         "post-cutover observation",
     )
     observed_at = parse_utc(observation["observedAtUtc"], "post-cutover observedAtUtc")
+    require(
+        observation["observedAtUtc"] == derived["observedAtUtc"],
+        "post-cutover observation timestamp differs from the RPC capture",
+    )
     barrier = exact_keys(
         observation["writeBarrier"],
         WRITE_BARRIER_KEYS,
@@ -734,7 +847,14 @@ def validate_inputs(args: argparse.Namespace, plan: Mapping[str, Any]) -> dict[s
         and 30 <= stability_window <= 900,
         "post-cutover write-barrier stability window must be in 30..900",
     )
-    ensure_sha256(barrier["evidenceSha256"], "post-cutover write-barrier evidence SHA-256")
+    require(
+        ensure_sha256(
+            barrier["evidenceSha256"],
+            "post-cutover write-barrier evidence SHA-256",
+        )
+        == plan["ingressClosedEvidenceSha256"],
+        "post-cutover write barrier is not bound to ingress-closed evidence",
+    )
     require(paused_at <= observed_at, "post-cutover inventory predates the write barrier")
     require(
         observed_at - paused_at >= dt.timedelta(seconds=stability_window),
@@ -748,17 +868,14 @@ def validate_inputs(args: argparse.Namespace, plan: Mapping[str, Any]) -> dict[s
         "post-cutover observation is stale",
     )
 
-    gates_path = ensure_regular_file(Path(args.economic_gates), "post-V16 economic gates")
-    inventory_path = ensure_regular_file(
-        Path(args.acceptance_inventory),
-        "V2 acceptance inventory",
-    )
     gates_value = read_json(gates_path, "post-V16 economic gates")
-    inventory_value = read_json(inventory_path, "V2 acceptance inventory")
+    inventory_value = read_json(inventory_path, "V2/legacy acceptance inventory")
     require_schema_one(gates_value, "post-V16 economic gates")
-    require_schema_one(inventory_value, "V2 acceptance inventory")
+    require_schema_one(inventory_value, "V2/legacy acceptance inventory")
     gates_hash = sha256_file(gates_path)
     inventory_hash = sha256_file(inventory_path)
+    require(gates_hash == derived["gatesSha256"], "derived economic-gates hash mismatch")
+    require(inventory_hash == derived["inventorySha256"], "derived acceptance-inventory hash mismatch")
     require(
         gates_hash
         == ensure_sha256(
@@ -791,6 +908,10 @@ def validate_inputs(args: argparse.Namespace, plan: Mapping[str, Any]) -> dict[s
     )
     expected_block = (observed_number, observed_hash)
     require(
+        (derived["blockNumber"], derived["blockHash"]) == expected_block,
+        "RPC capture and observation use mixed finalized blocks",
+    )
+    require(
         (gates["blockNumber"], gates["blockHash"]) == expected_block,
         "economic gates and observation use mixed finalized blocks",
     )
@@ -801,11 +922,17 @@ def validate_inputs(args: argparse.Namespace, plan: Mapping[str, Any]) -> dict[s
     return {
         "manifestPath": str(manifest_path),
         "bundleRoot": str(bundle_root.resolve()),
+        "runtimeBundleRoot": str(runtime_root),
+        "runtimeBundleManifestSha256": plan["runtimeBundleManifestSha256"],
         "manifestSha256": verified["sha256"],
         "restoreEvidencePath": str(restore_path),
         "restoreEvidenceSha256": sha256_file(restore_path),
         "observationPath": str(observation_path),
         "observationSha256": sha256_file(observation_path),
+        "acceptanceBoundaryCapturePath": str(capture_path),
+        "acceptanceBoundaryCaptureSha256": derived["captureSha256"],
+        "ingressClosedEvidencePath": str(ingress_path),
+        "ingressClosedEvidenceSha256": sha256_file(ingress_path),
         "economicGatesPath": str(gates_path),
         "economicGatesSha256": gates_hash,
         "acceptanceInventoryPath": str(inventory_path),
@@ -815,6 +942,9 @@ def validate_inputs(args: argparse.Namespace, plan: Mapping[str, Any]) -> dict[s
         "observedAtUtc": observed_at.isoformat(),
         "maxObservationAgeSeconds": plan["maxObservationAgeSeconds"],
         "nonzeroAcceptanceAssets": inventory["nonzero"],
+        "genesisHash": derived["genesisHash"],
+        "runtimeCodeSha256": derived["runtimeCodeSha256"],
+        "runtimeMetadataScaleSha256": derived["runtimeMetadataScaleSha256"],
     }
 
 
@@ -826,9 +956,14 @@ def state_contract(plan: Mapping[str, Any], inputs: Mapping[str, Any]) -> dict[s
         "planSha256": plan["sha256"],
         "releaseId": plan["releaseId"],
         "sourceCommit": plan["sourceCommit"],
+        "genesisHash": inputs["genesisHash"],
+        "runtimeCodeSha256": inputs["runtimeCodeSha256"],
+        "runtimeMetadataScaleSha256": inputs["runtimeMetadataScaleSha256"],
         "finalBackupManifestSha256": inputs["manifestSha256"],
         "restoreEvidenceSha256": inputs["restoreEvidenceSha256"],
         "observationSha256": inputs["observationSha256"],
+        "acceptanceBoundaryCaptureSha256": inputs["acceptanceBoundaryCaptureSha256"],
+        "ingressClosedEvidenceSha256": inputs["ingressClosedEvidenceSha256"],
         "economicGatesSha256": inputs["economicGatesSha256"],
         "acceptanceInventorySha256": inputs["acceptanceInventorySha256"],
     }
@@ -1227,6 +1362,16 @@ def validate_final_evidence(
     require(value["planSha256"] == plan["sha256"], "final evidence plan mismatch")
     require(value["releaseId"] == plan["releaseId"], "final evidence release mismatch")
     require(value["sourceCommit"] == plan["sourceCommit"], "final evidence source mismatch")
+    require(value["genesisHash"] == inputs["genesisHash"], "final evidence genesis mismatch")
+    require(
+        value["runtimeCodeSha256"] == inputs["runtimeCodeSha256"],
+        "final evidence runtime code mismatch",
+    )
+    require(
+        value["runtimeMetadataScaleSha256"]
+        == inputs["runtimeMetadataScaleSha256"],
+        "final evidence runtime metadata mismatch",
+    )
     expected_component_commits = {
         component_id: component["sourceCommits"]
         for component_id, component in plan["components"].items()
@@ -1246,6 +1391,16 @@ def validate_final_evidence(
     require(
         value["postCutoverObservationSha256"] == inputs["observationSha256"],
         "final evidence observation mismatch",
+    )
+    require(
+        value["acceptanceBoundaryCaptureSha256"]
+        == inputs["acceptanceBoundaryCaptureSha256"],
+        "final evidence acceptance capture mismatch",
+    )
+    require(
+        value["ingressClosedEvidenceSha256"]
+        == inputs["ingressClosedEvidenceSha256"],
+        "final evidence ingress evidence mismatch",
     )
     require(
         value["economicGatesSha256"] == inputs["economicGatesSha256"],
@@ -1341,6 +1496,10 @@ def revalidate_immutable_inputs(
     plan: Mapping[str, Any],
     inputs: Mapping[str, Any],
 ) -> None:
+    boundary.load_runtime_artifacts(
+        Path(inputs["runtimeBundleRoot"]),
+        inputs["runtimeBundleManifestSha256"],
+    )
     require(
         sha256_file(Path(plan["path"])) == plan["sha256"],
         "rollback plan changed during coordination",
@@ -1357,6 +1516,16 @@ def revalidate_immutable_inputs(
     require(
         sha256_file(Path(inputs["observationPath"])) == inputs["observationSha256"],
         "post-cutover observation changed during coordination",
+    )
+    require(
+        sha256_file(Path(inputs["acceptanceBoundaryCapturePath"]))
+        == inputs["acceptanceBoundaryCaptureSha256"],
+        "acceptance-boundary capture changed during coordination",
+    )
+    require(
+        sha256_file(Path(inputs["ingressClosedEvidencePath"]))
+        == inputs["ingressClosedEvidenceSha256"],
+        "ingress-closed evidence changed during coordination",
     )
     require(
         sha256_file(Path(inputs["economicGatesPath"]))
@@ -1406,6 +1575,9 @@ def write_final_evidence(
         "planSha256": plan["sha256"],
         "releaseId": plan["releaseId"],
         "sourceCommit": plan["sourceCommit"],
+        "genesisHash": inputs["genesisHash"],
+        "runtimeCodeSha256": inputs["runtimeCodeSha256"],
+        "runtimeMetadataScaleSha256": inputs["runtimeMetadataScaleSha256"],
         "componentSourceCommits": {
             component_id: component["sourceCommits"]
             for component_id, component in plan["components"].items()
@@ -1418,6 +1590,8 @@ def write_final_evidence(
         "finalBackupManifestSha256": inputs["manifestSha256"],
         "restoreEvidenceSha256": inputs["restoreEvidenceSha256"],
         "postCutoverObservationSha256": inputs["observationSha256"],
+        "acceptanceBoundaryCaptureSha256": inputs["acceptanceBoundaryCaptureSha256"],
+        "ingressClosedEvidenceSha256": inputs["ingressClosedEvidenceSha256"],
         "economicGatesSha256": inputs["economicGatesSha256"],
         "acceptanceInventorySha256": inputs["acceptanceInventorySha256"],
         "observedAtFinalizedBlock": {
@@ -1535,7 +1709,7 @@ def run(args: argparse.Namespace) -> None:
             False,
         )
         print(
-            "post-cutover smoke failed after V2 acceptance; "
+            "post-cutover smoke failed after V2/legacy acceptance; "
             f"writes paused and restore refused: {evidence_path}"
         )
         return
@@ -1612,8 +1786,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--plan", required=True)
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--bundle-root", required=True)
+    parser.add_argument("--runtime-bundle-root", required=True)
     parser.add_argument("--restore-evidence", required=True)
     parser.add_argument("--observation", required=True)
+    parser.add_argument("--acceptance-boundary-capture", required=True)
+    parser.add_argument("--ingress-closed-evidence", required=True)
     parser.add_argument("--economic-gates", required=True)
     parser.add_argument("--acceptance-inventory", required=True)
     parser.add_argument("--state-dir", required=True)
@@ -1629,7 +1806,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         run(args)
-    except (CoordinatorError, safety.SafetyError, OSError) as exc:
+    except (CoordinatorError, safety.SafetyError, boundary.BoundaryError, OSError) as exc:
         print(f"nexus-v2-post-cutover-coordinator: {exc}", file=sys.stderr)
         return 2
     return 0

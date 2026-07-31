@@ -31,7 +31,7 @@
   },
   "observedAtFinalizedBlock": {
     "hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-    "number": 0
+    "number": 1
   },
   "randomness": {
     "cryptographyReviewApproved": false,

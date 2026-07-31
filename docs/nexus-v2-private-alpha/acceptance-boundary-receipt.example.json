@@ -1,0 +1,38 @@
+{
+  "acceptanceBoundaryCaptureSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "acceptanceInventorySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "automaticRestorePermanentlyDisabled": true,
+  "coordinatorDecision": "keep-v2",
+  "coordinatorExecuteEvidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "createdAtUtc": "1970-01-01T00:00:00Z",
+  "economicGatesSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "genesisHash": "0x67556081fc3400e10591f6857e89ce37014b8ba39c539f559f6959b4afa00e5b",
+  "ingressClosedEvidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "ingressMode": "AllExternalWriteIngressClosed",
+  "kind": "nexus-v2-private-alpha-acceptance-boundary-receipt",
+  "observedAtFinalizedBlock": {
+    "hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "number": 1
+  },
+  "operatorV2WriteScope": {
+    "alphaAccessModeMustRemainEnforced": true,
+    "alphaAccessModeOpen": false,
+    "authorityRegistration": true,
+    "boundedManualAdminAlphaAccessGrant": true,
+    "canonicalPolicySeedingBeforeProof": false,
+    "economicallyValuedRewards": false,
+    "paidOrPublicActivation": false,
+    "practiceRewardPolicy": true,
+    "proofOnlyAbilityDeathmatchTrainingPolicy": true,
+    "proofPolicyDeactivationRequired": true,
+    "v2ResultSettlement": true,
+    "v2SessionAuthorization": true
+  },
+  "phase1SmokePassed": true,
+  "postCutoverObservationSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "releaseId": "replace-private-alpha-release-id",
+  "runtimeCodeSha256": "0b0c7c52b38ea880fa626784846164752aa256b9f30d83ed0b45d25277f38243",
+  "runtimeMetadataScaleSha256": "26ed50d186a0cb134cb8ef6b9f619cd04195b52cf4d06fb3f2c31050b103ee68",
+  "schemaVersion": 1,
+  "sourceCommit": "0000000000000000000000000000000000000000"
+}
