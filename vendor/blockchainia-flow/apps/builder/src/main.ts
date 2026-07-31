@@ -9,10 +9,14 @@ import {
 } from "@blockchainia/flow-sdk";
 
 import {
+  addAction,
+  addMachine,
+  addState,
   cloneManifest,
   exportManifest,
   importManifest,
   starterManifest,
+  summarizeCosts,
   validateDraft,
 } from "./model.js";
 import "./styles.css";
@@ -26,6 +30,7 @@ interface WasmModule {
 let manifest = cloneManifest(starterManifest);
 let compiled: CompileSuccess | undefined;
 let compiler: WasmCompiler | undefined;
+let activeMachineId: number | undefined = manifest.machines[0]?.machine_id;
 
 const root = document.querySelector<HTMLDivElement>("#app");
 if (root === null) {
@@ -75,6 +80,14 @@ root.innerHTML = `
             <option value="eterra.flow.v0">eterra.flow.v0 (permanent alias)</option>
           </select>
         </label>
+        <label>Machine
+          <select id="machine-select"></select>
+        </label>
+        <div class="button-grid">
+          <button id="add-machine" class="quiet">+ machine</button>
+          <button id="add-state" class="quiet">+ state</button>
+          <button id="add-action" class="quiet">+ action</button>
+        </div>
         <div class="panel-title spaced"><span>02</span> Transition</div>
         <div class="two-up">
           <label>From<input id="from-state" type="number" /></label>
@@ -137,7 +150,19 @@ function render(): void {
     manifest.version_id,
   );
   getElement<HTMLSelectElement>("label").value = manifest.manifest_version;
-  const transition = manifest.transitions[0];
+  const machineSelect = getElement<HTMLSelectElement>("machine-select");
+  if (!manifest.machines.some((machine) => machine.machine_id === activeMachineId)) {
+    activeMachineId = manifest.machines[0]?.machine_id;
+  }
+  machineSelect.innerHTML = manifest.machines
+    .map(
+      (machine) =>
+        `<option value="${machine.machine_id}">Machine ${machine.machine_id}</option>`,
+    )
+    .join("");
+  machineSelect.disabled = activeMachineId === undefined;
+  machineSelect.value = String(activeMachineId ?? "");
+  const transition = activeTransition();
   getElement<HTMLInputElement>("from-state").value = String(
     transition?.from_state ?? "",
   );
@@ -156,8 +181,8 @@ function render(): void {
 }
 
 function renderMap(): void {
-  const machine = manifest.machines[0];
-  const transition = manifest.transitions[0];
+  const machine = activeMachine();
+  const transition = activeTransition();
   const stateMap = getElement("state-map");
   if (machine === undefined) {
     stateMap.innerHTML = `<div class="empty">Add a machine to begin.</div>`;
@@ -211,7 +236,7 @@ function syncSimpleFields(): void {
   manifest.version_id = numericValue("version-id");
   manifest.manifest_version = getElement<HTMLSelectElement>("label")
     .value as FlowManifest["manifest_version"];
-  const transition = manifest.transitions[0];
+  const transition = activeTransition();
   if (transition !== undefined) {
     transition.from_state = nullableNumericValue("from-state");
     transition.to_state = nullableNumericValue("to-state");
@@ -234,12 +259,13 @@ for (const id of [
 }
 
 getElement("add-condition").addEventListener("click", () => {
-  manifest.transitions[0]?.conditions.push({
+  const machine = activeMachine();
+  activeTransition()?.conditions.push({
     atom: {
       machine_state_equals: {
         scope: { instance: true },
-        machine_id: manifest.machines[0]?.machine_id ?? 0,
-        state_id: manifest.machines[0]?.initial_state ?? 0,
+        machine_id: machine?.machine_id ?? 0,
+        state_id: machine?.initial_state ?? 0,
       },
     },
   });
@@ -247,14 +273,38 @@ getElement("add-condition").addEventListener("click", () => {
 });
 
 getElement("add-effect").addEventListener("click", () => {
-  manifest.transitions[0]?.effects.push({
+  const machine = activeMachine();
+  const transition = activeTransition();
+  transition?.effects.push({
     set_machine_state: {
       scope: { instance: true },
-      machine_id: manifest.machines[0]?.machine_id ?? 0,
-      state_id: manifest.transitions[0]?.to_state ?? 0,
+      machine_id: machine?.machine_id ?? 0,
+      state_id: transition?.to_state ?? 0,
     },
   });
   render();
+});
+
+getElement("machine-select").addEventListener("change", (event) => {
+  activeMachineId = Number((event.currentTarget as HTMLSelectElement).value);
+  render();
+});
+
+getElement("add-machine").addEventListener("click", () => {
+  activeMachineId = addMachine(manifest);
+  markDraftChanged();
+});
+
+getElement("add-state").addEventListener("click", () => {
+  if (activeMachineId !== undefined) {
+    addState(manifest, activeMachineId);
+    markDraftChanged();
+  }
+});
+
+getElement("add-action").addEventListener("click", () => {
+  addAction(manifest);
+  markDraftChanged();
 });
 
 getElement("template").addEventListener("change", (event) => {
@@ -267,6 +317,7 @@ getElement("template").addEventListener("change", (event) => {
           transitions: [],
         }
       : cloneManifest(starterManifest);
+  activeMachineId = manifest.machines[0]?.machine_id;
   compiled = undefined;
   render();
 });
@@ -274,6 +325,7 @@ getElement("template").addEventListener("change", (event) => {
 getElement("import").addEventListener("click", () => {
   try {
     manifest = importManifest(editor.value);
+    activeMachineId = manifest.machines[0]?.machine_id;
     compiled = undefined;
     render();
   } catch (error) {
@@ -317,11 +369,14 @@ getElement("compile").addEventListener("click", () => {
     manifest = importManifest(editor.value);
     compiled = assertDeterministicCompilation(compiler, manifest);
     renderDiagnostics(compiled.diagnostics);
+    const costs = summarizeCosts(compiled.costEstimates);
     getElement("artifact").innerHTML = `
       <dl>
         <dt>Bytes</dt><dd>${compiled.metrics.scaleBytes}</dd>
         <dt>Hash</dt><dd><code>${compiled.manifestHashHex.slice(0, 18)}…</code></dd>
         <dt>Label</dt><dd>${FLOW_AUTHORING_LABEL}</dd>
+        <dt>Largest read/write estimate</dt><dd>${costs.maxStorageReads} / ${costs.maxStorageWrites}</dd>
+        <dt>Largest provider estimate</dt><dd>${costs.maxProviderCalls}</dd>
       </dl>
     `;
     prepareButton.disabled = false;
@@ -391,6 +446,24 @@ function numericValue(id: string): number {
 function nullableNumericValue(id: string): number | null {
   const value = getElement<HTMLInputElement>(id).value;
   return value === "" ? null : Number(value);
+}
+
+function activeMachine(): FlowManifest["machines"][number] | undefined {
+  return manifest.machines.find(
+    (machine) => machine.machine_id === activeMachineId,
+  );
+}
+
+function activeTransition(): FlowManifest["transitions"][number] | undefined {
+  return manifest.transitions.find(
+    (transition) => transition.machine_id === activeMachineId,
+  );
+}
+
+function markDraftChanged(): void {
+  compiled = undefined;
+  prepareButton.disabled = true;
+  render();
 }
 
 function getElement<T extends HTMLElement = HTMLElement>(id: string): T {

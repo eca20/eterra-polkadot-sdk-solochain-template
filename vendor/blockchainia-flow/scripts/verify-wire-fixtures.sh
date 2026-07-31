@@ -10,5 +10,6 @@ test "$(wc -c < fixtures/wire/v0/season-pass-reward.scale.hex | tr -d ' ')" = "2
 test "$(wc -c < fixtures/wire/v0/dungeon-run.scale.hex | tr -d ' ')" = "411"
 test "$(wc -c < fixtures/wire/v0/fps-attested-result.scale.hex | tr -d ' ')" = "175"
 
+node ./scripts/verify-runtime-contract.mjs
 cargo test -p blockchainia-flow-manifest locked_wire_fixtures_compile_byte_for_byte
 cargo test -p blockchainia-flow-manifest permanent_eterra_alias_compiles_identically

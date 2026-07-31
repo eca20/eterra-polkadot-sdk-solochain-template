@@ -32,8 +32,10 @@ behavior tests and integrations that need previews without a chain. It follows
 the same priority and rollback rules, but it is not an authorization source.
 
 `blockchainia-flow-manifest-wasm` exposes a string-only bridge so browser
-applications do not duplicate Rust validation logic. The TypeScript SDK also
-implements the locked v0 codec for typed clients and cross-language fixtures.
+applications do not duplicate Rust validation logic. The TypeScript SDK
+delegates compilation to that exact Rust codec, prepares frozen call/storage
+descriptors, and normalizes events only after an exact-metadata client decodes
+their SCALE bytes.
 
 ## Runtime state
 
@@ -43,4 +45,3 @@ values, machine state, and bounded per-instance inventory.
 
 Manifest/IPFS metadata is descriptive. Critical live state remains runtime
 authoritative.
-

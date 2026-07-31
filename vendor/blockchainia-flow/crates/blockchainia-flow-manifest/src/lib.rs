@@ -1790,24 +1790,24 @@ fn value_within_bounds(value: RuntimeValue, variable: &RuntimeVariableDefinition
         RuntimeValue::U64(value) => {
             let min_ok = variable
                 .min
-                .is_none_or(|min| min <= 0 || value >= min as u64);
+                .map_or(true, |min| min <= 0 || value >= min as u64);
             let max_ok = variable
                 .max
-                .is_none_or(|max| max >= 0 && value <= max as u64);
+                .map_or(true, |max| max >= 0 && value <= max as u64);
             min_ok && max_ok
         }
         RuntimeValue::I64(value) => {
-            let min_ok = variable.min.is_none_or(|min| value >= min);
-            let max_ok = variable.max.is_none_or(|max| value <= max);
+            let min_ok = variable.min.map_or(true, |min| value >= min);
+            let max_ok = variable.max.map_or(true, |max| value <= max);
             min_ok && max_ok
         }
         RuntimeValue::Enum(value) => {
             let min_ok = variable
                 .min
-                .is_none_or(|min| min <= 0 || value >= min as u32);
+                .map_or(true, |min| min <= 0 || value >= min as u32);
             let max_ok = variable
                 .max
-                .is_none_or(|max| max >= 0 && value <= max as u32);
+                .map_or(true, |max| max >= 0 && value <= max as u32);
             min_ok && max_ok
         }
     }

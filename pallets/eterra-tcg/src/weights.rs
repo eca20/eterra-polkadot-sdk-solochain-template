@@ -51,9 +51,28 @@ pub trait WeightInfo {
 	fn assign_progression_tree_to_card() -> Weight;
 	fn grant_card_experience() -> Weight;
 	fn forge_progression_node() -> Weight;
-	fn set_card_magic_loadout() -> Weight;
+	fn set_card_magic_loadout(spells: u32) -> Weight;
 	fn seed_alpha_progression_gear() -> Weight;
 	fn seed_alpha_spell() -> Weight;
+	fn publish_v2_catalog() -> Weight;
+	fn publish_v2_pool() -> Weight;
+	fn publish_v2_pack_sku() -> Weight;
+	fn issue_v2_training_credit() -> Weight;
+	fn request_v2_pack_open() -> Weight;
+	fn finalize_v2_pack_open() -> Weight;
+	fn timeout_v2_pack_open() -> Weight;
+	fn publish_v2_format() -> Weight;
+	fn save_v2_team() -> Weight;
+	fn set_v2_feature() -> Weight;
+	fn request_v2_conversion() -> Weight;
+	fn finalize_v2_conversion() -> Weight;
+	fn timeout_v2_conversion() -> Weight;
+	fn configure_v2_ascension() -> Weight;
+	fn link_v2_season_eligibility() -> Weight;
+	fn record_v2_ascension_progress() -> Weight;
+	fn execute_v2_ascension() -> Weight;
+	fn complete_v16_migration() -> Weight;
+	fn transfer_wrapped_nft_v16() -> Weight;
 }
 
 impl WeightInfo for () {
@@ -85,13 +104,13 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn transfer_card() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(1_200_000_000_000, 2_097_152)
 	}
 	fn set_price() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 	fn remove_price() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(200_000_000_000, 524_288)
 	}
 	fn buy_card() -> Weight {
 		Weight::from_parts(10_000, 0)
@@ -121,13 +140,16 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn init_card_nft_collection() -> Weight {
-		Weight::from_parts(10_000, 0)
+		// Conservative private-alpha bound until the V16 benchmark artifact is frozen.
+		Weight::from_parts(50_000_000_000, 65_536)
 	}
 	fn convert_to_nft() -> Weight {
-		Weight::from_parts(10_000, 0)
+		// Includes NFT minting plus worst-case listing/index/sidecar mutation.
+		Weight::from_parts(1_200_000_000_000, 2_097_152)
 	}
 	fn unwrap_from_nft() -> Weight {
-		Weight::from_parts(10_000, 0)
+		// Includes NFT burn plus worst-case custody/index/sidecar mutation.
+		Weight::from_parts(1_200_000_000_000, 2_097_152)
 	}
 	fn set_progression_tree() -> Weight {
 		Weight::from_parts(10_000, 0)
@@ -141,14 +163,72 @@ impl WeightInfo for () {
 	fn forge_progression_node() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
-	fn set_card_magic_loadout() -> Weight {
-		Weight::from_parts(10_000, 0)
+	fn set_card_magic_loadout(spells: u32) -> Weight {
+		Weight::from_parts(50_000_000_000, 65_536)
+			.saturating_add(Weight::from_parts(1_000_000, 32).saturating_mul(spells.into()))
 	}
 	fn seed_alpha_progression_gear() -> Weight {
 		Weight::from_parts(10_000, 0)
 	}
 	fn seed_alpha_spell() -> Weight {
 		Weight::from_parts(10_000, 0)
+	}
+	fn publish_v2_catalog() -> Weight {
+		Weight::from_parts(25_000_000, 0)
+	}
+	fn publish_v2_pool() -> Weight {
+		Weight::from_parts(75_000_000, 0)
+	}
+	fn publish_v2_pack_sku() -> Weight {
+		Weight::from_parts(30_000_000, 0)
+	}
+	fn issue_v2_training_credit() -> Weight {
+		Weight::from_parts(35_000_000, 0)
+	}
+	fn request_v2_pack_open() -> Weight {
+		Weight::from_parts(250_000_000, 0)
+	}
+	fn finalize_v2_pack_open() -> Weight {
+		Weight::from_parts(900_000_000_000, 16_777_216)
+	}
+	fn timeout_v2_pack_open() -> Weight {
+		Weight::from_parts(45_000_000, 0)
+	}
+	fn publish_v2_format() -> Weight {
+		Weight::from_parts(25_000_000, 0)
+	}
+	fn save_v2_team() -> Weight {
+		Weight::from_parts(175_000_000, 0)
+	}
+	fn set_v2_feature() -> Weight {
+		Weight::from_parts(15_000_000, 0)
+	}
+	fn request_v2_conversion() -> Weight {
+		Weight::from_parts(225_000_000, 0)
+	}
+	fn finalize_v2_conversion() -> Weight {
+		Weight::from_parts(130_000_000, 0)
+	}
+	fn timeout_v2_conversion() -> Weight {
+		Weight::from_parts(120_000_000, 0)
+	}
+	fn configure_v2_ascension() -> Weight {
+		Weight::from_parts(50_000_000, 0)
+	}
+	fn link_v2_season_eligibility() -> Weight {
+		Weight::from_parts(25_000_000, 0)
+	}
+	fn record_v2_ascension_progress() -> Weight {
+		Weight::from_parts(50_000_000, 0)
+	}
+	fn execute_v2_ascension() -> Weight {
+		Weight::from_parts(200_000_000, 0)
+	}
+	fn complete_v16_migration() -> Weight {
+		Weight::from_parts(35_000_000, 8_000)
+	}
+	fn transfer_wrapped_nft_v16() -> Weight {
+		Weight::from_parts(150_000_000_000, 131_072)
 	}
 }
 
@@ -310,10 +390,12 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		//  Measured:  `485`
 		//  Estimated: `14232`
 		// Minimum execution time: 22_000_000 picoseconds.
-		Weight::from_parts(23_000_000, 0)
-			.saturating_add(Weight::from_parts(0, 14232))
-			.saturating_add(T::DbWeight::get().reads(4))
-			.saturating_add(T::DbWeight::get().writes(4))
+		// Runtime MaxOwnedCards is 100,000, so each source/destination owner
+		// index may encode about 400 KiB. Charge the legal codec maximum rather
+		// than the historical 1,024-card benchmark fixture.
+		Weight::from_parts(1_200_000_000_000, 2_097_152)
+			.saturating_add(T::DbWeight::get().reads(20))
+			.saturating_add(T::DbWeight::get().writes(20))
 	}
 
 	/// Storage: `EterraTCG::Cards` (r:1 w:0)
@@ -329,9 +411,9 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 	/// Storage: `EterraTCG::CardPrices` (r:1 w:1)
 	/// Storage: `EterraTCG::ListedByOwner` (r:1 w:1)
 	fn remove_price() -> Weight {
-		Weight::from_parts(20_000_000, 0)
-			.saturating_add(T::DbWeight::get().reads(3))
-			.saturating_add(T::DbWeight::get().writes(2))
+		Weight::from_parts(200_000_000_000, 524_288)
+			.saturating_add(T::DbWeight::get().reads(8))
+			.saturating_add(T::DbWeight::get().writes(6))
 	}
 
 	/// Storage: `EterraTCG::CardPrices` (r:1 w:1)
@@ -394,15 +476,27 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 	}
 
 	fn init_card_nft_collection() -> Weight {
-		Weight::from_parts(10_000, 0)
+		// Provisional conservative bound. Replace with the frozen V16 hardware
+		// benchmark before any production activation.
+		Weight::from_parts(50_000_000_000, 65_536)
+			.saturating_add(T::DbWeight::get().reads(10))
+			.saturating_add(T::DbWeight::get().writes(12))
 	}
 
 	fn convert_to_nft() -> Weight {
-		Weight::from_parts(10_000, 0)
+		// Covers NFT minting and the worst-case listed-card, owner-index,
+		// custody-sidecar and account mutation path.
+		Weight::from_parts(1_200_000_000_000, 2_097_152)
+			.saturating_add(T::DbWeight::get().reads(30))
+			.saturating_add(T::DbWeight::get().writes(30))
 	}
 
 	fn unwrap_from_nft() -> Weight {
-		Weight::from_parts(10_000, 0)
+		// Covers NFT burn and the worst-case owner-index/custody-sidecar
+		// restoration path.
+		Weight::from_parts(1_200_000_000_000, 2_097_152)
+			.saturating_add(T::DbWeight::get().reads(30))
+			.saturating_add(T::DbWeight::get().writes(30))
 	}
 
 	fn set_progression_tree() -> Weight {
@@ -429,8 +523,12 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().writes(4))
 	}
 
-	fn set_card_magic_loadout() -> Weight {
-		Weight::from_parts(20_000_000, 0)
+	fn set_card_magic_loadout(spells: u32) -> Weight {
+		// `spells` remains a legacy Vec for SCALE compatibility. Charge the
+		// decoded length so an oversized, ultimately rejected payload cannot
+		// receive the old constant fee.
+		Weight::from_parts(50_000_000_000, 65_536)
+			.saturating_add(Weight::from_parts(1_000_000, 32).saturating_mul(spells.into()))
 			.saturating_add(T::DbWeight::get().reads(7))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
@@ -445,5 +543,130 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 		Weight::from_parts(12_000_000, 0)
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
+	}
+
+	fn publish_v2_catalog() -> Weight {
+		Weight::from_parts(25_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(7))
+			.saturating_add(T::DbWeight::get().writes(7))
+	}
+
+	fn publish_v2_pool() -> Weight {
+		Weight::from_parts(75_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(640))
+			.saturating_add(T::DbWeight::get().writes(800))
+	}
+
+	fn publish_v2_pack_sku() -> Weight {
+		Weight::from_parts(30_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+
+	fn issue_v2_training_credit() -> Weight {
+		Weight::from_parts(35_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(4))
+	}
+
+	fn request_v2_pack_open() -> Weight {
+		// Tutorial-credit readiness scans as many as 400 profiles twice:
+		// once for eligible conversion profiles and again across subject and
+		// creature activation state. Charge the configured maximum, not the
+		// single-subject benchmark fixture.
+		Weight::from_parts(500_000_000_000, 16_777_216)
+			.saturating_add(T::DbWeight::get().reads(4_000))
+			.saturating_add(T::DbWeight::get().writes(16))
+	}
+
+	fn finalize_v2_pack_open() -> Weight {
+		// Worst-case configured pool selection for six cards scans 400
+		// profiles and up to 256 poses per slot, plus subject/cosmetic
+		// eligibility and novelty indexes. The single-subject benchmark fixture
+		// does not cover those maxima, so private alpha uses a conservative
+		// end-to-end bound pending regenerated production weights.
+		Weight::from_parts(900_000_000_000, 16_777_216)
+			.saturating_add(T::DbWeight::get().reads(5_500))
+			.saturating_add(T::DbWeight::get().writes(128))
+	}
+
+	fn timeout_v2_pack_open() -> Weight {
+		Weight::from_parts(45_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(9))
+			.saturating_add(T::DbWeight::get().writes(8))
+	}
+
+	fn publish_v2_format() -> Weight {
+		Weight::from_parts(25_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+
+	fn save_v2_team() -> Weight {
+		Weight::from_parts(175_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(45))
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+
+	fn set_v2_feature() -> Weight {
+		Weight::from_parts(15_000_000, 0)
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+
+	fn complete_v16_migration() -> Weight {
+		Weight::from_parts(35_000_000, 8_000)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(3))
+	}
+
+	fn transfer_wrapped_nft_v16() -> Weight {
+		// Includes pallet-nfts ownership/account/config mutation plus repaired
+		// owner and Nexus index transitions. Runtime MaxOwnedCards is 100,000,
+		// so both owner-side indexes are charged at their legal codec maximum.
+		Weight::from_parts(1_200_000_000_000, 2_097_152)
+			.saturating_add(T::DbWeight::get().reads(24))
+			.saturating_add(T::DbWeight::get().writes(18))
+	}
+
+	fn request_v2_conversion() -> Weight {
+		Weight::from_parts(225_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(61))
+			.saturating_add(T::DbWeight::get().writes(10))
+	}
+
+	fn finalize_v2_conversion() -> Weight {
+		Weight::from_parts(130_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(13))
+			.saturating_add(T::DbWeight::get().writes(12))
+	}
+
+	fn timeout_v2_conversion() -> Weight {
+		Weight::from_parts(120_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(12))
+			.saturating_add(T::DbWeight::get().writes(12))
+	}
+
+	fn configure_v2_ascension() -> Weight {
+		Weight::from_parts(50_000_000, 8_000)
+			.saturating_add(T::DbWeight::get().reads(12))
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+
+	fn link_v2_season_eligibility() -> Weight {
+		Weight::from_parts(25_000_000, 4_000)
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+
+	fn record_v2_ascension_progress() -> Weight {
+		Weight::from_parts(50_000_000, 8_000)
+			.saturating_add(T::DbWeight::get().reads(8))
+			.saturating_add(T::DbWeight::get().writes(6))
+	}
+
+	fn execute_v2_ascension() -> Weight {
+		Weight::from_parts(200_000_000, 16_000)
+			.saturating_add(T::DbWeight::get().reads(32))
+			.saturating_add(T::DbWeight::get().writes(24))
 	}
 }

@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 codec = { workspace = true, default-features = false, features = ["derive", "max-encoded-len"] }
+eterra-nexus-primitives = { workspace = true }
 scale-info = { workspace = true, default-features = false, features = ["derive"] }
 frame-support = { workspace = true, default-features = false, features = ["experimental"] }
 frame-system = { workspace = true, default-features = false }
@@ -24,6 +25,7 @@ sp-io = { workspace = true, features = ["std"] }
 default = ["std"]
 std = [
     "codec/std",
+    "eterra-nexus-primitives/std",
     "scale-info/std",
     "frame-support/std",
     "frame-system/std",

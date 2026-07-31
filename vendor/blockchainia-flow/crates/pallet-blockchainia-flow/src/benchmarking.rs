@@ -1,5 +1,3 @@
-#![cfg(feature = "runtime-benchmarks")]
-
 use super::*;
 use codec::Encode;
 use frame_benchmarking::{account, benchmarks, whitelisted_caller};

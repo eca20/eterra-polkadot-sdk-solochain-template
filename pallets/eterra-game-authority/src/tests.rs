@@ -147,7 +147,9 @@ fn failed_create_does_not_poison_round_id() {
         .with_servers(vec![ALICE])
         .build()
         .execute_with(|| {
-            let max = <Test as pallet_eterra_game_authority::Config>::MaxExpirationsPerBlock::get();
+            let max =
+                <Test as pallet_eterra_game_authority::Config>::MaxScheduledExpirationsPerBlock::get(
+                );
             for index in 0..max {
                 assert_ok!(GamePallet::<Test>::create_game_with_round_id(
                     RuntimeOrigin::signed(ALICE),

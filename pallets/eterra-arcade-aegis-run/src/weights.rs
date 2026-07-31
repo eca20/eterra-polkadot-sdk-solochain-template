@@ -13,23 +13,26 @@ pub trait WeightInfo {
 
 impl WeightInfo for () {
 	fn start_run() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(200_000_000_000, 524_288)
 	}
 	fn submit_result() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(800_000_000_000, 4_194_304)
 	}
 }
 
 pub struct SubstrateWeight<T>(PhantomData<T>);
 impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 	fn start_run() -> Weight {
-		Weight::from_parts(28_000_000, 0)
-			.saturating_add(T::DbWeight::get().reads(4))
-			.saturating_add(T::DbWeight::get().writes(4))
+		// Includes ArcadeCore run creation and Economy credit consumption.
+		Weight::from_parts(200_000_000_000, 524_288)
+			.saturating_add(T::DbWeight::get().reads(20))
+			.saturating_add(T::DbWeight::get().writes(15))
 	}
 	fn submit_result() -> Weight {
-		Weight::from_parts(36_000_000, 0)
-			.saturating_add(T::DbWeight::get().reads(6))
-			.saturating_add(T::DbWeight::get().writes(6))
+		// Includes authority checks, replay receipt, best score, the bounded
+		// 32-entry leaderboard and the worst Economy/Assets reward path.
+		Weight::from_parts(800_000_000_000, 4_194_304)
+			.saturating_add(T::DbWeight::get().reads(128))
+			.saturating_add(T::DbWeight::get().writes(64))
 	}
 }

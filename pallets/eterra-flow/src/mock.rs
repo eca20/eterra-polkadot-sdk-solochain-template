@@ -281,6 +281,7 @@ impl pallet_eterra_economy::Config for Test {
     type TicketAssets = MockTicketAssets;
     type NativePayments = MockNativePayments;
     type PrizeFulfillment = ();
+    type PackCreditIssuer = ();
     type AccountEligibility = ();
     type RandomnessProvider = MockRandomness;
     type ArcadeCreditFaucetGameId = ConstU64<1000>;

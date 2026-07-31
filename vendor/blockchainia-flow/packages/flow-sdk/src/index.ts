@@ -1,3 +1,4 @@
 export * from "./compiler.js";
+export * from "./runtime.js";
 export * from "./transactions.js";
 export * from "./types.js";

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "codec": "SCALE",
+  "fixtures": {
+    "CardRarity": {
+      "Common": "00",
+      "Rare": "01",
+      "Epic": "02",
+      "Legendary": "03",
+      "Mythical": "04"
+    },
+    "EconomicRealm": {
+      "Training": "00",
+      "Production": "01"
+    },
+    "SubjectRarityProfile": {
+      "value": {
+        "profileId": 1,
+        "subjectId": 16909060,
+        "subjectVersion": 2,
+        "rarity": "Epic",
+        "baseRanks": [3, 7, 8, 6],
+        "apexSide": null,
+        "rarityLoad": 3,
+        "profileVersion": 9,
+        "profileHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "scaleHex": "0100000004030201020000000203070806000309000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "PackCreditSource.FpsPackTrack": {
+      "value": {
+        "trackId": 17,
+        "economyVersion": 4
+      },
+      "scaleHex": "021100000004000000"
+    },
+    "PlayerXpTarget.PackTrack": {
+      "value": {
+        "packSku": 7,
+        "skuVersion": 2,
+        "economyVersion": 4
+      },
+      "scaleHex": "01070000000200000004000000"
+    }
+  }
+}

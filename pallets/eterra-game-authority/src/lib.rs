@@ -91,6 +91,11 @@ pub mod pallet {
         #[pallet::constant]
         type MaxExpirationsPerBlock: Get<u32>;
 
+        /// Effective scheduling cap kept below the storage codec bound so
+        /// mandatory expiry hooks and lifecycle callbacks fit in one block.
+        #[pallet::constant]
+        type MaxScheduledExpirationsPerBlock: Get<u32>;
+
         type MaxRoundBlocks: Get<BlockNumberFor<Self>>;
 
         type GameLifecycleHooks: crate::GameLifecycleHooks<Self::AccountId>;
@@ -181,6 +186,13 @@ pub mod pallet {
 
     #[pallet::hooks]
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+        fn integrity_test() {
+            assert!(
+                T::MaxScheduledExpirationsPerBlock::get() <= T::MaxExpirationsPerBlock::get(),
+                "effective expiry scheduling cap exceeds the storage codec bound"
+            );
+        }
+
         fn on_runtime_upgrade() -> Weight {
             let mut weight = T::DbWeight::get().reads(1);
             if StorageVersion::get::<Pallet<T>>() < STORAGE_VERSION {
@@ -263,6 +275,10 @@ pub mod pallet {
             let now = <frame_system::Pallet<T>>::block_number();
             let expire_at = now.saturating_add(T::MaxRoundBlocks::get());
             Expirations::<T>::try_mutate(expire_at, |list| -> Result<(), Error<T>> {
+                ensure!(
+                    (list.len() as u32) < T::MaxScheduledExpirationsPerBlock::get(),
+                    Error::<T>::TooManyExpirations
+                );
                 list.try_push(game_id)
                     .map_err(|_| Error::<T>::TooManyExpirations)?;
                 Ok(())

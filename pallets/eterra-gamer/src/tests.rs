@@ -58,6 +58,264 @@ fn steam_link_signature(
         .expect("sr25519 signature fits")
 }
 
+#[test]
+fn legacy_xp_is_sealed_from_v2_progression() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraGamer::grant_experience(
+            RuntimeOrigin::root(),
+            ALICE,
+            50_000
+        ));
+        assert_eq!(Experience::<Test>::get(ALICE), 50_000);
+        assert_eq!(
+            crate::pallet::V2UnallocatedPlayerXp::<Test>::get(
+                ALICE,
+                eterra_nexus_primitives::EconomicRealm::Production
+            ),
+            0
+        );
+        assert_noop!(
+            <EterraGamer as crate::V2PlayerProgressionManager<AccountId>>::grant_settled_fps_xp(
+                &ALICE,
+                eterra_nexus_primitives::EconomicRealm::Production,
+                100,
+                [1; 32]
+            ),
+            GamerError::<Test>::LegacyProgressionAuditRequired
+        );
+    });
+}
+
+#[test]
+fn settled_fps_xp_allocates_conservatively_to_pack_track() {
+    use eterra_nexus_primitives::{EconomicRealm, PlayerXpTarget};
+
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraGamer::commit_legacy_progression_audit(
+            RuntimeOrigin::root(),
+            [9; 32]
+        ));
+        assert_ok!(EterraGamer::publish_v2_pack_track(
+            RuntimeOrigin::root(),
+            crate::PackTrackConfig {
+                track_id: 7,
+                pack_sku: 10,
+                sku_version: 1,
+                economy_version: 3,
+                threshold: PRODUCTION_PACK_TRACK_THRESHOLD_V1,
+                economic_realm: EconomicRealm::Production,
+                config_hash: [8; 32],
+            }
+        ));
+        assert_ok!(EterraGamer::set_v2_pack_track_activation(
+            RuntimeOrigin::root(),
+            10,
+            1,
+            3,
+            true
+        ));
+        assert_ok!(<EterraGamer as crate::V2PlayerProgressionManager<
+            AccountId,
+        >>::grant_settled_fps_xp(
+            &ALICE,
+            EconomicRealm::Production,
+            4_850,
+            [1; 32]
+        ));
+        assert_noop!(
+            <EterraGamer as crate::V2PlayerProgressionManager<AccountId>>::grant_settled_fps_xp(
+                &ALICE,
+                EconomicRealm::Production,
+                4_850,
+                [1; 32]
+            ),
+            GamerError::<Test>::V2XpResultAlreadyProcessed
+        );
+        assert_ok!(EterraGamer::allocate_player_xp(
+            RuntimeOrigin::signed(ALICE),
+            EconomicRealm::Production,
+            4_830,
+            PlayerXpTarget::PackTrack {
+                pack_sku: 10,
+                sku_version: 1,
+                economy_version: 3,
+            }
+        ));
+        assert_eq!(
+            crate::pallet::V2UnallocatedPlayerXp::<Test>::get(ALICE, EconomicRealm::Production),
+            20
+        );
+        assert_eq!(
+            crate::pallet::V2PackProgress::<Test>::get(
+                ALICE,
+                (EconomicRealm::Production, 10, 1, 3)
+            ),
+            30
+        );
+        crate::mock::ISSUED_CREDITS.with(|issued| assert_eq!(issued.borrow().len(), 2));
+        let conservation =
+            crate::pallet::V2XpConservationByAccount::<Test>::get(ALICE, EconomicRealm::Production);
+        assert_eq!(
+            conservation.total_granted,
+            crate::pallet::V2UnallocatedPlayerXp::<Test>::get(ALICE, EconomicRealm::Production)
+                + conservation.advancement_allocated
+                + conservation.pack_allocated
+        );
+    });
+}
+
+#[test]
+fn pack_credit_failure_rolls_back_xp_allocation() {
+    use eterra_nexus_primitives::{EconomicRealm, PlayerXpTarget};
+
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraGamer::commit_legacy_progression_audit(
+            RuntimeOrigin::root(),
+            [9; 32]
+        ));
+        assert_ok!(EterraGamer::publish_v2_pack_track(
+            RuntimeOrigin::root(),
+            crate::PackTrackConfig {
+                track_id: 1,
+                pack_sku: 2,
+                sku_version: 1,
+                economy_version: 1,
+                threshold: TRAINING_PACK_TRACK_THRESHOLD_V1,
+                economic_realm: EconomicRealm::Training,
+                config_hash: [7; 32],
+            }
+        ));
+        assert_ok!(EterraGamer::set_v2_pack_track_activation(
+            RuntimeOrigin::root(),
+            2,
+            1,
+            1,
+            true
+        ));
+        assert_ok!(<EterraGamer as crate::V2PlayerProgressionManager<
+            AccountId,
+        >>::grant_settled_fps_xp(
+            &ALICE,
+            EconomicRealm::Training,
+            TRAINING_PACK_TRACK_THRESHOLD_V1,
+            [2; 32]
+        ));
+        crate::mock::CREDIT_ISSUER_FAILS.with(|fails| *fails.borrow_mut() = true);
+        assert!(EterraGamer::allocate_player_xp(
+            RuntimeOrigin::signed(ALICE),
+            EconomicRealm::Training,
+            TRAINING_PACK_TRACK_THRESHOLD_V1,
+            PlayerXpTarget::PackTrack {
+                pack_sku: 2,
+                sku_version: 1,
+                economy_version: 1,
+            }
+        )
+        .is_err());
+        assert_eq!(
+            crate::pallet::V2UnallocatedPlayerXp::<Test>::get(ALICE, EconomicRealm::Training),
+            TRAINING_PACK_TRACK_THRESHOLD_V1
+        );
+        assert_eq!(
+            crate::pallet::V2PackProgress::<Test>::get(ALICE, (EconomicRealm::Training, 2, 1, 1)),
+            0
+        );
+    });
+}
+
+#[test]
+fn pack_track_requires_canonical_realm_threshold_and_earned_sku() {
+    use eterra_nexus_primitives::EconomicRealm;
+
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraGamer::commit_legacy_progression_audit(
+            RuntimeOrigin::root(),
+            [9; 32]
+        ));
+        let base = crate::PackTrackConfig {
+            track_id: 1,
+            pack_sku: 10,
+            sku_version: 1,
+            economy_version: 1,
+            threshold: PRODUCTION_PACK_TRACK_THRESHOLD_V1,
+            economic_realm: EconomicRealm::Production,
+            config_hash: [8; 32],
+        };
+        assert_noop!(
+            EterraGamer::publish_v2_pack_track(
+                RuntimeOrigin::root(),
+                crate::PackTrackConfig {
+                    threshold: PRODUCTION_PACK_TRACK_THRESHOLD_V1 - 1,
+                    ..base
+                }
+            ),
+            GamerError::<Test>::PackTrackThresholdInvalid
+        );
+        assert_noop!(
+            EterraGamer::publish_v2_pack_track(
+                RuntimeOrigin::root(),
+                crate::PackTrackConfig {
+                    pack_sku: 99,
+                    ..base
+                }
+            ),
+            GamerError::<Test>::PackTrackSkuNotEarned
+        );
+        assert_ok!(EterraGamer::publish_v2_pack_track(
+            RuntimeOrigin::root(),
+            base
+        ));
+
+        assert_ok!(EterraGamer::publish_v2_pack_track(
+            RuntimeOrigin::root(),
+            crate::PackTrackConfig {
+                track_id: 2,
+                pack_sku: 2,
+                sku_version: 1,
+                economy_version: 2,
+                threshold: TRAINING_PACK_TRACK_THRESHOLD_V1,
+                economic_realm: EconomicRealm::Training,
+                config_hash: [7; 32],
+            }
+        ));
+    });
+}
+
+#[test]
+fn alpha_access_gates_player_xp_allocation_without_gating_grants() {
+    use eterra_nexus_primitives::{EconomicRealm, PlayerXpTarget};
+
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraGamer::commit_legacy_progression_audit(
+            RuntimeOrigin::root(),
+            [9; 32]
+        ));
+        assert_ok!(<EterraGamer as crate::V2PlayerProgressionManager<
+            AccountId,
+        >>::grant_settled_fps_xp(
+            &ALICE, EconomicRealm::Training, 100, [3; 32]
+        ));
+        set_access_allowed(false);
+        assert_noop!(
+            EterraGamer::allocate_player_xp(
+                RuntimeOrigin::signed(ALICE),
+                EconomicRealm::Training,
+                100,
+                PlayerXpTarget::PlayerAdvancement,
+            ),
+            sp_runtime::DispatchError::Other("not whitelisted")
+        );
+        assert_eq!(
+            crate::pallet::V2UnallocatedPlayerXp::<Test>::get(ALICE, EconomicRealm::Training),
+            100
+        );
+        assert_eq!(
+            crate::pallet::V2PlayerAdvancementXp::<Test>::get(ALICE, EconomicRealm::Training),
+            0
+        );
+    });
+}
+
 fn install_authority() {
     assert_ok!(EterraGamer::set_steam_link_authority(
         RuntimeOrigin::root(),

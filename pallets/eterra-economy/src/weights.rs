@@ -55,6 +55,8 @@ pub trait WeightInfo {
 	fn set_featured_rotation_config() -> Weight;
 	fn redeem_prize_with_tickets() -> Weight;
 	fn purchase_prize_with_native() -> Weight;
+	fn upsert_arcade_pack_credit_sku_v2() -> Weight;
+	fn redeem_arcade_pack_credit_with_tickets_v2() -> Weight;
 	fn rotate_featured() -> Weight;
 }
 
@@ -98,6 +100,8 @@ impl WeightInfo for () {
 	fn set_featured_rotation_config() -> Weight { Weight::from_parts(60_000, 0) }
 	fn redeem_prize_with_tickets() -> Weight { Weight::from_parts(150_000, 0) }
 	fn purchase_prize_with_native() -> Weight { Weight::from_parts(180_000, 0) }
+	fn upsert_arcade_pack_credit_sku_v2() -> Weight { Weight::from_parts(50_000, 0) }
+	fn redeem_arcade_pack_credit_with_tickets_v2() -> Weight { Weight::from_parts(300_000, 0) }
 	fn rotate_featured() -> Weight { Weight::from_parts(150_000, 0) }
 }
 
@@ -249,6 +253,20 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 	}
 	fn purchase_prize_with_native() -> Weight {
 		Weight::from_parts(220_000_000, 0).saturating_add(T::DbWeight::get().reads_writes(14, 10))
+	}
+	/// Conservative pre-release bound. This includes validating the target
+	/// PackSkuVersion through the configured Nexus V2 issuer.
+	fn upsert_arcade_pack_credit_sku_v2() -> Weight {
+		Weight::from_parts(50_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 8_192))
+			.saturating_add(T::DbWeight::get().reads_writes(2, 1))
+	}
+	/// Conservative pre-release bound for the atomic Ticket burn, Pack Credit
+	/// issuance, capacity accounting, and global replay receipt.
+	fn redeem_arcade_pack_credit_with_tickets_v2() -> Weight {
+		Weight::from_parts(300_000_000, 0)
+			.saturating_add(Weight::from_parts(0, 16_384))
+			.saturating_add(T::DbWeight::get().reads_writes(18, 12))
 	}
 	/// Conservative upper bound for one bounded 12-slot rotation over the
 	/// configured subject pool. Production activation still requires regenerating

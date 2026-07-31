@@ -1,0 +1,50 @@
+[package]
+name = "pallet-eterra-magic"
+description = "Elemental essence, fungible Spell Charges, and levelable Prism Spells"
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+codec = { workspace = true, features = ["derive", "max-encoded-len"] }
+eterra-nexus-primitives = { workspace = true }
+frame-benchmarking = { workspace = true, optional = true }
+frame-support = { workspace = true }
+frame-system = { workspace = true }
+pallet-alpha-access = { workspace = true }
+pallet-eterra-creatures = { workspace = true }
+scale-info = { workspace = true, features = ["derive"] }
+sp-io = { workspace = true }
+sp-runtime = { workspace = true }
+sp-std = { workspace = true }
+
+[dev-dependencies]
+pallet-balances = { workspace = true }
+sp-core = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+  "codec/std",
+  "eterra-nexus-primitives/std",
+  "frame-benchmarking?/std",
+  "frame-support/std",
+  "frame-system/std",
+  "pallet-alpha-access/std",
+  "pallet-balances/std",
+  "pallet-eterra-creatures/std",
+  "scale-info/std",
+  "sp-core/std",
+  "sp-io/std",
+  "sp-runtime/std",
+  "sp-std/std",
+]
+runtime-benchmarks = [
+  "frame-benchmarking/runtime-benchmarks",
+  "frame-support/runtime-benchmarks",
+  "frame-system/runtime-benchmarks",
+]
+try-runtime = ["frame-support/try-runtime"]

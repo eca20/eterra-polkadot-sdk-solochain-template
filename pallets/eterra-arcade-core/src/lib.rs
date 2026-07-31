@@ -939,6 +939,7 @@ mod tests {
 
     type AccountId = u64;
     type Block = system::mocking::MockBlock<Test>;
+    type TicketReward = (AccountId, GameId, RulesetVersion, Vec<u8>, u64, bool, u8);
 
     construct_runtime!(
         pub enum Test {
@@ -959,7 +960,7 @@ mod tests {
     thread_local! {
         static CREDITS: RefCell<BTreeMap<(AccountId, GameId, CreditTypeId), u64>> = const { RefCell::new(BTreeMap::new()) };
         static AUTHORITIES: RefCell<BTreeSet<(AccountId, GameId, RulesetVersion, AuthorityEventTypeId)>> = const { RefCell::new(BTreeSet::new()) };
-        static TICKET_REWARDS: RefCell<Vec<(AccountId, GameId, RulesetVersion, Vec<u8>, u64, bool, u8)>> = const { RefCell::new(Vec::new()) };
+        static TICKET_REWARDS: RefCell<Vec<TicketReward>> = const { RefCell::new(Vec::new()) };
         static FAIL_TICKET_REWARD: RefCell<bool> = const { RefCell::new(false) };
     }
 

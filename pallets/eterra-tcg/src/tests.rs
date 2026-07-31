@@ -16,6 +16,7 @@ use crate::{
 use frame_support::traits::Get;
 use frame_support::{assert_noop, assert_ok, BoundedBTreeSet, BoundedVec};
 use log::{debug, Level, Metadata, Record};
+use parity_scale_codec::{Decode, Encode};
 use sp_runtime::traits::AccountIdConversion;
 use std::sync::Once;
 
@@ -65,6 +66,18 @@ where
         "Expected {} event but did not find it. Events seen: {:?}",
         event_name, events
     );
+}
+
+fn attest_v16_migration() {
+    let state =
+        crate::TcgMigrationStateStorageV16::<Test>::get().expect("migration awaits attestation");
+    assert_eq!(state.phase, crate::MigrationPhaseV16::AwaitingVerification);
+    assert_ok!(EterraSlots::complete_legacy_migration_v16(
+        RuntimeOrigin::root(),
+        state.cards_seen,
+        state.anomalies,
+        [0xA5; 32],
+    ));
 }
 
 /// Advances the block number to `n` to ensure event processing occurs.
@@ -378,6 +391,24 @@ fn nexus_prize_pack_fulfills_atomically_and_routes_sixth_copy_to_overflow() {
             );
             assert!(Cards::<Test>::get(card_id).expect("card").is_finalized());
         }
+    });
+}
+
+#[test]
+fn nexus_prize_pool_rejects_oversized_legacy_vec_before_duplicate_scan() {
+    new_test_ext().execute_with(|| {
+        let templates = (0..=MaxSubjects::get())
+            .map(|subject_id| NexusPrizeTemplate {
+                kind: NexusCardKind::Echo,
+                card: starter_template(subject_id, 18),
+            })
+            .collect();
+
+        assert_noop!(
+            EterraSlots::set_nexus_prize_pool(RuntimeOrigin::root(), 10, templates, 1),
+            Error::<Test>::InvalidNexusPrizePool
+        );
+        assert!(!NexusPrizePools::<Test>::contains_key(10));
     });
 }
 
@@ -818,6 +849,84 @@ fn authorized_card_xp_grant_updates_level_deterministically() {
             level: 3,
             config_version: 1,
         }));
+    });
+}
+
+#[test]
+fn v16_pause_and_unknown_custody_block_all_legacy_card_progression_mutations() {
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let issuer = 1u64;
+        let card_id = mint_progression_card(player);
+        seed_progression_gear(player, 100, 77);
+        seed_spell(player, 200, 3);
+
+        crate::LegacyWritesPausedV16::<Test>::put(true);
+        assert_noop!(
+            EterraSlots::assign_progression_tree_to_card(RuntimeOrigin::root(), card_id, 1),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::grant_card_experience(
+                RuntimeOrigin::signed(issuer),
+                10,
+                7,
+                8,
+                card_id,
+                100
+            ),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::forge_progression_node(RuntimeOrigin::signed(player), card_id, 1, 100),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::set_card_magic_loadout(RuntimeOrigin::signed(player), card_id, vec![200]),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_eq!(
+            CardProgressions::<Test>::get(card_id)
+                .expect("progression")
+                .experience,
+            0
+        );
+        assert!(NexusGearItems::<Test>::contains_key(100));
+        assert!(CardMagicLoadouts::<Test>::get(card_id).is_none());
+
+        crate::LegacyWritesPausedV16::<Test>::put(false);
+        crate::LegacyCardClassifications::<Test>::insert(
+            card_id,
+            crate::LegacyCardClassification {
+                beneficial_owner: None,
+                custody: crate::LegacyCustodyKind::UnknownFrozen,
+                frozen: true,
+                record_hash: [7; 32],
+            },
+        );
+        assert_noop!(
+            EterraSlots::assign_progression_tree_to_card(RuntimeOrigin::root(), card_id, 1),
+            Error::<Test>::LegacyCardFrozen
+        );
+        assert_noop!(
+            EterraSlots::grant_card_experience(
+                RuntimeOrigin::signed(issuer),
+                10,
+                7,
+                8,
+                card_id,
+                100
+            ),
+            Error::<Test>::LegacyCardFrozen
+        );
+        assert_noop!(
+            EterraSlots::forge_progression_node(RuntimeOrigin::signed(player), card_id, 1, 100),
+            Error::<Test>::LegacyCardFrozen
+        );
+        assert_noop!(
+            EterraSlots::set_card_magic_loadout(RuntimeOrigin::signed(player), card_id, vec![200]),
+            Error::<Test>::LegacyCardFrozen
+        );
     });
 }
 
@@ -2419,6 +2528,67 @@ fn nft_transfer_allows_new_owner_to_unwrap() {
 }
 
 #[test]
+fn v16_wrapped_nft_transfer_updates_custody_indexes_and_unwraps_for_new_owner() {
+    use frame_support::traits::{Hooks, StorageVersion};
+
+    new_test_ext().execute_with(|| {
+        let player = 2u64;
+        let new_owner = 3u64;
+        assert_ok!(EterraSlots::init_card_nft_collection(
+            RuntimeOrigin::signed(1),
+            1
+        ));
+        let collection_id = EterraSlots::card_nft_collection_id().expect("collection id set");
+        let card_id = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(player)));
+        assert_ok!(EterraSlots::convert_to_nft(
+            RuntimeOrigin::signed(player),
+            card_id
+        ));
+
+        StorageVersion::new(15).put::<EterraSlots>();
+        <EterraSlots as Hooks<u64>>::on_runtime_upgrade();
+        assert_eq!(EterraSlots::migrate_v16_batch(100), 1);
+        attest_v16_migration();
+
+        assert_ok!(EterraSlots::transfer_wrapped_card_nft_v16(
+            RuntimeOrigin::signed(player),
+            card_id,
+            new_owner
+        ));
+        assert_eq!(
+            pallet_nfts::Pallet::<Test>::owner(collection_id, card_id),
+            Some(new_owner)
+        );
+        let wrapped =
+            crate::LegacyCardClassifications::<Test>::get(card_id).expect("classification");
+        assert_eq!(wrapped.custody, crate::LegacyCustodyKind::NftWrapped);
+        assert_eq!(wrapped.beneficial_owner, Some(new_owner));
+        assert!(!crate::RepairedLegacyCardsByOwnerV16::<Test>::get(
+            player, card_id
+        ));
+        assert!(crate::RepairedLegacyCardsByOwnerV16::<Test>::get(
+            new_owner, card_id
+        ));
+
+        assert_ok!(EterraSlots::unwrap_from_nft(
+            RuntimeOrigin::signed(new_owner),
+            card_id
+        ));
+        assert_eq!(
+            EterraSlots::cards(card_id)
+                .expect("card remains")
+                .get_owner(),
+            &new_owner
+        );
+        let unwrapped =
+            crate::LegacyCardClassifications::<Test>::get(card_id).expect("classification");
+        assert_eq!(unwrapped.custody, crate::LegacyCustodyKind::Ordinary);
+        assert_eq!(unwrapped.beneficial_owner, Some(new_owner));
+    });
+}
+
+#[test]
 fn convert_to_nft_fails_when_card_not_finalized() {
     new_test_ext().execute_with(|| {
         let player = 2u64;
@@ -3380,4 +3550,3551 @@ fn transfer_card_fails_when_not_finalized() {
             Error::<Test>::CardNotFinalized
         );
     });
+}
+
+#[test]
+fn v2_profile_publication_rejects_directional_rank_regression_atomically() {
+    use eterra_nexus_primitives::{
+        CardRarity, ConversionPolicy, Element as V2Element, ElementProfile as V2ElementProfile,
+        SubjectDefinitionV2, SubjectRarityProfile, SubjectRole,
+    };
+
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraSlots::publish_subject_definition_v2(
+            RuntimeOrigin::root(),
+            SubjectDefinitionV2 {
+                subject_definition_id: 77,
+                subject_id: 77,
+                subject_version: 1,
+                role: SubjectRole::Hero,
+                conversion_policy: ConversionPolicy::PlayableEmbodiment,
+                element_profile: V2ElementProfile {
+                    main: V2Element::Fire,
+                    minor: None,
+                    resistance: None,
+                    weakness: Some(V2Element::Water),
+                },
+                display_metadata_id: 77,
+                definition_hash: [77; 32],
+                catalog_version: 1,
+            }
+        ));
+        let rows = [
+            (CardRarity::Common, [6, 5, 4, 3], None),
+            // Individually valid (total 21), but north regresses 6 -> 5.
+            (CardRarity::Rare, [5, 6, 5, 5], None),
+            (CardRarity::Epic, [6, 7, 6, 5], None),
+            (CardRarity::Legendary, [7, 8, 7, 5], None),
+            (CardRarity::Mythical, [10, 8, 7, 5], Some(0)),
+        ];
+        let profiles = core::array::from_fn(|index| {
+            let (rarity, base_ranks, apex_side) = rows[index];
+            SubjectRarityProfile {
+                profile_id: 770 + index as u32,
+                subject_id: 77,
+                subject_version: 1,
+                rarity,
+                base_ranks,
+                apex_side,
+                rarity_load: rarity.rarity_load(),
+                profile_version: 1,
+                profile_hash: [index as u8; 32],
+            }
+        });
+        assert!(profiles.iter().all(SubjectRarityProfile::validate));
+
+        assert_noop!(
+            EterraSlots::publish_subject_rarity_profiles_v2(
+                RuntimeOrigin::root(),
+                77,
+                1,
+                profiles,
+                1,
+            ),
+            Error::<Test>::V2InvalidProfiles
+        );
+        assert_eq!(crate::SubjectRarityProfilesV2::<Test>::iter().count(), 0);
+        assert_eq!(
+            crate::SubjectRarityProfileByKeyV2::<Test>::iter().count(),
+            0
+        );
+    });
+}
+
+fn publish_v2_test_catalog() {
+    use eterra_nexus_primitives::{
+        CardRarity, ConversionPolicy, DiscoveryPolicy, Element as V2Element,
+        ElementProfile as V2ElementProfile, MediaDefinitionV2, PackSkuVersion, SubjectDefinitionV2,
+        SubjectRarityProfile, SubjectRole,
+    };
+
+    let rarities = [
+        (CardRarity::Common, [5, 5, 4, 4], None),
+        (CardRarity::Rare, [6, 5, 5, 5], None),
+        (CardRarity::Epic, [6, 6, 6, 6], None),
+        (CardRarity::Legendary, [7, 7, 7, 6], None),
+        (CardRarity::Mythical, [10, 7, 7, 6], Some(0)),
+    ];
+    let mut profile_ids = Vec::new();
+    let mut pose_ids = Vec::new();
+    for subject_id in 1..=2u32 {
+        let definition_id = subject_id;
+        assert_ok!(EterraSlots::publish_subject_definition_v2(
+            RuntimeOrigin::root(),
+            SubjectDefinitionV2 {
+                subject_definition_id: definition_id,
+                subject_id,
+                subject_version: 1,
+                role: SubjectRole::Hero,
+                conversion_policy: ConversionPolicy::PlayableEmbodiment,
+                element_profile: V2ElementProfile {
+                    main: V2Element::Fire,
+                    minor: None,
+                    resistance: None,
+                    weakness: Some(V2Element::Water),
+                },
+                display_metadata_id: subject_id,
+                definition_hash: [subject_id as u8; 32],
+                catalog_version: 1,
+            }
+        ));
+        assert_ok!(EterraSlots::set_subject_activation_v2(
+            RuntimeOrigin::root(),
+            eterra_nexus_primitives::SubjectActivationState {
+                subject_definition_id: definition_id,
+                mint_enabled: true,
+                conversion_enabled: true,
+            }
+        ));
+        let profiles = core::array::from_fn(|index| {
+            let (rarity, ranks, apex_side) = rarities[index];
+            let profile_id = subject_id * 10 + index as u32;
+            profile_ids.push(profile_id);
+            SubjectRarityProfile {
+                profile_id,
+                subject_id,
+                subject_version: 1,
+                rarity,
+                base_ranks: ranks,
+                apex_side,
+                rarity_load: rarity.rarity_load(),
+                profile_version: 1,
+                profile_hash: [profile_id as u8; 32],
+            }
+        });
+        assert_ok!(EterraSlots::publish_subject_rarity_profiles_v2(
+            RuntimeOrigin::root(),
+            subject_id,
+            1,
+            profiles,
+            1,
+        ));
+        for pose in 0..3u32 {
+            let definition_id = subject_id * 10 + pose;
+            pose_ids.push(definition_id);
+            assert_ok!(EterraSlots::publish_pose_definition_v2(
+                RuntimeOrigin::root(),
+                MediaDefinitionV2 {
+                    definition_id,
+                    subject_id: Some(subject_id),
+                    media_id: definition_id,
+                    release_epoch: 1,
+                    definition_hash: [definition_id as u8; 32],
+                }
+            ));
+        }
+    }
+    let background_ids = vec![1000, 1001, 1002, 1003, 1004];
+    for definition_id in background_ids.iter().copied() {
+        assert_ok!(EterraSlots::publish_background_definition_v2(
+            RuntimeOrigin::root(),
+            MediaDefinitionV2 {
+                definition_id,
+                subject_id: None,
+                media_id: definition_id,
+                release_epoch: 1,
+                definition_hash: [definition_id as u8; 32],
+            }
+        ));
+    }
+    assert_ok!(EterraSlots::publish_acquisition_pool_v2(
+        RuntimeOrigin::root(),
+        1,
+        1,
+        1,
+        profile_ids,
+        pose_ids,
+        background_ids,
+        [9; 32],
+    ));
+    assert_ok!(EterraSlots::publish_pack_sku_version_v2(
+        RuntimeOrigin::root(),
+        PackSkuVersion {
+            pack_sku: 1,
+            version: 1,
+            card_count: 6,
+            set_id: 1,
+            pool_id: 1,
+            pool_version: 1,
+            rarity_weights: [6_800, 2_200, 750, 200, 50],
+            discovery_policy: DiscoveryPolicy::Earned,
+            odds_metadata_hash: [8; 32],
+            immutable_config_hash: [9; 32],
+            active_from: 1u64,
+            active_until: None,
+        }
+    ));
+    assert_ok!(EterraSlots::set_v2_feature_enabled(
+        RuntimeOrigin::root(),
+        crate::V2Feature::Packs,
+        true,
+    ));
+    assert_ok!(EterraSlots::set_v2_feature_enabled(
+        RuntimeOrigin::root(),
+        crate::V2Feature::Conversion,
+        true,
+    ));
+}
+
+fn v2_draw_transcript(tag: u8) -> crate::V2DrawTranscript {
+    crate::V2DrawTranscript {
+        request_id: [tag; 32],
+        immutable_config_hash: [tag.wrapping_add(1); 32],
+        account_commitment: [tag.wrapping_add(2); 32],
+        verified_randomness_output: [tag.wrapping_add(3); 32],
+    }
+}
+
+fn seed_v2_conversion_safety_team(owner: u64, candidate_card_id: u64) -> Vec<u64> {
+    use eterra_nexus_primitives::{
+        CardInstanceV2, CardOriginV2, CardRarity, CardStateV2, ConversionPolicy,
+        Element as V2Element, ElementProfile as V2ElementProfile, MediaDefinitionV2,
+        SubjectDefinitionV2, SubjectRarityProfile, SubjectRole,
+    };
+
+    let candidate = crate::CardsV2::<Test>::get(candidate_card_id).expect("candidate exists");
+    let rarities = [
+        (CardRarity::Common, [5, 5, 4, 4], None),
+        (CardRarity::Rare, [6, 5, 5, 5], None),
+        (CardRarity::Epic, [6, 6, 6, 6], None),
+        (CardRarity::Legendary, [7, 7, 7, 6], None),
+        (CardRarity::Mythical, [10, 7, 7, 6], Some(0)),
+    ];
+    let mut card_ids = Vec::new();
+    for subject_id in 3..=7u32 {
+        assert_ok!(EterraSlots::publish_subject_definition_v2(
+            RuntimeOrigin::root(),
+            SubjectDefinitionV2 {
+                subject_definition_id: subject_id,
+                subject_id,
+                subject_version: 1,
+                role: SubjectRole::Hero,
+                conversion_policy: ConversionPolicy::PlayableEmbodiment,
+                element_profile: V2ElementProfile {
+                    main: V2Element::Fire,
+                    minor: None,
+                    resistance: None,
+                    weakness: Some(V2Element::Water),
+                },
+                display_metadata_id: subject_id,
+                definition_hash: [subject_id as u8; 32],
+                catalog_version: 1,
+            },
+        ));
+        assert_ok!(EterraSlots::set_subject_activation_v2(
+            RuntimeOrigin::root(),
+            eterra_nexus_primitives::SubjectActivationState {
+                subject_definition_id: subject_id,
+                mint_enabled: true,
+                conversion_enabled: true,
+            },
+        ));
+        let profiles = core::array::from_fn(|index| {
+            let (rarity, ranks, apex_side) = rarities[index];
+            let profile_id = subject_id * 10 + index as u32;
+            SubjectRarityProfile {
+                profile_id,
+                subject_id,
+                subject_version: 1,
+                rarity,
+                base_ranks: ranks,
+                apex_side,
+                rarity_load: rarity.rarity_load(),
+                profile_version: 1,
+                profile_hash: [profile_id as u8; 32],
+            }
+        });
+        assert_ok!(EterraSlots::publish_subject_rarity_profiles_v2(
+            RuntimeOrigin::root(),
+            subject_id,
+            1,
+            profiles,
+            1,
+        ));
+        let pose_definition_id = subject_id * 10;
+        assert_ok!(EterraSlots::publish_pose_definition_v2(
+            RuntimeOrigin::root(),
+            MediaDefinitionV2 {
+                definition_id: pose_definition_id,
+                subject_id: Some(subject_id),
+                media_id: pose_definition_id,
+                release_epoch: 1,
+                definition_hash: [pose_definition_id as u8; 32],
+            },
+        ));
+
+        let card_id = crate::NextCardIdV2::<Test>::get().max(1);
+        crate::NextCardIdV2::<Test>::put(card_id + 1);
+        crate::CardsV2::<Test>::insert(
+            card_id,
+            CardInstanceV2 {
+                card_id,
+                owner,
+                set_id: candidate.set_id,
+                season_id: candidate.season_id,
+                subject_id,
+                subject_version: 1,
+                rarity: CardRarity::Common,
+                profile_id: subject_id * 10,
+                pose_definition_id,
+                background_definition_id: 1000,
+                serial_number: 1,
+                economic_realm: candidate.economic_realm,
+                origin: CardOriginV2::Tutorial {
+                    tutorial_id: [subject_id as u8; 32],
+                },
+                acquisition_id: [subject_id as u8; 32],
+                pool_id: candidate.pool_id,
+                pool_version: candidate.pool_version,
+                state: CardStateV2::Active,
+                acquired_at: System::block_number(),
+            },
+        );
+        crate::LiveSupplyBySubjectRarityV2::<Test>::mutate(
+            (subject_id, CardRarity::Common, candidate.economic_realm),
+            |count| *count += 1,
+        );
+        card_ids.push(card_id);
+    }
+    crate::V2OwnerCardCount::<Test>::mutate(owner, |count| *count += 5);
+    crate::V2OwnerActiveCardCount::<Test>::mutate(owner, |count| *count += 5);
+    assert_ok!(EterraSlots::publish_competitive_format_v2(
+        RuntimeOrigin::root(),
+        crate::CompetitiveFormatV2 {
+            format_id: 9001,
+            version: 1,
+            set_id: candidate.set_id,
+            team_size: 5,
+            rarity_load_budget: 15,
+            max_mythical: 1,
+            max_legendary_or_better: 2,
+            rules_hash: [0x90; 32],
+        },
+    ));
+    assert_ok!(EterraSlots::set_v2_feature_enabled(
+        RuntimeOrigin::root(),
+        crate::V2Feature::Ranked,
+        true,
+    ));
+    assert_ok!(EterraSlots::save_competitive_team_v2(
+        RuntimeOrigin::signed(owner),
+        9001,
+        9001,
+        1,
+        card_ids.clone().try_into().expect("five cards fit"),
+    ));
+    card_ids
+}
+
+fn open_v2_training_pack(
+    owner: u64,
+    tag: u8,
+) -> BoundedVec<u64, frame_support::traits::ConstU32<6>> {
+    assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+        RuntimeOrigin::root(),
+        owner,
+        1,
+        1,
+        [tag; 32],
+    ));
+    assert_ok!(EterraSlots::request_pack_open_v2(
+        RuntimeOrigin::signed(owner),
+        1,
+        1,
+        eterra_nexus_primitives::EconomicRealm::Training,
+        [tag.wrapping_add(1); 32],
+    ));
+    let opening_id = crate::PendingPackOpeningsV2::<Test>::iter_keys()
+        .next()
+        .expect("pending opening");
+    finalize_random_request(last_random_request(), [tag.wrapping_add(2); 32]);
+    assert_ok!(EterraSlots::finalize_pack_open_v2(
+        RuntimeOrigin::signed(owner),
+        opening_id,
+    ));
+    crate::ProcessedAcquisitionsV2::<Test>::get(opening_id).expect("processed opening")
+}
+
+const ASCENSION_SEASON_ID: u32 = 1;
+const ASCENSION_SUBJECT_ID: u32 = 1;
+const ASCENSION_ELIGIBILITY_ID: [u8; 32] = [0x41; 32];
+
+fn configure_v2_ascension(accounts: &[u64]) {
+    publish_v2_test_catalog();
+    assert_ok!(EterraSlots::configure_mythical_ascension_season_v2(
+        RuntimeOrigin::root(),
+        crate::MythicalAscensionSeasonConfig {
+            season_id: ASCENSION_SEASON_ID,
+            set_id: 1,
+            pool_id: 1,
+            pool_version: 1,
+            starts_at: 10,
+            ends_at: 100,
+            required_mastery: 10,
+            required_marks: 10,
+            available_weeks: 12,
+            config_hash: [0x51; 32],
+        },
+    ));
+    assert_ok!(EterraSlots::configure_mythical_ascension_subject_v2(
+        RuntimeOrigin::root(),
+        crate::MythicalAscensionSubjectConfig {
+            season_id: ASCENSION_SEASON_ID,
+            subject_id: ASCENSION_SUBJECT_ID,
+            subject_version: 1,
+            foundation_pose_definition_id: 10,
+            foundation_background_definition_id: 1000,
+            config_hash: [0x52; 32],
+        },
+    ));
+    for account in accounts {
+        assert_ok!(EterraSlots::link_season_eligibility_v2(
+            RuntimeOrigin::root(),
+            *account,
+            ASCENSION_SEASON_ID,
+            ASCENSION_ELIGIBILITY_ID,
+        ));
+    }
+}
+
+fn record_v2_ascension_progress(last_week: u8) {
+    for week in 0..=last_week {
+        System::set_block_number(10 + u64::from(week) * 7);
+        assert_ok!(EterraSlots::record_mythical_ascension_progress_v2(
+            RuntimeOrigin::root(),
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+            eterra_nexus_primitives::EconomicRealm::Production,
+            (week == 0).then_some(10),
+            Some(week),
+            week == 0,
+            [0x60u8.saturating_add(week); 32],
+        ));
+    }
+}
+
+fn seed_v2_production_legendary(owner: u64) -> u64 {
+    use eterra_nexus_primitives::{
+        CardInstanceV2, CardOriginV2, CardRarity, CardStateV2, EconomicRealm,
+    };
+
+    let card_id = crate::NextCardIdV2::<Test>::get().max(1);
+    crate::NextCardIdV2::<Test>::put(card_id + 1);
+    crate::NextSerialV2::<Test>::insert((ASCENSION_SUBJECT_ID, CardRarity::Legendary), 1);
+    crate::CardsV2::<Test>::insert(
+        card_id,
+        CardInstanceV2 {
+            card_id,
+            owner,
+            set_id: 1,
+            season_id: 1,
+            subject_id: ASCENSION_SUBJECT_ID,
+            subject_version: 1,
+            rarity: CardRarity::Legendary,
+            profile_id: 13,
+            pose_definition_id: 11,
+            background_definition_id: 1001,
+            serial_number: 1,
+            economic_realm: EconomicRealm::Production,
+            origin: CardOriginV2::Pack {
+                opening_id: [0x71; 32],
+                slot: 0,
+            },
+            acquisition_id: [0x72; 32],
+            pool_id: 1,
+            pool_version: 1,
+            state: CardStateV2::Active,
+            acquired_at: 1,
+        },
+    );
+    crate::V2OwnerCardCount::<Test>::insert(owner, 1);
+    crate::V2OwnerActiveCardCount::<Test>::insert(owner, 1);
+    crate::LiveSupplyBySubjectRarityV2::<Test>::insert(
+        (
+            ASCENSION_SUBJECT_ID,
+            CardRarity::Legendary,
+            EconomicRealm::Production,
+        ),
+        1,
+    );
+    card_id
+}
+
+#[test]
+fn v2_mythical_ascension_foundation_path_is_atomic_production_and_idempotent() {
+    use eterra_nexus_primitives::{CardOriginV2, CardRarity, EconomicRealm};
+
+    new_test_ext().execute_with(|| {
+        configure_v2_ascension(&[1]);
+        record_v2_ascension_progress(9);
+        assert!(!crate::V2FeatureEnabled::<Test>::get(
+            crate::V2Feature::MythicalAscension
+        ));
+        assert_noop!(
+            EterraSlots::ascend_mythical_v2(
+                RuntimeOrigin::signed(1),
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                crate::MythicalAscensionInput::LegendaryFoundation,
+            ),
+            Error::<Test>::V2FeatureDisabled
+        );
+        assert_ok!(EterraSlots::set_v2_feature_enabled(
+            RuntimeOrigin::root(),
+            crate::V2Feature::MythicalAscension,
+            true,
+        ));
+
+        assert_ok!(EterraSlots::ascend_mythical_v2(
+            RuntimeOrigin::signed(1),
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+            crate::MythicalAscensionInput::LegendaryFoundation,
+        ));
+        let output_id = 1;
+        let output = crate::CardsV2::<Test>::get(output_id).expect("mythical output");
+        assert_eq!(output.owner, 1);
+        assert_eq!(output.rarity, CardRarity::Mythical);
+        assert_eq!(output.economic_realm, EconomicRealm::Production);
+        assert_eq!(output.pose_definition_id, 10);
+        assert_eq!(output.background_definition_id, 1000);
+        assert!(matches!(
+            output.origin,
+            CardOriginV2::MythicalAscension { .. }
+        ));
+        assert_eq!(
+            crate::V2CardAccountBoundUntil::<Test>::get(output_id),
+            Some(100)
+        );
+        assert_eq!(crate::V2OwnerCardCount::<Test>::get(1), 1);
+        assert_eq!(crate::V2OwnerActiveCardCount::<Test>::get(1), 1);
+        assert_eq!(
+            crate::LiveSupplyBySubjectRarityV2::<Test>::get((
+                ASCENSION_SUBJECT_ID,
+                CardRarity::Mythical,
+                EconomicRealm::Production,
+            )),
+            1
+        );
+        assert!(!crate::LegendaryFoundationsV2::<Test>::get((
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+        )));
+        assert_eq!(
+            crate::ConvergenceProgressV2::<Test>::get((
+                ASCENSION_ELIGIBILITY_ID,
+                ASCENSION_SEASON_ID,
+            )),
+            crate::ConvergenceProgress::default()
+        );
+        assert!(!crate::MythicCatalystsV2::<Test>::get((
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+        )));
+
+        let profile_bitmap = crate::PackProtectionHistoryBitmapsV2::<Test>::get(1, 1);
+        assert_ne!(profile_bitmap[0] & (1 << 4), 0);
+        let cosmetic_bit = EterraSlots::cosmetic_protection_bit(
+            1,
+            ASCENSION_SUBJECT_ID,
+            CardRarity::Mythical,
+            10,
+            1000,
+        )
+        .unwrap();
+        let cosmetic_bitmap = crate::CosmeticProtectionBitmapsV2::<Test>::get(1, 1);
+        assert_ne!(
+            cosmetic_bitmap[cosmetic_bit / 8] & (1 << (cosmetic_bit % 8)),
+            0
+        );
+
+        let ascension_id = crate::MythicalAscensionByEligibilityV2::<Test>::get((
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+        ))
+        .expect("ascension recorded");
+        let receipt =
+            crate::MythicalAscensionReceiptsV2::<Test>::get(ascension_id).expect("receipt");
+        assert_eq!(receipt.output_card_id, output_id);
+        assert_eq!(
+            receipt.input,
+            crate::MythicalAscensionInput::LegendaryFoundation
+        );
+
+        assert_ok!(EterraSlots::ascend_mythical_v2(
+            RuntimeOrigin::signed(1),
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+            crate::MythicalAscensionInput::LegendaryFoundation,
+        ));
+        assert_eq!(crate::V2OwnerCardCount::<Test>::get(1), 1);
+        assert_eq!(
+            crate::LiveSupplyBySubjectRarityV2::<Test>::get((
+                ASCENSION_SUBJECT_ID,
+                CardRarity::Mythical,
+                EconomicRealm::Production,
+            )),
+            1
+        );
+        assert_eq!(
+            crate::MythicalAscensionReceiptsV2::<Test>::iter().count(),
+            1
+        );
+    });
+}
+
+#[test]
+fn v2_mythical_ascension_respects_pending_pack_capacity_without_consuming_inputs() {
+    new_test_ext().execute_with(|| {
+        configure_v2_ascension(&[1]);
+        record_v2_ascension_progress(9);
+        assert_ok!(EterraSlots::set_v2_feature_enabled(
+            RuntimeOrigin::root(),
+            crate::V2Feature::MythicalAscension,
+            true,
+        ));
+        crate::V2OwnerCardCount::<Test>::insert(1, 9_999);
+        crate::ReservedV2PackCardCount::<Test>::insert(1, 1);
+
+        assert_noop!(
+            EterraSlots::ascend_mythical_v2(
+                RuntimeOrigin::signed(1),
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                crate::MythicalAscensionInput::LegendaryFoundation,
+            ),
+            Error::<Test>::V2OperationalCardLimitReached
+        );
+        assert!(crate::LegendaryFoundationsV2::<Test>::get((
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+        )));
+        assert!(crate::MythicCatalystsV2::<Test>::get((
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+        )));
+        assert_eq!(
+            crate::MythicalAscensionReceiptsV2::<Test>::iter().count(),
+            0
+        );
+        assert_eq!(crate::CardsV2::<Test>::iter().count(), 0);
+    });
+}
+
+#[test]
+fn v2_mythical_ascension_legendary_path_tombstones_and_carries_cosmetics() {
+    use eterra_nexus_primitives::{CardRarity, CardStateV2, EconomicRealm};
+
+    new_test_ext().execute_with(|| {
+        configure_v2_ascension(&[1]);
+        let source_id = seed_v2_production_legendary(1);
+        record_v2_ascension_progress(9);
+        assert_ok!(EterraSlots::set_v2_feature_enabled(
+            RuntimeOrigin::root(),
+            crate::V2Feature::MythicalAscension,
+            true,
+        ));
+
+        assert_ok!(EterraSlots::ascend_mythical_v2(
+            RuntimeOrigin::signed(1),
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+            crate::MythicalAscensionInput::LegendaryCard { card_id: source_id },
+        ));
+        let output_id = 2;
+        let source = crate::CardsV2::<Test>::get(source_id).unwrap();
+        assert_eq!(
+            source.state,
+            CardStateV2::MythicalAscended {
+                output_card_id: output_id,
+            }
+        );
+        let output = crate::CardsV2::<Test>::get(output_id).unwrap();
+        assert_eq!(output.pose_definition_id, source.pose_definition_id);
+        assert_eq!(
+            output.background_definition_id,
+            source.background_definition_id
+        );
+        assert_eq!(output.economic_realm, EconomicRealm::Production);
+        assert_eq!(crate::V2OwnerCardCount::<Test>::get(1), 2);
+        assert_eq!(crate::V2OwnerActiveCardCount::<Test>::get(1), 1);
+        assert_eq!(
+            crate::LiveSupplyBySubjectRarityV2::<Test>::get((
+                ASCENSION_SUBJECT_ID,
+                CardRarity::Legendary,
+                EconomicRealm::Production,
+            )),
+            0
+        );
+        assert_eq!(
+            crate::LiveSupplyBySubjectRarityV2::<Test>::get((
+                ASCENSION_SUBJECT_ID,
+                CardRarity::Mythical,
+                EconomicRealm::Production,
+            )),
+            1
+        );
+    });
+}
+
+#[test]
+fn v2_mythical_ascension_is_shared_across_linked_wallets() {
+    new_test_ext().execute_with(|| {
+        configure_v2_ascension(&[1, 2]);
+        record_v2_ascension_progress(9);
+        assert_ok!(EterraSlots::set_v2_feature_enabled(
+            RuntimeOrigin::root(),
+            crate::V2Feature::MythicalAscension,
+            true,
+        ));
+        assert_ok!(EterraSlots::ascend_mythical_v2(
+            RuntimeOrigin::signed(1),
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+            crate::MythicalAscensionInput::LegendaryFoundation,
+        ));
+        assert_noop!(
+            EterraSlots::ascend_mythical_v2(
+                RuntimeOrigin::signed(2),
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                crate::MythicalAscensionInput::LegendaryFoundation,
+            ),
+            Error::<Test>::V2AscensionAlreadyCompleted
+        );
+        assert_eq!(crate::V2OwnerCardCount::<Test>::get(2), 0);
+    });
+}
+
+#[test]
+fn v2_ascension_progress_rejects_training_wrong_duplicate_and_out_of_range_weeks() {
+    new_test_ext().execute_with(|| {
+        configure_v2_ascension(&[1]);
+        System::set_block_number(10);
+        assert_noop!(
+            EterraSlots::record_mythical_ascension_progress_v2(
+                RuntimeOrigin::root(),
+                ASCENSION_ELIGIBILITY_ID,
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                eterra_nexus_primitives::EconomicRealm::Training,
+                Some(10),
+                Some(0),
+                true,
+                [0x80; 32],
+            ),
+            Error::<Test>::V2AscensionNotActive
+        );
+        assert_noop!(
+            EterraSlots::record_mythical_ascension_progress_v2(
+                RuntimeOrigin::root(),
+                ASCENSION_ELIGIBILITY_ID,
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                eterra_nexus_primitives::EconomicRealm::Production,
+                None,
+                Some(1),
+                false,
+                [0x81; 32],
+            ),
+            Error::<Test>::V2AscensionWeekInvalid
+        );
+        assert_ok!(EterraSlots::record_mythical_ascension_progress_v2(
+            RuntimeOrigin::root(),
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+            eterra_nexus_primitives::EconomicRealm::Production,
+            Some(10),
+            Some(0),
+            true,
+            [0x82; 32],
+        ));
+        assert_noop!(
+            EterraSlots::record_mythical_ascension_progress_v2(
+                RuntimeOrigin::root(),
+                ASCENSION_ELIGIBILITY_ID,
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                eterra_nexus_primitives::EconomicRealm::Production,
+                None,
+                Some(0),
+                false,
+                [0x83; 32],
+            ),
+            Error::<Test>::V2AscensionWeekAlreadyCredited
+        );
+        System::set_block_number(94);
+        assert_noop!(
+            EterraSlots::record_mythical_ascension_progress_v2(
+                RuntimeOrigin::root(),
+                ASCENSION_ELIGIBILITY_ID,
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                eterra_nexus_primitives::EconomicRealm::Production,
+                None,
+                Some(12),
+                false,
+                [0x84; 32],
+            ),
+            Error::<Test>::V2AscensionWeekInvalid
+        );
+    });
+}
+
+#[test]
+fn v2_ascension_week_and_season_boundaries_are_chain_derived() {
+    new_test_ext().execute_with(|| {
+        configure_v2_ascension(&[1]);
+        System::set_block_number(9);
+        assert_noop!(
+            EterraSlots::record_mythical_ascension_progress_v2(
+                RuntimeOrigin::root(),
+                ASCENSION_ELIGIBILITY_ID,
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                eterra_nexus_primitives::EconomicRealm::Production,
+                Some(10),
+                None,
+                false,
+                [0x85; 32],
+            ),
+            Error::<Test>::V2AscensionNotActive
+        );
+        System::set_block_number(87);
+        assert_ok!(EterraSlots::record_mythical_ascension_progress_v2(
+            RuntimeOrigin::root(),
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+            eterra_nexus_primitives::EconomicRealm::Production,
+            Some(10),
+            Some(11),
+            true,
+            [0x86; 32],
+        ));
+        System::set_block_number(100);
+        assert_noop!(
+            EterraSlots::record_mythical_ascension_progress_v2(
+                RuntimeOrigin::root(),
+                ASCENSION_ELIGIBILITY_ID,
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                eterra_nexus_primitives::EconomicRealm::Production,
+                None,
+                None,
+                true,
+                [0x87; 32],
+            ),
+            Error::<Test>::V2AscensionNotActive
+        );
+    });
+}
+
+#[test]
+fn v2_ascension_failure_rolls_back_all_inputs() {
+    new_test_ext().execute_with(|| {
+        configure_v2_ascension(&[1]);
+        record_v2_ascension_progress(9);
+        assert_ok!(EterraSlots::set_v2_feature_enabled(
+            RuntimeOrigin::root(),
+            crate::V2Feature::MythicalAscension,
+            true,
+        ));
+        crate::NextCardIdV2::<Test>::put(u64::MAX);
+
+        assert_noop!(
+            EterraSlots::ascend_mythical_v2(
+                RuntimeOrigin::signed(1),
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                crate::MythicalAscensionInput::LegendaryFoundation,
+            ),
+            Error::<Test>::V2CardIdExhausted
+        );
+        assert!(crate::LegendaryFoundationsV2::<Test>::get((
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+        )));
+        assert_eq!(
+            crate::ConvergenceProgressV2::<Test>::get((
+                ASCENSION_ELIGIBILITY_ID,
+                ASCENSION_SEASON_ID,
+            ))
+            .marks_earned,
+            10
+        );
+        assert!(crate::MythicCatalystsV2::<Test>::get((
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+        )));
+        assert_eq!(crate::CardsV2::<Test>::iter().count(), 0);
+    });
+}
+
+#[test]
+fn v2_ascension_requires_mastery_distinct_marks_catalyst_and_foundation() {
+    new_test_ext().execute_with(|| {
+        configure_v2_ascension(&[1]);
+        System::set_block_number(10);
+        assert_ok!(EterraSlots::set_v2_feature_enabled(
+            RuntimeOrigin::root(),
+            crate::V2Feature::MythicalAscension,
+            true,
+        ));
+        let mastery_key = (
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+        );
+        let convergence_key = (ASCENSION_ELIGIBILITY_ID, ASCENSION_SEASON_ID);
+        crate::LegendaryFoundationsV2::<Test>::insert(mastery_key, true);
+        crate::MythicCatalystsV2::<Test>::insert(convergence_key, true);
+        crate::ConvergenceProgressV2::<Test>::insert(
+            convergence_key,
+            crate::ConvergenceProgress {
+                marks_earned: 10,
+                credited_week_bitmap: 0x03ff,
+            },
+        );
+        crate::MythicalSubjectMasteryV2::<Test>::insert(mastery_key, 9);
+        assert_noop!(
+            EterraSlots::ascend_mythical_v2(
+                RuntimeOrigin::signed(1),
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                crate::MythicalAscensionInput::LegendaryFoundation,
+            ),
+            Error::<Test>::V2AscensionRequirementsMissing
+        );
+
+        crate::MythicalSubjectMasteryV2::<Test>::insert(mastery_key, 10);
+        crate::ConvergenceProgressV2::<Test>::insert(
+            convergence_key,
+            crate::ConvergenceProgress {
+                marks_earned: 9,
+                credited_week_bitmap: 0x01ff,
+            },
+        );
+        assert_noop!(
+            EterraSlots::ascend_mythical_v2(
+                RuntimeOrigin::signed(1),
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                crate::MythicalAscensionInput::LegendaryFoundation,
+            ),
+            Error::<Test>::V2AscensionRequirementsMissing
+        );
+
+        crate::ConvergenceProgressV2::<Test>::insert(
+            convergence_key,
+            crate::ConvergenceProgress {
+                marks_earned: 10,
+                credited_week_bitmap: 0x01ff,
+            },
+        );
+        assert_noop!(
+            EterraSlots::ascend_mythical_v2(
+                RuntimeOrigin::signed(1),
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                crate::MythicalAscensionInput::LegendaryFoundation,
+            ),
+            Error::<Test>::V2AscensionRequirementsMissing
+        );
+
+        crate::ConvergenceProgressV2::<Test>::insert(
+            convergence_key,
+            crate::ConvergenceProgress {
+                marks_earned: 10,
+                credited_week_bitmap: 0x03ff,
+            },
+        );
+        crate::MythicCatalystsV2::<Test>::insert(convergence_key, false);
+        assert_noop!(
+            EterraSlots::ascend_mythical_v2(
+                RuntimeOrigin::signed(1),
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                crate::MythicalAscensionInput::LegendaryFoundation,
+            ),
+            Error::<Test>::V2AscensionRequirementsMissing
+        );
+
+        crate::MythicCatalystsV2::<Test>::insert(convergence_key, true);
+        crate::LegendaryFoundationsV2::<Test>::insert(mastery_key, false);
+        assert_noop!(
+            EterraSlots::ascend_mythical_v2(
+                RuntimeOrigin::signed(1),
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                crate::MythicalAscensionInput::LegendaryFoundation,
+            ),
+            Error::<Test>::V2AscensionFoundationMissing
+        );
+        assert_eq!(crate::CardsV2::<Test>::iter().count(), 0);
+    });
+}
+
+#[test]
+fn v2_ascension_is_active_only_inside_season_and_output_is_bound_through_end() {
+    new_test_ext().execute_with(|| {
+        set_mock_randomness_mode(pallet_eterra_randomness::RandomnessMode::DrandQuicknet);
+        configure_v2_ascension(&[1]);
+        record_v2_ascension_progress(9);
+        assert_ok!(EterraSlots::set_v2_feature_enabled(
+            RuntimeOrigin::root(),
+            crate::V2Feature::MythicalAscension,
+            true,
+        ));
+        System::set_block_number(9);
+        assert_noop!(
+            EterraSlots::ascend_mythical_v2(
+                RuntimeOrigin::signed(1),
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                crate::MythicalAscensionInput::LegendaryFoundation,
+            ),
+            Error::<Test>::V2AscensionNotActive
+        );
+        System::set_block_number(100);
+        assert_noop!(
+            EterraSlots::ascend_mythical_v2(
+                RuntimeOrigin::signed(1),
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                crate::MythicalAscensionInput::LegendaryFoundation,
+            ),
+            Error::<Test>::V2AscensionNotActive
+        );
+        System::set_block_number(99);
+        assert_ok!(EterraSlots::ascend_mythical_v2(
+            RuntimeOrigin::signed(1),
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+            crate::MythicalAscensionInput::LegendaryFoundation,
+        ));
+        let output_id = 1;
+        assert_noop!(
+            EterraSlots::request_conversion_v2(RuntimeOrigin::signed(1), output_id, 1, [0x91; 32],),
+            Error::<Test>::V2ConversionNotAllowed
+        );
+
+        // The account binding expires at the exclusive season end.
+        System::set_block_number(100);
+        seed_v2_conversion_safety_team(1, output_id);
+        assert_ok!(EterraSlots::request_conversion_v2(
+            RuntimeOrigin::signed(1),
+            output_id,
+            1,
+            [0x92; 32],
+        ));
+    });
+}
+
+#[test]
+fn v2_ascension_progress_evidence_is_idempotent_but_conflicts_fail_closed() {
+    new_test_ext().execute_with(|| {
+        configure_v2_ascension(&[1]);
+        System::set_block_number(10);
+        let evidence_id = [0x93; 32];
+        assert_ok!(EterraSlots::record_mythical_ascension_progress_v2(
+            RuntimeOrigin::root(),
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+            eterra_nexus_primitives::EconomicRealm::Production,
+            Some(10),
+            Some(0),
+            true,
+            evidence_id,
+        ));
+        assert_ok!(EterraSlots::record_mythical_ascension_progress_v2(
+            RuntimeOrigin::root(),
+            ASCENSION_ELIGIBILITY_ID,
+            ASCENSION_SEASON_ID,
+            ASCENSION_SUBJECT_ID,
+            eterra_nexus_primitives::EconomicRealm::Production,
+            Some(10),
+            Some(0),
+            true,
+            evidence_id,
+        ));
+        assert_noop!(
+            EterraSlots::record_mythical_ascension_progress_v2(
+                RuntimeOrigin::root(),
+                ASCENSION_ELIGIBILITY_ID,
+                ASCENSION_SEASON_ID,
+                ASCENSION_SUBJECT_ID,
+                eterra_nexus_primitives::EconomicRealm::Production,
+                Some(9),
+                None,
+                false,
+                evidence_id,
+            ),
+            Error::<Test>::V2AscensionProgressEvidenceConflict
+        );
+        assert_eq!(
+            crate::ConvergenceProgressV2::<Test>::get((
+                ASCENSION_ELIGIBILITY_ID,
+                ASCENSION_SEASON_ID,
+            ))
+            .marks_earned,
+            1
+        );
+    });
+}
+
+#[test]
+fn v2_ascension_season_configuration_requires_the_exact_duration() {
+    new_test_ext().execute_with(|| {
+        publish_v2_test_catalog();
+        for (season_id, ends_at) in [(2, 99), (3, 101)] {
+            assert_noop!(
+                EterraSlots::configure_mythical_ascension_season_v2(
+                    RuntimeOrigin::root(),
+                    crate::MythicalAscensionSeasonConfig {
+                        season_id,
+                        set_id: 1,
+                        pool_id: 1,
+                        pool_version: 1,
+                        starts_at: 10,
+                        ends_at,
+                        required_mastery: 10,
+                        required_marks: 10,
+                        available_weeks: 12,
+                        config_hash: [season_id as u8; 32],
+                    },
+                ),
+                Error::<Test>::V2AscensionConfigInvalid
+            );
+        }
+    });
+}
+
+#[test]
+fn v2_protection_layout_survives_pool_reordering_and_is_rarity_scoped() {
+    new_test_ext().execute_with(|| {
+        publish_v2_test_catalog();
+        assert_eq!(crate::SubjectProtectionSlotsV2::<Test>::get(1, 1), Some(0));
+        assert_eq!(crate::SubjectProtectionSlotsV2::<Test>::get(1, 2), Some(1));
+        assert_eq!(crate::PoseProtectionSlotsV2::<Test>::get(1, 10), Some(0));
+        assert_eq!(
+            crate::BackgroundProtectionSlotsV2::<Test>::get(1, 1000),
+            Some(0)
+        );
+
+        let mut profile_ids = vec![10, 11, 12, 13, 14, 20, 21, 22, 23, 24];
+        profile_ids.reverse();
+        let mut pose_ids = vec![10, 11, 12, 20, 21, 22];
+        pose_ids.reverse();
+        let mut background_ids = vec![1000, 1001, 1002, 1003, 1004];
+        background_ids.reverse();
+        assert_ok!(EterraSlots::publish_acquisition_pool_v2(
+            RuntimeOrigin::root(),
+            1,
+            2,
+            1,
+            profile_ids,
+            pose_ids,
+            background_ids,
+            [7; 32],
+        ));
+
+        assert_eq!(crate::SubjectProtectionSlotsV2::<Test>::get(1, 1), Some(0));
+        assert_eq!(crate::SubjectProtectionSlotsV2::<Test>::get(1, 2), Some(1));
+        assert_eq!(
+            EterraSlots::cosmetic_protection_bit(
+                1,
+                2,
+                eterra_nexus_primitives::CardRarity::Common,
+                20,
+                1000,
+            )
+            .unwrap(),
+            75
+        );
+        let subject_one_legendary_cosmetic_bit = EterraSlots::cosmetic_protection_bit(
+            1,
+            1,
+            eterra_nexus_primitives::CardRarity::Legendary,
+            10,
+            1000,
+        )
+        .unwrap();
+        assert_eq!(subject_one_legendary_cosmetic_bit, 45);
+
+        // A later pool may omit a subject without recycling or renumbering any
+        // of that subject's stable protection slots.
+        assert_ok!(EterraSlots::publish_acquisition_pool_v2(
+            RuntimeOrigin::root(),
+            1,
+            3,
+            1,
+            vec![20, 21, 22, 23, 24],
+            vec![22, 20, 21],
+            vec![1004, 1002, 1000, 1003, 1001],
+            [6; 32],
+        ));
+        assert_eq!(crate::SubjectProtectionSlotsV2::<Test>::get(1, 1), Some(0));
+        assert_eq!(crate::PoseProtectionSlotsV2::<Test>::get(1, 10), Some(0));
+        assert_eq!(
+            EterraSlots::cosmetic_protection_bit(
+                1,
+                1,
+                eterra_nexus_primitives::CardRarity::Legendary,
+                10,
+                1000,
+            )
+            .unwrap(),
+            subject_one_legendary_cosmetic_bit,
+        );
+
+        // Re-adding the omitted subject in another order retains all 5×3×5
+        // rarity/cosmetic coordinates.
+        assert_ok!(EterraSlots::publish_acquisition_pool_v2(
+            RuntimeOrigin::root(),
+            1,
+            4,
+            1,
+            vec![24, 14, 23, 13, 22, 12, 21, 11, 20, 10],
+            vec![21, 12, 20, 11, 22, 10],
+            vec![1001, 1003, 1000, 1004, 1002],
+            [5; 32],
+        ));
+        assert_eq!(crate::NextSubjectProtectionSlotV2::<Test>::get(1), 2);
+        assert_eq!(crate::NextPoseProtectionSlotV2::<Test>::get((1, 1)), 3);
+        assert_eq!(crate::NextBackgroundProtectionSlotV2::<Test>::get(1), 5);
+        assert_eq!(
+            EterraSlots::cosmetic_protection_bit(
+                1,
+                1,
+                eterra_nexus_primitives::CardRarity::Legendary,
+                10,
+                1000,
+            )
+            .unwrap(),
+            subject_one_legendary_cosmetic_bit,
+        );
+
+        let pool = crate::AcquisitionPoolVersionsV2::<Test>::get((1, 2)).unwrap();
+        let mut protection = crate::PackProtectionHistoryBitmapsV2::<Test>::get(1, 1);
+        while protection.len() < 2 {
+            protection.try_push(0).unwrap();
+        }
+        // Subject 1 Common is known, while Subject 2 Legendary is known.
+        // A Legendary discovery slot must still choose Subject 1 because
+        // Legendary/Mythical protection is scoped to the rolled rarity row.
+        protection[0] |= 1 << 0;
+        protection[1] |= 1 << 0;
+        let transcript = v2_draw_transcript(3);
+        let (_, selected) = EterraSlots::select_profile_for_pack(
+            &pool,
+            1,
+            eterra_nexus_primitives::CardRarity::Legendary,
+            &transcript,
+            0,
+            &[],
+            &protection,
+            true,
+        )
+        .unwrap();
+        assert_eq!(selected.subject_id, 1);
+        assert_eq!(
+            EterraSlots::profile_protection_bit(1, &selected).unwrap(),
+            3
+        );
+    });
+}
+
+#[test]
+fn v2_protection_layout_requires_three_poses_and_five_backgrounds() {
+    new_test_ext().execute_with(|| {
+        publish_v2_test_catalog();
+        let profiles = vec![10, 11, 12, 13, 14];
+        assert_noop!(
+            EterraSlots::publish_acquisition_pool_v2(
+                RuntimeOrigin::root(),
+                2,
+                1,
+                1,
+                profiles.clone(),
+                vec![10, 11],
+                vec![1000, 1001, 1002, 1003, 1004],
+                [4; 32],
+            ),
+            Error::<Test>::V2InvalidPool
+        );
+        assert_noop!(
+            EterraSlots::publish_acquisition_pool_v2(
+                RuntimeOrigin::root(),
+                2,
+                2,
+                1,
+                profiles,
+                vec![10, 11, 12],
+                vec![1000, 1001, 1002, 1003],
+                [3; 32],
+            ),
+            Error::<Test>::V2InvalidPool
+        );
+    });
+}
+
+#[test]
+fn v2_pool_requires_a_pinned_background_eligible_for_every_subject() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::MediaDefinitionV2;
+
+        publish_v2_test_catalog();
+        let background_ids = (1100..1105).collect::<Vec<_>>();
+        for definition_id in background_ids.iter().copied() {
+            assert_ok!(EterraSlots::publish_background_definition_v2(
+                RuntimeOrigin::root(),
+                MediaDefinitionV2 {
+                    definition_id,
+                    subject_id: Some(1),
+                    media_id: definition_id,
+                    release_epoch: 1,
+                    definition_hash: [definition_id as u8; 32],
+                },
+            ));
+        }
+
+        assert_noop!(
+            EterraSlots::publish_acquisition_pool_v2(
+                RuntimeOrigin::root(),
+                2,
+                1,
+                2,
+                vec![10, 11, 12, 13, 14, 20, 21, 22, 23, 24],
+                vec![10, 11, 12, 20, 21, 22],
+                background_ids,
+                [0x61; 32],
+            ),
+            Error::<Test>::V2InvalidPool
+        );
+        assert!(!crate::AcquisitionPoolVersionsV2::<Test>::contains_key((
+            2, 1
+        )));
+    });
+}
+
+#[test]
+fn v2_duplicate_protection_uses_one_ordinary_reroll_and_full_top_tier_row() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::CardRarity;
+
+        publish_v2_test_catalog();
+        let mut pool = crate::AcquisitionPoolVersionsV2::<Test>::get((1, 1)).unwrap();
+        crate::SubjectProtectionSlotsV2::<Test>::insert(1, 3, 2);
+        for (source_profile_id, profile_id) in [(23, 33), (24, 34)] {
+            let mut profile =
+                crate::SubjectRarityProfilesV2::<Test>::get(source_profile_id).unwrap();
+            profile.profile_id = profile_id;
+            profile.subject_id = 3;
+            crate::SubjectRarityProfilesV2::<Test>::insert(profile_id, profile);
+            pool.profiles
+                .try_push(crate::PoolProfileEntry { profile_id })
+                .unwrap();
+        }
+        let transcript = (0..=u8::MAX)
+            .map(v2_draw_transcript)
+            .find(|transcript| {
+                EterraSlots::uniform_index(b"ETERRA_PACK_SUBJECT_V3", transcript, 0, 2) == Ok(0)
+                    && EterraSlots::uniform_index(
+                        b"ETERRA_PACK_SUBJECT_REROLL_V3",
+                        transcript,
+                        0,
+                        2,
+                    ) == Ok(1)
+            })
+            .expect("a transcript exercises the independent reroll");
+        for rarity in [CardRarity::Common, CardRarity::Rare, CardRarity::Epic] {
+            let mut protection = crate::PackProtectionHistoryBitmapsV2::<Test>::get(1, 1);
+            while protection.len() < 2 {
+                protection.try_push(0).unwrap();
+            }
+            // Both ordinary-tier outcomes are already known. The first draw
+            // selects subject 1; exactly one independently seeded reroll selects
+            // subject 2 and is accepted even though it is also known.
+            protection[0] |= 1 << rarity.index();
+            protection[0] |= 1 << (5 + rarity.index());
+            let (_, ordinary) = EterraSlots::select_profile_for_pack(
+                &pool,
+                1,
+                rarity,
+                &transcript,
+                0,
+                &[],
+                &protection,
+                false,
+            )
+            .unwrap();
+            assert_eq!(ordinary.subject_id, 2);
+        }
+
+        for rarity in [CardRarity::Legendary, CardRarity::Mythical] {
+            let mut protection = crate::PackProtectionHistoryBitmapsV2::<Test>::get(1, 1);
+            while protection.len() < 2 {
+                protection.try_push(0).unwrap();
+            }
+            // Subjects 1 and 2 are known. Both the initial draw and an
+            // independently seeded single reroll would remain duplicates, so
+            // full-row protection must continue to undiscovered subject 3.
+            protection[0] |= 1 << rarity.index();
+            let subject_two_bit = 5 + rarity.index();
+            protection[subject_two_bit / 8] |= 1 << (subject_two_bit % 8);
+            let (_, top_tier) = EterraSlots::select_profile_for_pack(
+                &pool,
+                1,
+                rarity,
+                &transcript,
+                0,
+                &[],
+                &protection,
+                false,
+            )
+            .unwrap();
+            assert_eq!(top_tier.subject_id, 3);
+        }
+    });
+}
+
+#[test]
+fn v2_pack_open_is_credit_backed_two_phase_and_uses_fixed_profiles() {
+    new_test_ext().execute_with(|| {
+        publish_v2_test_catalog();
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [3; 32],
+        ));
+        assert_ok!(EterraSlots::request_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            1,
+            1,
+            eterra_nexus_primitives::EconomicRealm::Training,
+            [4; 32],
+        ));
+        let opening_id = crate::PendingPackOpeningsV2::<Test>::iter()
+            .next()
+            .expect("pending opening")
+            .0;
+        assert_eq!(
+            crate::PendingPackOpeningsV2::<Test>::get(opening_id)
+                .expect("pending opening")
+                .expected_randomness_provenance,
+            pallet_eterra_randomness::RandomnessMode::DeterministicPrivateAlpha
+        );
+        assert_noop!(
+            EterraSlots::finalize_pack_open_v2(RuntimeOrigin::signed(2), opening_id),
+            Error::<Test>::V2PackOpeningNotReady
+        );
+        finalize_random_request(last_random_request(), [5; 32]);
+        assert_ok!(EterraSlots::finalize_pack_open_v2(
+            RuntimeOrigin::signed(2),
+            opening_id,
+        ));
+        assert_noop!(
+            EterraSlots::timeout_pack_open_v2(RuntimeOrigin::signed(2), opening_id),
+            Error::<Test>::V2PackOpeningTerminalConflict
+        );
+        let card_ids =
+            crate::ProcessedAcquisitionsV2::<Test>::get(opening_id).expect("processed opening");
+        assert_eq!(card_ids.len(), 6);
+        for (slot, card_id) in card_ids.iter().copied().enumerate() {
+            let card = crate::CardsV2::<Test>::get(card_id).expect("card exists");
+            let profile = crate::SubjectRarityProfilesV2::<Test>::get(card.profile_id)
+                .expect("profile exists");
+            assert_eq!(profile.subject_id, card.subject_id);
+            assert_eq!(profile.subject_version, card.subject_version);
+            assert_eq!(profile.rarity, card.rarity);
+            assert_eq!(
+                profile.base_ranks.iter().copied().sum::<u8>(),
+                card.rarity.target_rank_total()
+            );
+            if slot == 5 {
+                assert_eq!(card.rarity, eterra_nexus_primitives::CardRarity::Common);
+                let definition_id = crate::SubjectDefinitionByKeyV2::<Test>::get((
+                    card.subject_id,
+                    card.subject_version,
+                ))
+                .expect("subject definition key");
+                assert!(crate::SubjectDefinitionsV2::<Test>::get(definition_id)
+                    .expect("subject definition")
+                    .conversion_policy
+                    .permits_conversion());
+            }
+        }
+        assert!(!crate::TutorialConversionProfileIdsV2::<Test>::contains_key(opening_id));
+        assert_eq!(crate::V2OwnerActiveCardCount::<Test>::get(1), 6);
+        assert_eq!(
+            crate::OutstandingPackCreditCountV2::<Test>::get(
+                1,
+                (1, 1, eterra_nexus_primitives::EconomicRealm::Training)
+            ),
+            0
+        );
+    });
+}
+
+#[test]
+fn v2_pack_request_exact_retry_is_a_noop_before_dequeuing_another_credit() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::EconomicRealm;
+
+        publish_v2_test_catalog();
+        for tutorial_id in [[0xE1; 32], [0xE2; 32]] {
+            assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+                RuntimeOrigin::root(),
+                1,
+                1,
+                1,
+                tutorial_id,
+            ));
+        }
+        let commitment = [0xE3; 32];
+        assert_ok!(EterraSlots::request_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            1,
+            1,
+            EconomicRealm::Training,
+            commitment,
+        ));
+        let opening_id = crate::PendingPackOpeningsV2::<Test>::iter_keys()
+            .next()
+            .expect("first request committed");
+        let first_randomness_request = last_random_request();
+        let available_after_first =
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training));
+        assert_eq!(available_after_first.len(), 1);
+        assert_eq!(
+            crate::PackOpeningRequestReceiptsV2::<Test>::get(1, commitment)
+                .expect("permanent replay receipt")
+                .opening_id,
+            opening_id
+        );
+
+        assert_ok!(EterraSlots::set_v2_feature_enabled(
+            RuntimeOrigin::root(),
+            crate::V2Feature::Packs,
+            false,
+        ));
+        assert_ok!(EterraSlots::request_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            1,
+            1,
+            EconomicRealm::Training,
+            commitment,
+        ));
+        assert_eq!(last_random_request(), first_randomness_request);
+        assert_eq!(crate::PendingPackOpeningsV2::<Test>::iter().count(), 1);
+        assert_eq!(
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training)),
+            available_after_first
+        );
+        assert_eq!(
+            crate::OutstandingPackCreditCountV2::<Test>::get(1, (1, 1, EconomicRealm::Training)),
+            2
+        );
+
+        assert_noop!(
+            EterraSlots::request_pack_open_v2(
+                RuntimeOrigin::signed(1),
+                2,
+                1,
+                EconomicRealm::Training,
+                commitment,
+            ),
+            Error::<Test>::V2PackOpeningRequestConflict
+        );
+    });
+}
+
+#[test]
+fn v2_tutorial_credit_grant_is_globally_idempotent_and_conflict_safe() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::EconomicRealm;
+
+        publish_v2_test_catalog();
+        assert_noop!(
+            EterraSlots::issue_training_pack_credit_v2(
+                RuntimeOrigin::root(),
+                1,
+                1,
+                1,
+                [0; 32],
+            ),
+            Error::<Test>::V2TutorialIdRequired
+        );
+        assert!(!crate::TutorialPackCreditGrantReceiptsV2::<Test>::contains_key([0; 32]));
+        assert_noop!(
+            EterraSlots::issue_training_pack_credit_v2(
+                RuntimeOrigin::root(),
+                1,
+                99,
+                1,
+                [0xE0; 32],
+            ),
+            Error::<Test>::V2PackSkuMissing
+        );
+        assert!(
+            !crate::TutorialPackCreditGrantReceiptsV2::<Test>::contains_key([0xE0; 32])
+        );
+        let tutorial_id = [0xE4; 32];
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            tutorial_id,
+        ));
+        let next_credit_id = crate::NextPackCreditIdV2::<Test>::get();
+        let queue =
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training));
+        let receipt = crate::TutorialPackCreditGrantReceiptsV2::<Test>::get(tutorial_id)
+            .expect("permanent tutorial grant receipt");
+
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            tutorial_id,
+        ));
+        assert_eq!(crate::NextPackCreditIdV2::<Test>::get(), next_credit_id);
+        assert_eq!(
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training)),
+            queue
+        );
+        assert_eq!(
+            crate::TutorialPackCreditGrantReceiptsV2::<Test>::get(tutorial_id),
+            Some(receipt)
+        );
+
+        assert_noop!(
+            EterraSlots::issue_training_pack_credit_v2(
+                RuntimeOrigin::root(),
+                2,
+                1,
+                1,
+                tutorial_id,
+            ),
+            Error::<Test>::V2TutorialPackCreditGrantConflict
+        );
+        assert_noop!(
+            EterraSlots::issue_training_pack_credit_v2(
+                RuntimeOrigin::root(),
+                1,
+                2,
+                1,
+                tutorial_id,
+            ),
+            Error::<Test>::V2TutorialPackCreditGrantConflict
+        );
+    });
+}
+
+#[test]
+fn v2_pack_commitment_must_be_nonzero_without_consuming_credit() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::EconomicRealm;
+
+        publish_v2_test_catalog();
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [0xE5; 32],
+        ));
+        let available =
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training));
+        assert_noop!(
+            EterraSlots::request_pack_open_v2(
+                RuntimeOrigin::signed(1),
+                1,
+                1,
+                EconomicRealm::Training,
+                [0; 32],
+            ),
+            Error::<Test>::V2EntropyCommitmentRequired
+        );
+        assert_eq!(
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training)),
+            available
+        );
+        assert_eq!(crate::PendingPackOpeningsV2::<Test>::iter().count(), 0);
+        assert_eq!(crate::ReservedV2PackCardCount::<Test>::get(1), 0);
+    });
+}
+
+#[test]
+fn v2_operational_card_limit_queues_credits_and_reserves_pending_capacity() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::EconomicRealm;
+
+        publish_v2_test_catalog();
+        for tutorial_id in [[0xE6; 32], [0xE7; 32], [0xE8; 32]] {
+            assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+                RuntimeOrigin::root(),
+                1,
+                1,
+                1,
+                tutorial_id,
+            ));
+        }
+        crate::V2OwnerCardCount::<Test>::insert(1, 9_988);
+
+        for commitment in [[0xE9; 32], [0xEA; 32]] {
+            assert_ok!(EterraSlots::request_pack_open_v2(
+                RuntimeOrigin::signed(1),
+                1,
+                1,
+                EconomicRealm::Training,
+                commitment,
+            ));
+        }
+        assert_eq!(crate::ReservedV2PackCardCount::<Test>::get(1), 12);
+        let available =
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training));
+        assert_eq!(available.len(), 1);
+
+        assert_noop!(
+            EterraSlots::request_pack_open_v2(
+                RuntimeOrigin::signed(1),
+                1,
+                1,
+                EconomicRealm::Training,
+                [0xEB; 32],
+            ),
+            Error::<Test>::V2OperationalCardLimitReached
+        );
+        assert_eq!(
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training)),
+            available
+        );
+        assert_eq!(crate::PendingPackOpeningsV2::<Test>::iter().count(), 2);
+
+        let openings = crate::PendingPackOpeningsV2::<Test>::iter_values().collect::<Vec<_>>();
+        for opening in openings {
+            timeout_random_request(opening.randomness_request_id);
+            assert_ok!(EterraSlots::timeout_pack_open_v2(
+                RuntimeOrigin::signed(2),
+                opening.opening_id,
+            ));
+        }
+        assert_eq!(crate::ReservedV2PackCardCount::<Test>::get(1), 0);
+        assert_eq!(
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training)).len(),
+            3
+        );
+    });
+}
+
+#[test]
+fn v2_over_limit_pack_request_has_no_side_effects() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::EconomicRealm;
+
+        publish_v2_test_catalog();
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [0xEF; 32],
+        ));
+        crate::V2OwnerCardCount::<Test>::insert(1, 9_995);
+        let key = (1, 1, EconomicRealm::Training);
+        let available = crate::AvailablePackCreditIdsV2::<Test>::get(1, key);
+        let outstanding = crate::OutstandingPackCreditCountV2::<Test>::get(1, key);
+
+        assert_noop!(
+            EterraSlots::request_pack_open_v2(
+                RuntimeOrigin::signed(1),
+                1,
+                1,
+                EconomicRealm::Training,
+                [0xF0; 32],
+            ),
+            Error::<Test>::V2OperationalCardLimitReached
+        );
+        assert_eq!(
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, key),
+            available
+        );
+        assert_eq!(
+            crate::OutstandingPackCreditCountV2::<Test>::get(1, key),
+            outstanding
+        );
+        assert_eq!(crate::ReservedV2PackCardCount::<Test>::get(1), 0);
+        assert_eq!(crate::PendingPackOpeningsV2::<Test>::iter().count(), 0);
+        assert_eq!(
+            crate::PackOpeningRequestReceiptsV2::<Test>::iter().count(),
+            0
+        );
+        assert!(!has_random_request());
+    });
+}
+
+#[test]
+fn v2_pack_crossing_nine_thousand_emits_operational_warning_once() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::EconomicRealm;
+
+        publish_v2_test_catalog();
+        crate::V2OwnerCardCount::<Test>::insert(1, 8_995);
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [0xEC; 32],
+        ));
+        assert_ok!(EterraSlots::request_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            1,
+            1,
+            EconomicRealm::Training,
+            [0xED; 32],
+        ));
+        let opening = crate::PendingPackOpeningsV2::<Test>::iter_values()
+            .next()
+            .expect("opening");
+        finalize_random_request(opening.randomness_request_id, [0xEE; 32]);
+        assert_ok!(EterraSlots::finalize_pack_open_v2(
+            RuntimeOrigin::signed(2),
+            opening.opening_id,
+        ));
+        assert_eq!(crate::V2OwnerCardCount::<Test>::get(1), 9_001);
+        let warnings = frame_system::Pallet::<Test>::events()
+            .into_iter()
+            .filter(|record| {
+                matches!(
+                    record.event,
+                    RuntimeEvent::EterraSlots(crate::Event::V2OwnerCardOperationalWarning {
+                        owner: 1,
+                        lifetime_card_count: 9_000,
+                        unopened_limit: 10_000,
+                    })
+                )
+            })
+            .count();
+        assert_eq!(warnings, 1);
+    });
+}
+
+#[test]
+fn v2_pack_may_fill_the_operational_card_limit_exactly() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::EconomicRealm;
+
+        publish_v2_test_catalog();
+        crate::V2OwnerCardCount::<Test>::insert(1, 9_994);
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [0xF1; 32],
+        ));
+        assert_ok!(EterraSlots::request_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            1,
+            1,
+            EconomicRealm::Training,
+            [0xF2; 32],
+        ));
+        let opening = crate::PendingPackOpeningsV2::<Test>::iter_values()
+            .next()
+            .expect("opening");
+        assert_eq!(crate::ReservedV2PackCardCount::<Test>::get(1), 6);
+        finalize_random_request(opening.randomness_request_id, [0xF3; 32]);
+        assert_ok!(EterraSlots::finalize_pack_open_v2(
+            RuntimeOrigin::signed(2),
+            opening.opening_id,
+        ));
+        assert_eq!(crate::V2OwnerCardCount::<Test>::get(1), 10_000);
+        assert_eq!(crate::ReservedV2PackCardCount::<Test>::get(1), 0);
+    });
+}
+
+#[test]
+fn v2_production_pack_request_fails_closed_without_drand_and_preserves_credit() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::{EconomicRealm, PackCredit, PackCreditSource};
+
+        publish_v2_test_catalog();
+        crate::PackCreditsV2::<Test>::insert(
+            1,
+            PackCredit {
+                credit_id: 1,
+                owner: 1,
+                pack_sku: 1,
+                sku_version: 1,
+                economic_realm: EconomicRealm::Production,
+                source: PackCreditSource::Founder {
+                    entitlement_id: [0xD1; 32],
+                },
+                amount: 1,
+            },
+        );
+        crate::AvailablePackCreditIdsV2::<Test>::mutate(
+            1,
+            (1, 1, EconomicRealm::Production),
+            |queue| queue.try_push(1).expect("one test credit fits"),
+        );
+        crate::OutstandingPackCreditCountV2::<Test>::insert(
+            1,
+            (1, 1, EconomicRealm::Production),
+            1,
+        );
+        let available_before =
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Production));
+
+        assert_noop!(
+            EterraSlots::request_pack_open_v2(
+                RuntimeOrigin::signed(1),
+                1,
+                1,
+                EconomicRealm::Production,
+                [0xD2; 32],
+            ),
+            sp_runtime::DispatchError::Other("mock randomness realm or provenance mismatch")
+        );
+        assert_eq!(
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Production)),
+            available_before
+        );
+        assert_eq!(crate::PendingPackOpeningsV2::<Test>::iter().count(), 0);
+    });
+}
+
+#[test]
+fn v2_pack_activation_gates_new_requests_but_not_committed_finalization() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::{EconomicRealm, SubjectActivationState};
+
+        publish_v2_test_catalog();
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [0x71; 32],
+        ));
+        assert_ok!(EterraSlots::request_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            1,
+            1,
+            EconomicRealm::Training,
+            [0x72; 32],
+        ));
+        let opening_id = crate::PendingPackOpeningsV2::<Test>::iter_keys()
+            .next()
+            .expect("opening committed while pool subjects are active");
+        let randomness_request_id = last_random_request();
+
+        for subject_definition_id in [1, 2] {
+            assert_ok!(EterraSlots::set_subject_activation_v2(
+                RuntimeOrigin::root(),
+                SubjectActivationState {
+                    subject_definition_id,
+                    mint_enabled: false,
+                    conversion_enabled: false,
+                },
+            ));
+        }
+        finalize_random_request(randomness_request_id, [0x73; 32]);
+        assert_ok!(EterraSlots::finalize_pack_open_v2(
+            RuntimeOrigin::signed(2),
+            opening_id,
+        ));
+        assert_eq!(
+            crate::ProcessedAcquisitionsV2::<Test>::get(opening_id)
+                .expect("committed opening finalizes from its pinned pool")
+                .len(),
+            6
+        );
+
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [0x74; 32],
+        ));
+        let available_before =
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training));
+        assert_noop!(
+            EterraSlots::request_pack_open_v2(
+                RuntimeOrigin::signed(1),
+                1,
+                1,
+                EconomicRealm::Training,
+                [0x75; 32],
+            ),
+            Error::<Test>::V2NoEligibleProfile
+        );
+        assert_eq!(
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training)),
+            available_before
+        );
+    });
+}
+
+#[test]
+fn v2_tutorial_conversion_candidate_is_filtered_and_frozen_at_commitment() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::{CardRarity, EconomicRealm, SubjectActivationState};
+
+        publish_v2_test_catalog();
+        assert_ok!(EterraSlots::set_subject_activation_v2(
+            RuntimeOrigin::root(),
+            SubjectActivationState {
+                subject_definition_id: 2,
+                mint_enabled: true,
+                conversion_enabled: false,
+            },
+        ));
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [0xA1; 32],
+        ));
+        assert_ok!(EterraSlots::request_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            1,
+            1,
+            EconomicRealm::Training,
+            [0xA2; 32],
+        ));
+        let opening_id = crate::PendingPackOpeningsV2::<Test>::iter_keys()
+            .next()
+            .expect("tutorial opening");
+        assert_eq!(
+            crate::TutorialConversionProfileIdsV2::<Test>::get(opening_id)
+                .expect("frozen tutorial candidates")
+                .to_vec(),
+            vec![10]
+        );
+        let randomness_request_id = last_random_request();
+
+        // Mutable activation gates only new commitments. The already-frozen
+        // candidate set remains live for permissionless finalization.
+        assert_ok!(EterraSlots::set_subject_activation_v2(
+            RuntimeOrigin::root(),
+            SubjectActivationState {
+                subject_definition_id: 1,
+                mint_enabled: true,
+                conversion_enabled: false,
+            },
+        ));
+        finalize_random_request(randomness_request_id, [0xA3; 32]);
+        assert_ok!(EterraSlots::finalize_pack_open_v2(
+            RuntimeOrigin::signed(2),
+            opening_id,
+        ));
+        let cards = crate::ProcessedAcquisitionsV2::<Test>::get(opening_id)
+            .expect("opening finalizes from frozen candidates");
+        let conversion_card = crate::CardsV2::<Test>::get(cards[5]).expect("sixth card");
+        assert_eq!(conversion_card.subject_id, 1);
+        assert_eq!(conversion_card.rarity, CardRarity::Common);
+
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [0xA4; 32],
+        ));
+        let available_before =
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training));
+        assert_noop!(
+            EterraSlots::request_pack_open_v2(
+                RuntimeOrigin::signed(1),
+                1,
+                1,
+                EconomicRealm::Training,
+                [0xA5; 32],
+            ),
+            Error::<Test>::V2TutorialConversionCardUnavailable
+        );
+        assert_eq!(
+            crate::AvailablePackCreditIdsV2::<Test>::get(1, (1, 1, EconomicRealm::Training)),
+            available_before
+        );
+        assert_eq!(last_random_request(), randomness_request_id);
+    });
+}
+
+#[test]
+fn v2_pack_timeout_restores_the_exact_credit_without_minting() {
+    new_test_ext().execute_with(|| {
+        publish_v2_test_catalog();
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [6; 32],
+        ));
+        let credit_id = crate::NextPackCreditIdV2::<Test>::get() - 1;
+        assert_ok!(EterraSlots::request_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            1,
+            1,
+            eterra_nexus_primitives::EconomicRealm::Training,
+            [7; 32],
+        ));
+        let opening_id = crate::PendingPackOpeningsV2::<Test>::iter()
+            .next()
+            .expect("pending opening")
+            .0;
+        timeout_random_request(last_random_request());
+        assert_ok!(EterraSlots::timeout_pack_open_v2(
+            RuntimeOrigin::signed(2),
+            opening_id,
+        ));
+        let restored_queue = crate::AvailablePackCreditIdsV2::<Test>::get(
+            1,
+            (1, 1, eterra_nexus_primitives::EconomicRealm::Training),
+        );
+        assert_ok!(EterraSlots::timeout_pack_open_v2(
+            RuntimeOrigin::signed(3),
+            opening_id,
+        ));
+        assert_noop!(
+            EterraSlots::finalize_pack_open_v2(RuntimeOrigin::signed(3), opening_id),
+            Error::<Test>::V2PackOpeningTerminalConflict
+        );
+        assert_ok!(EterraSlots::request_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            1,
+            1,
+            eterra_nexus_primitives::EconomicRealm::Training,
+            [7; 32],
+        ));
+        assert!(crate::PackCreditsV2::<Test>::contains_key(credit_id));
+        assert_eq!(
+            crate::AvailablePackCreditIdsV2::<Test>::get(
+                1,
+                (1, 1, eterra_nexus_primitives::EconomicRealm::Training)
+            ),
+            restored_queue
+        );
+        assert!(restored_queue.contains(&credit_id));
+        assert_eq!(
+            crate::TimedOutPackOpeningsV2::<Test>::get(opening_id),
+            Some(credit_id)
+        );
+        assert_eq!(crate::ReservedV2PackCardCount::<Test>::get(1), 0);
+        assert_eq!(crate::NextCardIdV2::<Test>::get(), 0);
+    });
+}
+
+#[test]
+fn v2_conversion_is_irreversible_and_timeout_creates_stasis() {
+    new_test_ext().execute_with(|| {
+        publish_v2_test_catalog();
+        assert_noop!(
+            EterraSlots::request_conversion_v2(RuntimeOrigin::signed(1), 999, 1, [0; 32]),
+            Error::<Test>::V2EntropyCommitmentRequired
+        );
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [10; 32],
+        ));
+        assert_ok!(EterraSlots::request_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            1,
+            1,
+            eterra_nexus_primitives::EconomicRealm::Training,
+            [11; 32],
+        ));
+        let opening_id = crate::PendingPackOpeningsV2::<Test>::iter()
+            .next()
+            .unwrap()
+            .0;
+        finalize_random_request(last_random_request(), [12; 32]);
+        assert_ok!(EterraSlots::finalize_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            opening_id,
+        ));
+        let cards = crate::ProcessedAcquisitionsV2::<Test>::get(opening_id).unwrap();
+
+        let first_card = cards[0];
+        seed_v2_conversion_safety_team(1, first_card);
+        assert_ok!(EterraSlots::request_conversion_v2(
+            RuntimeOrigin::signed(1),
+            first_card,
+            1,
+            [13; 32],
+        ));
+        let first_request = crate::ConversionRequestByCard::<Test>::get(first_card).unwrap();
+        assert_eq!(
+            crate::CardConversionTombstones::<Test>::get(first_request)
+                .expect("conversion tombstone")
+                .expected_randomness_provenance,
+            pallet_eterra_randomness::RandomnessMode::DeterministicPrivateAlpha
+        );
+        let first_conversion_randomness = last_random_request();
+        assert_ok!(EterraSlots::set_v2_feature_enabled(
+            RuntimeOrigin::root(),
+            crate::V2Feature::Conversion,
+            false,
+        ));
+        assert_ok!(EterraSlots::request_conversion_v2(
+            RuntimeOrigin::signed(1),
+            first_card,
+            1,
+            [13; 32],
+        ));
+        assert_eq!(last_random_request(), first_conversion_randomness);
+        assert_eq!(crate::PendingConversionCountByAccountV2::<Test>::get(1), 1);
+        assert_noop!(
+            EterraSlots::request_conversion_v2(RuntimeOrigin::signed(1), first_card, 1, [14; 32]),
+            Error::<Test>::V2ConversionRequestConflict
+        );
+        assert_ok!(EterraSlots::set_v2_feature_enabled(
+            RuntimeOrigin::root(),
+            crate::V2Feature::Conversion,
+            true,
+        ));
+        finalize_random_request(last_random_request(), [15; 32]);
+        assert_ok!(EterraSlots::finalize_conversion_v2(
+            RuntimeOrigin::signed(2),
+            first_request,
+        ));
+        assert_noop!(
+            EterraSlots::timeout_conversion_v2(RuntimeOrigin::signed(2), first_request),
+            Error::<Test>::V2ConversionTerminalConflict
+        );
+        assert!(matches!(
+            crate::CardsV2::<Test>::get(first_card).unwrap().state,
+            eterra_nexus_primitives::CardStateV2::Converted { .. }
+        ));
+        assert_ok!(EterraSlots::request_conversion_v2(
+            RuntimeOrigin::signed(1),
+            first_card,
+            1,
+            [13; 32],
+        ));
+        assert_eq!(crate::PendingConversionCountByAccountV2::<Test>::get(1), 0);
+
+        let second_card = cards[1];
+        assert_ok!(EterraSlots::request_conversion_v2(
+            RuntimeOrigin::signed(1),
+            second_card,
+            1,
+            [16; 32],
+        ));
+        let second_request = crate::ConversionRequestByCard::<Test>::get(second_card).unwrap();
+        timeout_random_request(last_random_request());
+        assert_ok!(EterraSlots::timeout_conversion_v2(
+            RuntimeOrigin::signed(3),
+            second_request,
+        ));
+        assert_ok!(EterraSlots::timeout_conversion_v2(
+            RuntimeOrigin::signed(4),
+            second_request,
+        ));
+        assert_noop!(
+            EterraSlots::finalize_conversion_v2(RuntimeOrigin::signed(4), second_request),
+            Error::<Test>::V2ConversionTerminalConflict
+        );
+        let entities = created_entities();
+        assert_eq!(entities.len(), 2);
+        assert!(!entities[0].stasis_genome);
+        assert!(entities[1].stasis_genome);
+        assert_eq!(
+            crate::CardConversionTombstones::<Test>::get(second_request)
+                .unwrap()
+                .resolution,
+            crate::ConversionResolution::StasisTimeout
+        );
+        assert_eq!(crate::V2OwnerActiveCardCount::<Test>::get(1), 9);
+    });
+}
+
+#[test]
+fn v2_conversion_profile_activation_is_checked_only_before_commitment() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::EconomicRealm;
+
+        publish_v2_test_catalog();
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [0x81; 32],
+        ));
+        assert_ok!(EterraSlots::request_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            1,
+            1,
+            EconomicRealm::Training,
+            [0x82; 32],
+        ));
+        let opening_id = crate::PendingPackOpeningsV2::<Test>::iter_keys()
+            .next()
+            .expect("pending opening");
+        finalize_random_request(last_random_request(), [0x83; 32]);
+        assert_ok!(EterraSlots::finalize_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            opening_id,
+        ));
+        let card_id =
+            crate::ProcessedAcquisitionsV2::<Test>::get(opening_id).expect("opened cards")[0];
+        seed_v2_conversion_safety_team(1, card_id);
+
+        set_mock_conversion_profile_active(false);
+        assert_noop!(
+            EterraSlots::request_conversion_v2(RuntimeOrigin::signed(1), card_id, 1, [0x84; 32],),
+            sp_runtime::DispatchError::Other("mock conversion profile inactive")
+        );
+        assert_eq!(
+            crate::CardsV2::<Test>::get(card_id)
+                .expect("rejected conversion leaves card")
+                .state,
+            eterra_nexus_primitives::CardStateV2::Active
+        );
+        assert!(!crate::ConversionRequestByCard::<Test>::contains_key(
+            card_id
+        ));
+
+        set_mock_conversion_profile_active(true);
+        assert_ok!(EterraSlots::request_conversion_v2(
+            RuntimeOrigin::signed(1),
+            card_id,
+            1,
+            [0x85; 32],
+        ));
+        let request_id =
+            crate::ConversionRequestByCard::<Test>::get(card_id).expect("conversion committed");
+
+        // Mutable profile activation may stop later requests, but cannot strand
+        // this already non-cancellable conversion.
+        set_mock_conversion_profile_active(false);
+        finalize_random_request(last_random_request(), [0x86; 32]);
+        assert_ok!(EterraSlots::finalize_conversion_v2(
+            RuntimeOrigin::signed(2),
+            request_id,
+        ));
+        assert_eq!(
+            crate::CardConversionTombstones::<Test>::get(request_id)
+                .expect("conversion tombstone")
+                .resolution,
+            crate::ConversionResolution::Created
+        );
+        assert_eq!(created_entities().len(), 1);
+    });
+}
+
+#[test]
+fn v2_conversion_requires_a_current_same_realm_bring_five_excluding_candidate() {
+    new_test_ext().execute_with(|| {
+        use eterra_nexus_primitives::{CardStateV2, EconomicRealm};
+
+        publish_v2_test_catalog();
+        assert_noop!(
+            EterraSlots::publish_competitive_format_v2(
+                RuntimeOrigin::root(),
+                crate::CompetitiveFormatV2 {
+                    format_id: 8000,
+                    version: 1,
+                    set_id: 1,
+                    team_size: 4,
+                    rarity_load_budget: 15,
+                    max_mythical: 1,
+                    max_legendary_or_better: 2,
+                    rules_hash: [0x80; 32],
+                },
+            ),
+            Error::<Test>::V2InvalidFormat
+        );
+        let cards = open_v2_training_pack(1, 0xB0);
+        let candidate_id = cards[5];
+        let last_pack_randomness = last_random_request();
+
+        // Raw inventory count alone is never a playable-roster proof.
+        assert_noop!(
+            EterraSlots::request_conversion_v2(
+                RuntimeOrigin::signed(1),
+                candidate_id,
+                1,
+                [0xB1; 32],
+            ),
+            Error::<Test>::V2PlayableRosterTooSmall
+        );
+        assert_eq!(last_random_request(), last_pack_randomness);
+
+        let safety_cards = seed_v2_conversion_safety_team(1, candidate_id);
+
+        // A Training roster cannot authorize conversion of a Production card.
+        let mut production_candidate =
+            crate::CardsV2::<Test>::get(candidate_id).expect("candidate");
+        let production_card_id = crate::NextCardIdV2::<Test>::get();
+        crate::NextCardIdV2::<Test>::put(production_card_id + 1);
+        production_candidate.card_id = production_card_id;
+        production_candidate.economic_realm = EconomicRealm::Production;
+        production_candidate.acquisition_id = [0xB2; 32];
+        crate::CardsV2::<Test>::insert(production_card_id, production_candidate);
+        crate::V2OwnerCardCount::<Test>::mutate(1, |count| *count += 1);
+        crate::V2OwnerActiveCardCount::<Test>::mutate(1, |count| *count += 1);
+        assert_noop!(
+            EterraSlots::request_conversion_v2(
+                RuntimeOrigin::signed(1),
+                production_card_id,
+                1,
+                [0xB3; 32],
+            ),
+            Error::<Test>::V2PlayableRosterTooSmall
+        );
+
+        // The latest saved safety team must exclude the candidate itself.
+        let mut containing_candidate = vec![candidate_id];
+        containing_candidate.extend_from_slice(&safety_cards[..4]);
+        assert_ok!(EterraSlots::save_competitive_team_v2(
+            RuntimeOrigin::signed(1),
+            9001,
+            9001,
+            1,
+            containing_candidate.try_into().expect("five cards fit"),
+        ));
+        assert_noop!(
+            EterraSlots::request_conversion_v2(
+                RuntimeOrigin::signed(1),
+                candidate_id,
+                1,
+                [0xB4; 32],
+            ),
+            Error::<Test>::V2PlayableRosterTooSmall
+        );
+
+        assert_ok!(EterraSlots::save_competitive_team_v2(
+            RuntimeOrigin::signed(1),
+            9001,
+            9001,
+            1,
+            safety_cards.clone().try_into().expect("five cards fit"),
+        ));
+        let mut stale = crate::CardsV2::<Test>::get(safety_cards[0]).expect("roster card");
+        stale.state = CardStateV2::ConversionCommitted {
+            request_id: [0xB5; 32],
+        };
+        crate::CardsV2::<Test>::insert(safety_cards[0], stale.clone());
+        assert_noop!(
+            EterraSlots::request_conversion_v2(
+                RuntimeOrigin::signed(1),
+                candidate_id,
+                1,
+                [0xB6; 32],
+            ),
+            Error::<Test>::V2PlayableRosterTooSmall
+        );
+        stale.state = CardStateV2::Active;
+        crate::CardsV2::<Test>::insert(safety_cards[0], stale);
+
+        assert_ok!(EterraSlots::request_conversion_v2(
+            RuntimeOrigin::signed(1),
+            candidate_id,
+            1,
+            [0xB7; 32],
+        ));
+        assert_eq!(crate::PendingConversionCountByAccountV2::<Test>::get(1), 1);
+    });
+}
+
+#[test]
+fn v2_pending_conversion_bound_releases_on_created_and_stasis_terminals() {
+    new_test_ext().execute_with(|| {
+        publish_v2_test_catalog();
+        let cards = open_v2_training_pack(1, 0xC0);
+        seed_v2_conversion_safety_team(1, cards[5]);
+
+        let mut requests = Vec::new();
+        let mut randomness_requests = Vec::new();
+        for (index, card_id) in cards.iter().copied().take(2).enumerate() {
+            assert_ok!(EterraSlots::request_conversion_v2(
+                RuntimeOrigin::signed(1),
+                card_id,
+                1,
+                [0xC1 + index as u8; 32],
+            ));
+            requests.push(
+                crate::ConversionRequestByCard::<Test>::get(card_id)
+                    .expect("conversion request"),
+            );
+            randomness_requests.push(last_random_request());
+        }
+        assert_eq!(crate::PendingConversionCountByAccountV2::<Test>::get(1), 2);
+        let third_card = cards[2];
+        assert_noop!(
+            EterraSlots::request_conversion_v2(
+                RuntimeOrigin::signed(1),
+                third_card,
+                1,
+                [0xC3; 32],
+            ),
+            Error::<Test>::V2PendingConversionLimitReached
+        );
+        assert_eq!(
+            crate::CardsV2::<Test>::get(third_card)
+                .expect("rejected candidate")
+                .state,
+            eterra_nexus_primitives::CardStateV2::Active
+        );
+        assert!(!crate::ConversionRequestByCard::<Test>::contains_key(
+            third_card
+        ));
+
+        finalize_random_request(randomness_requests[0], [0xC4; 32]);
+        assert_ok!(EterraSlots::finalize_conversion_v2(
+            RuntimeOrigin::signed(2),
+            requests[0],
+        ));
+        assert_eq!(crate::PendingConversionCountByAccountV2::<Test>::get(1), 1);
+        assert_ok!(EterraSlots::finalize_conversion_v2(
+            RuntimeOrigin::signed(2),
+            requests[0],
+        ));
+        assert_eq!(crate::PendingConversionCountByAccountV2::<Test>::get(1), 1);
+
+        timeout_random_request(randomness_requests[1]);
+        assert_ok!(EterraSlots::timeout_conversion_v2(
+            RuntimeOrigin::signed(3),
+            requests[1],
+        ));
+        assert_eq!(crate::PendingConversionCountByAccountV2::<Test>::get(1), 0);
+        assert_noop!(
+            EterraSlots::finalize_conversion_v2(RuntimeOrigin::signed(2), requests[1]),
+            Error::<Test>::V2ConversionTerminalConflict
+        );
+        assert_eq!(crate::PendingConversionCountByAccountV2::<Test>::get(1), 0);
+
+        assert_ok!(EterraSlots::request_conversion_v2(
+            RuntimeOrigin::signed(1),
+            third_card,
+            1,
+            [0xC5; 32],
+        ));
+        assert_eq!(crate::PendingConversionCountByAccountV2::<Test>::get(1), 1);
+    });
+}
+
+#[test]
+fn v2_draw_and_genome_transcripts_are_genesis_and_domain_separated() {
+    new_test_ext().execute_with(|| {
+        let transcript = v2_draw_transcript(0xD0);
+        let domain: &[u8] = b"ETERRA_PACK_RARITY_V3";
+        let genesis = <MockV2ChainDomain as crate::V2ChainDomainProvider>::genesis_hash();
+        assert_eq!(genesis, [0xA5; 32]);
+        let hash = EterraSlots::draw_hash(domain, &transcript, 7);
+        assert_eq!(
+            hash,
+            sp_io::hashing::blake2_256(
+                &(
+                    domain,
+                    genesis,
+                    transcript.request_id,
+                    transcript.immutable_config_hash,
+                    transcript.account_commitment,
+                    transcript.verified_randomness_output,
+                    7u32,
+                )
+                    .encode()
+            )
+        );
+
+        let mut mutations = Vec::new();
+        let mut changed = transcript;
+        changed.request_id[0] ^= 1;
+        mutations.push(EterraSlots::draw_hash(domain, &changed, 7));
+        changed = transcript;
+        changed.immutable_config_hash[0] ^= 1;
+        mutations.push(EterraSlots::draw_hash(domain, &changed, 7));
+        changed = transcript;
+        changed.account_commitment[0] ^= 1;
+        mutations.push(EterraSlots::draw_hash(domain, &changed, 7));
+        changed = transcript;
+        changed.verified_randomness_output[0] ^= 1;
+        mutations.push(EterraSlots::draw_hash(domain, &changed, 7));
+        mutations.push(EterraSlots::draw_hash(domain, &transcript, 8));
+        mutations.push(EterraSlots::draw_hash(
+            b"ETERRA_PACK_SUBJECT_V3",
+            &transcript,
+            7,
+        ));
+        assert!(mutations.iter().all(|changed_hash| *changed_hash != hash));
+
+        let genome =
+            EterraSlots::conversion_genome_hash([1; 32], [2; 32], 3, [4; 32], [5; 32], 6, 1);
+        let genome_domain: &[u8] = b"ETERRA_ENTITY_GENOME_V1";
+        assert_eq!(
+            genome,
+            sp_io::hashing::blake2_256(
+                &(
+                    genome_domain,
+                    genesis,
+                    [1u8; 32],
+                    [2u8; 32],
+                    3u64,
+                    [4u8; 32],
+                    [5u8; 32],
+                    6u32,
+                    1u16,
+                )
+                    .encode()
+            )
+        );
+        set_mock_v2_genesis_hash([0xA6; 32]);
+        assert_ne!(EterraSlots::draw_hash(domain, &transcript, 7), hash);
+        assert_ne!(
+            EterraSlots::conversion_genome_hash([1; 32], [2; 32], 3, [4; 32], [5; 32], 6, 1,),
+            genome
+        );
+    });
+}
+
+#[test]
+fn v2_rejection_sampler_has_exact_u32_boundaries() {
+    new_test_ext().execute_with(|| {
+        assert_eq!(EterraSlots::unbiased_index_for_sample(0, 0), None);
+        assert_eq!(EterraSlots::unbiased_index_for_sample(u32::MAX, 1), Some(0));
+        assert_eq!(EterraSlots::unbiased_index_for_sample(u32::MAX, 2), Some(1));
+        assert_eq!(
+            EterraSlots::unbiased_index_for_sample(u32::MAX - 1, 3),
+            Some(2)
+        );
+        assert_eq!(EterraSlots::unbiased_index_for_sample(u32::MAX, 3), None);
+        assert_eq!(
+            EterraSlots::unbiased_index_for_sample(4_294_967_291, 6),
+            Some(5)
+        );
+        assert_eq!(
+            EterraSlots::unbiased_index_for_sample(4_294_967_292, 6),
+            None
+        );
+        assert_eq!(
+            EterraSlots::unbiased_index_for_sample(4_294_959_999, 10_000),
+            Some(9_999)
+        );
+        assert_eq!(
+            EterraSlots::unbiased_index_for_sample(4_294_960_000, 10_000),
+            None
+        );
+        assert_eq!(
+            EterraSlots::unbiased_index_for_sample(u32::MAX, u32::MAX),
+            None
+        );
+        let mut calls = 0u32;
+        assert_eq!(
+            EterraSlots::rejection_sample_with(3, |attempt| {
+                calls += 1;
+                Ok(if attempt == 0 { u32::MAX } else { 5 })
+            })
+            .unwrap(),
+            2
+        );
+        assert_eq!(calls, 2);
+        assert_eq!(
+            EterraSlots::rejection_sample_with(3, |_| Ok(u32::MAX)),
+            Err(Error::<Test>::V2RandomSamplingExhausted.into())
+        );
+        assert_eq!(
+            EterraSlots::uniform_index(b"ETERRA_PACK_RARITY_V3", &v2_draw_transcript(1), 0, 1,)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            EterraSlots::uniform_index(
+                b"ETERRA_PACK_RARITY_V3",
+                &v2_draw_transcript(1),
+                u32::MAX,
+                1,
+            ),
+            Err(Error::<Test>::V2ArithmeticOverflow.into())
+        );
+    });
+}
+
+#[test]
+fn v14_to_v16_migration_builds_sidecars_without_rewriting_legacy_storage() {
+    use frame_support::traits::{Hooks, StorageVersion};
+
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(1)));
+        let card_id = NextCardId::<Test>::get() - 1;
+        let card_before = Cards::<Test>::get(card_id).unwrap().encode();
+        let owner_index_before = CardsByOwner::<Test>::get(1).encode();
+        let next_card_id_before = NextCardId::<Test>::get();
+
+        StorageVersion::new(14).put::<EterraSlots>();
+        <EterraSlots as Hooks<u64>>::on_runtime_upgrade();
+
+        let running = crate::TcgMigrationStateStorageV16::<Test>::get().expect("migration started");
+        assert_eq!(running.phase, crate::MigrationPhaseV16::Running);
+        assert_eq!(running.from_storage_version, 14);
+        assert_eq!(running.upper_bound, next_card_id_before);
+        assert_eq!(
+            StorageVersion::get::<EterraSlots>(),
+            StorageVersion::new(16)
+        );
+        assert_eq!(Cards::<Test>::get(card_id).unwrap().encode(), card_before);
+        assert_eq!(CardsByOwner::<Test>::get(1).encode(), owner_index_before);
+        assert_eq!(NextCardId::<Test>::get(), next_card_id_before);
+
+        assert_eq!(EterraSlots::migrate_v16_batch(100), 1);
+        let awaiting =
+            crate::TcgMigrationStateStorageV16::<Test>::get().expect("migration scanned");
+        assert_eq!(
+            awaiting.phase,
+            crate::MigrationPhaseV16::AwaitingVerification
+        );
+        assert!(crate::LegacyWritesPausedV16::<Test>::get());
+        assert_noop!(
+            EterraSlots::transfer_card(RuntimeOrigin::signed(1), card_id, 2),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::complete_legacy_migration_v16(
+                RuntimeOrigin::root(),
+                awaiting.cards_seen,
+                awaiting.anomalies,
+                [0; 32],
+            ),
+            Error::<Test>::V16MigrationInvariantFailed
+        );
+        assert_noop!(
+            EterraSlots::complete_legacy_migration_v16(
+                RuntimeOrigin::root(),
+                awaiting.cards_seen.saturating_add(1),
+                awaiting.anomalies,
+                [1; 32],
+            ),
+            Error::<Test>::V16MigrationInvariantFailed
+        );
+        assert!(crate::LegacyWritesPausedV16::<Test>::get());
+        attest_v16_migration();
+        let completed =
+            crate::TcgMigrationStateStorageV16::<Test>::get().expect("migration attested");
+        assert_eq!(completed.phase, crate::MigrationPhaseV16::Completed);
+        assert_eq!(completed.from_storage_version, 14);
+        assert_eq!(completed.cards_seen, 1);
+        assert_eq!(crate::LegacyCardClassifications::<Test>::iter().count(), 1);
+        assert_eq!(Cards::<Test>::get(card_id).unwrap().encode(), card_before);
+        assert_eq!(CardsByOwner::<Test>::get(1).encode(), owner_index_before);
+        assert_eq!(NextCardId::<Test>::get(), next_card_id_before);
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::LegacyMigrationStarted {
+                        from_storage_version: 14,
+                        upper_bound,
+                    }) if *upper_bound == next_card_id_before
+                )
+            },
+            "LegacyMigrationStarted(V14)",
+        );
+    });
+}
+
+#[test]
+fn v16_migration_pause_blocks_every_remaining_legacy_writer_class() {
+    new_test_ext().execute_with(|| {
+        crate::LegacyWritesPausedV16::<Test>::put(true);
+        let player_balance = Balances::free_balance(1);
+        let collection_count = SeasonCollectionIds::<Test>::get(1).len();
+        let gear_count = NexusGearItems::<Test>::iter().count();
+        let spell_count = NexusSpellbook::<Test>::iter().count();
+        let starter_config_count = StarterTeamConfigs::<Test>::iter().count();
+        let prize_pool_count = NexusPrizePools::<Test>::iter().count();
+        let collection_name: BoundedVec<u8, MaxSeasonCollectionNameLen> =
+            b"paused".to_vec().try_into().expect("bounded");
+
+        assert_noop!(
+            EterraSlots::create_season_collection(RuntimeOrigin::signed(1), 1, collection_name),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::publish_season_collection(RuntimeOrigin::signed(1), 1, 0),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::remove_season_collection(RuntimeOrigin::signed(1), 1, 0),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::add_season_collection_asset(
+                RuntimeOrigin::signed(1),
+                1,
+                0,
+                crate::AssetKind::Subject,
+                1
+            ),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::remove_season_collection_asset(
+                RuntimeOrigin::signed(1),
+                1,
+                0,
+                crate::AssetKind::Subject,
+                1
+            ),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::move_season_collection_asset(
+                RuntimeOrigin::signed(1),
+                1,
+                0,
+                crate::AssetKind::Subject,
+                1,
+                0
+            ),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::set_season_collection_asset_weights(
+                RuntimeOrigin::signed(1),
+                1,
+                0,
+                crate::AssetWeightKind::Subject,
+                vec![],
+                vec![]
+            ),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::buy_card_capacity(RuntimeOrigin::signed(1)),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_eq!(Balances::free_balance(1), player_balance);
+        assert_noop!(
+            EterraSlots::init_card_nft_collection(RuntimeOrigin::signed(1), 1),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::set_progression_tree(RuntimeOrigin::root(), 1, 1, None, vec![], 1),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::seed_alpha_progression_gear(
+                RuntimeOrigin::root(),
+                1,
+                1,
+                1,
+                GearSlotType::Weapon,
+                GearTier::Basic,
+                1,
+                1,
+                1
+            ),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::seed_alpha_spell(RuntimeOrigin::root(), 1, 1, Element::Fire, 1, 1),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::set_starter_team_config(
+                RuntimeOrigin::root(),
+                StarterPath::Fire,
+                vec![],
+                1
+            ),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_noop!(
+            EterraSlots::set_nexus_prize_pool(RuntimeOrigin::root(), 1, vec![], 1),
+            Error::<Test>::LegacyWritesPaused
+        );
+
+        assert_eq!(SeasonCollectionIds::<Test>::get(1).len(), collection_count);
+        assert_eq!(NexusGearItems::<Test>::iter().count(), gear_count);
+        assert_eq!(NexusSpellbook::<Test>::iter().count(), spell_count);
+        assert_eq!(
+            StarterTeamConfigs::<Test>::iter().count(),
+            starter_config_count
+        );
+        assert_eq!(NexusPrizePools::<Test>::iter().count(), prize_pool_count);
+    });
+}
+
+#[test]
+fn v15_to_v16_migration_builds_sidecars_without_rewriting_legacy_card() {
+    use frame_support::traits::{Hooks, StorageVersion};
+
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(1)));
+        let card_id = NextCardId::<Test>::get() - 1;
+        let before = Cards::<Test>::get(card_id).unwrap();
+        StorageVersion::new(15).put::<EterraSlots>();
+        <EterraSlots as Hooks<u64>>::on_runtime_upgrade();
+        let running = crate::TcgMigrationStateStorageV16::<Test>::get().expect("migration started");
+        assert_eq!(running.from_storage_version, 15);
+        assert!(crate::LegacyWritesPausedV16::<Test>::get());
+        assert_noop!(
+            EterraSlots::mint_card(RuntimeOrigin::signed(1)),
+            Error::<Test>::LegacyWritesPaused
+        );
+        assert_eq!(EterraSlots::migrate_v16_batch(100), 1);
+        assert_eq!(
+            crate::TcgMigrationStateStorageV16::<Test>::get()
+                .unwrap()
+                .phase,
+            crate::MigrationPhaseV16::AwaitingVerification
+        );
+        assert!(crate::LegacyWritesPausedV16::<Test>::get());
+        attest_v16_migration();
+        let classification =
+            crate::LegacyCardClassifications::<Test>::get(card_id).expect("classified");
+        assert_eq!(classification.custody, crate::LegacyCustodyKind::Ordinary);
+        assert_eq!(classification.beneficial_owner, Some(1));
+        assert!(!classification.frozen);
+        assert_eq!(Cards::<Test>::get(card_id).unwrap(), before);
+        assert!(!crate::LegacyWritesPausedV16::<Test>::get());
+        assert!(crate::LegacyCreationSealedV16::<Test>::get());
+        assert_noop!(
+            EterraSlots::mint_card(RuntimeOrigin::signed(1)),
+            Error::<Test>::LegacyCreationSealed
+        );
+        assert_eq!(
+            crate::TcgMigrationStateStorageV16::<Test>::get()
+                .unwrap()
+                .phase,
+            crate::MigrationPhaseV16::Completed
+        );
+        assert_eq!(crate::LegacyCardClassifications::<Test>::iter().count(), 1);
+    });
+}
+
+#[test]
+fn v14_to_v16_migration_resumes_without_reinitializing_bounded_progress() {
+    use frame_support::traits::{Hooks, StorageVersion};
+
+    new_test_ext().execute_with(|| {
+        for owner in [1, 2, 3] {
+            assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(owner)));
+        }
+        StorageVersion::new(14).put::<EterraSlots>();
+        <EterraSlots as Hooks<u64>>::on_runtime_upgrade();
+
+        assert_eq!(EterraSlots::migrate_v16_batch(1), 1);
+        let interrupted =
+            crate::TcgMigrationStateStorageV16::<Test>::get().expect("migration running");
+        assert_eq!(interrupted.phase, crate::MigrationPhaseV16::Running);
+        assert_eq!(interrupted.cursor, 1);
+        assert_eq!(interrupted.cards_seen, 1);
+
+        // A runtime restart/re-entry observes V16 and must not reset bounded progress.
+        <EterraSlots as Hooks<u64>>::on_runtime_upgrade();
+        assert_eq!(
+            crate::TcgMigrationStateStorageV16::<Test>::get(),
+            Some(interrupted)
+        );
+
+        assert_eq!(EterraSlots::migrate_v16_batch(1), 1);
+        assert_eq!(EterraSlots::migrate_v16_batch(100), 1);
+        attest_v16_migration();
+        let completed =
+            crate::TcgMigrationStateStorageV16::<Test>::get().expect("migration completed");
+        assert_eq!(completed.phase, crate::MigrationPhaseV16::Completed);
+        assert_eq!(completed.from_storage_version, 14);
+        assert_eq!(completed.cursor, 3);
+        assert_eq!(completed.cards_seen, 3);
+        assert_eq!(crate::LegacyCardClassifications::<Test>::iter().count(), 3);
+    });
+}
+
+#[test]
+fn unsupported_pre_v16_migration_source_remains_fail_closed() {
+    use frame_support::traits::{Hooks, StorageVersion};
+
+    new_test_ext().execute_with(|| {
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(1)));
+        let card_before = Cards::<Test>::get(0).unwrap().encode();
+        for feature in [
+            crate::V2Feature::Packs,
+            crate::V2Feature::Conversion,
+            crate::V2Feature::Ranked,
+            crate::V2Feature::MythicalAscension,
+        ] {
+            crate::V2FeatureEnabled::<Test>::insert(feature, true);
+        }
+
+        StorageVersion::new(13).put::<EterraSlots>();
+        <EterraSlots as Hooks<u64>>::on_runtime_upgrade();
+
+        assert_eq!(
+            StorageVersion::get::<EterraSlots>(),
+            StorageVersion::new(13)
+        );
+        let state =
+            crate::TcgMigrationStateStorageV16::<Test>::get().expect("rejection state recorded");
+        assert_eq!(state.phase, crate::MigrationPhaseV16::UnsupportedSource);
+        assert_eq!(state.from_storage_version, 13);
+        assert!(crate::LegacyWritesPausedV16::<Test>::get());
+        assert!(crate::LegacyCreationSealedV16::<Test>::get());
+        assert_eq!(EterraSlots::migrate_v16_batch(100), 0);
+        assert_eq!(Cards::<Test>::get(0).unwrap().encode(), card_before);
+        for feature in [
+            crate::V2Feature::Packs,
+            crate::V2Feature::Conversion,
+            crate::V2Feature::Ranked,
+            crate::V2Feature::MythicalAscension,
+        ] {
+            assert!(!crate::V2FeatureEnabled::<Test>::get(feature));
+        }
+        assert_event_found(
+            |event| {
+                matches!(
+                    event,
+                    RuntimeEvent::EterraSlots(Event::LegacyMigrationSourceRejectedV16 {
+                        from_storage_version: 13,
+                    })
+                )
+            },
+            "LegacyMigrationSourceRejectedV16",
+        );
+    });
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn v14_and_v15_try_runtime_evidence_proves_start_and_completion_invariants() {
+    use frame_support::traits::{Hooks, StorageVersion};
+
+    for source_version in [14, 15] {
+        new_test_ext().execute_with(|| {
+            assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(1)));
+            crate::V2FeatureEnabled::<Test>::insert(crate::V2Feature::Packs, true);
+            StorageVersion::new(source_version).put::<EterraSlots>();
+
+            let evidence =
+                <EterraSlots as Hooks<u64>>::pre_upgrade().expect("pre-upgrade evidence");
+            <EterraSlots as Hooks<u64>>::on_runtime_upgrade();
+            <EterraSlots as Hooks<u64>>::post_upgrade(evidence)
+                .expect("post-upgrade evidence reconciles");
+            <EterraSlots as Hooks<u64>>::try_state(System::block_number())
+                .expect("running state is valid");
+
+            assert_eq!(EterraSlots::migrate_v16_batch(1), 1);
+            <EterraSlots as Hooks<u64>>::try_state(System::block_number())
+                .expect("awaiting-verification state is valid");
+            attest_v16_migration();
+            <EterraSlots as Hooks<u64>>::try_state(System::block_number())
+                .expect("attested completed state is valid");
+        });
+    }
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn unsupported_source_try_state_accepts_only_the_sealed_rejection_state() {
+    use frame_support::traits::{Hooks, StorageVersion};
+
+    new_test_ext().execute_with(|| {
+        StorageVersion::new(13).put::<EterraSlots>();
+        <EterraSlots as Hooks<u64>>::on_runtime_upgrade();
+        <EterraSlots as Hooks<u64>>::try_state(System::block_number())
+            .expect("unsupported source remains safely sealed");
+    });
+}
+
+#[cfg(feature = "try-runtime")]
+#[test]
+fn v2_try_state_reconciles_pending_pack_capacity_and_locked_credit() {
+    use frame_support::traits::Hooks;
+
+    new_test_ext().execute_with(|| {
+        publish_v2_test_catalog();
+        assert_ok!(EterraSlots::issue_training_pack_credit_v2(
+            RuntimeOrigin::root(),
+            1,
+            1,
+            1,
+            [0x61; 32],
+        ));
+        assert_ok!(EterraSlots::request_pack_open_v2(
+            RuntimeOrigin::signed(1),
+            1,
+            1,
+            eterra_nexus_primitives::EconomicRealm::Training,
+            [0x62; 32],
+        ));
+        <EterraSlots as Hooks<u64>>::try_state(System::block_number())
+            .expect("pending opening reconciles");
+
+        crate::ReservedV2PackCardCount::<Test>::insert(1, 5);
+        assert!(
+            <EterraSlots as Hooks<u64>>::try_state(System::block_number()).is_err(),
+            "corrupt reservation must fail try-state"
+        );
+        crate::ReservedV2PackCardCount::<Test>::insert(1, 6);
+        let opening_id = crate::PendingPackOpeningsV2::<Test>::iter_keys()
+            .next()
+            .expect("opening");
+        crate::LockedPackCreditsV2::<Test>::remove(opening_id);
+        assert!(
+            <EterraSlots as Hooks<u64>>::try_state(System::block_number()).is_err(),
+            "missing locked credit must fail try-state"
+        );
+    });
+}
+
+#[test]
+fn v15_to_v16_migration_classifies_all_custody_paths_and_freezes_unknowns() {
+    use frame_support::traits::{Hooks, StorageVersion};
+
+    new_test_ext().execute_with(|| {
+        let escrow: u64 = frame_support::PalletId(*b"et/tcgsc").into_account_truncating();
+        let external_escrow = MOCK_LEGACY_ESCROW_CUSTODIAN;
+        assert_ok!(EterraSlots::init_card_nft_collection(
+            RuntimeOrigin::signed(1),
+            1
+        ));
+
+        let ordinary = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(2)));
+
+        let nft_wrapped = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(2)));
+        assert_ok!(EterraSlots::convert_to_nft(
+            RuntimeOrigin::signed(2),
+            nft_wrapped
+        ));
+
+        let known_escrow = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(3)));
+        assert_ok!(EterraSlots::transfer_card(
+            RuntimeOrigin::signed(3),
+            known_escrow,
+            external_escrow
+        ));
+        set_mock_legacy_escrow_owner(known_escrow, 3);
+
+        let stale_external_entry = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(3)));
+        set_mock_legacy_escrow_owner(stale_external_entry, 3);
+
+        let missing_external_entry = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(3)));
+        assert_ok!(EterraSlots::transfer_card(
+            RuntimeOrigin::signed(3),
+            missing_external_entry,
+            external_escrow
+        ));
+
+        let unknown_escrow = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(1)));
+        assert_ok!(EterraSlots::transfer_card(
+            RuntimeOrigin::signed(1),
+            unknown_escrow,
+            escrow
+        ));
+
+        StorageVersion::new(15).put::<EterraSlots>();
+        <EterraSlots as Hooks<u64>>::on_runtime_upgrade();
+        assert_eq!(EterraSlots::migrate_v16_batch(100), 6);
+        assert_eq!(
+            crate::TcgMigrationStateStorageV16::<Test>::get()
+                .unwrap()
+                .phase,
+            crate::MigrationPhaseV16::AwaitingVerification
+        );
+        attest_v16_migration();
+
+        let ordinary_class =
+            crate::LegacyCardClassifications::<Test>::get(ordinary).expect("ordinary classified");
+        assert_eq!(ordinary_class.custody, crate::LegacyCustodyKind::Ordinary);
+        assert_eq!(ordinary_class.beneficial_owner, Some(2));
+        assert!(!ordinary_class.frozen);
+
+        let nft_class = crate::LegacyCardClassifications::<Test>::get(nft_wrapped)
+            .expect("wrapped card classified");
+        assert_eq!(nft_class.custody, crate::LegacyCustodyKind::NftWrapped);
+        assert_eq!(nft_class.beneficial_owner, Some(2));
+        assert!(!nft_class.frozen);
+
+        let known_class = crate::LegacyCardClassifications::<Test>::get(known_escrow)
+            .expect("known escrow classified");
+        assert_eq!(known_class.custody, crate::LegacyCustodyKind::KnownEscrow);
+        assert_eq!(known_class.beneficial_owner, Some(3));
+        assert!(!known_class.frozen);
+
+        for anomaly_id in [stale_external_entry, missing_external_entry, unknown_escrow] {
+            let classification = crate::LegacyCardClassifications::<Test>::get(anomaly_id)
+                .expect("anomaly classified");
+            assert_eq!(
+                classification.custody,
+                crate::LegacyCustodyKind::UnknownFrozen
+            );
+            assert_eq!(classification.beneficial_owner, None);
+            assert!(classification.frozen);
+            assert!(crate::TcgMigrationAnomaliesV16::<Test>::contains_key(
+                anomaly_id
+            ));
+        }
+
+        let unknown_class = crate::LegacyCardClassifications::<Test>::get(unknown_escrow)
+            .expect("unknown escrow classified");
+        assert_eq!(
+            unknown_class.custody,
+            crate::LegacyCustodyKind::UnknownFrozen
+        );
+        assert_eq!(unknown_class.beneficial_owner, None);
+        assert!(unknown_class.frozen);
+        assert!(crate::TcgMigrationAnomaliesV16::<Test>::contains_key(
+            unknown_escrow
+        ));
+
+        let state = crate::TcgMigrationStateStorageV16::<Test>::get().expect("migration state");
+        assert_eq!(state.phase, crate::MigrationPhaseV16::Completed);
+        assert_eq!(state.cards_seen, 6);
+        assert_eq!(state.ordinary, 1);
+        assert_eq!(state.nft_wrapped, 1);
+        assert_eq!(state.known_escrow, 1);
+        assert_eq!(state.anomalies, 3);
+        assert!(crate::RepairedLegacyCardsByOwnerV16::<Test>::get(
+            2, ordinary
+        ));
+        assert!(crate::RepairedLegacyCardsByOwnerV16::<Test>::get(
+            2,
+            nft_wrapped
+        ));
+        assert!(crate::RepairedLegacyCardsByOwnerV16::<Test>::get(
+            3,
+            known_escrow
+        ));
+        assert!(!crate::RepairedLegacyCardsByOwnerV16::<Test>::get(
+            1,
+            unknown_escrow
+        ));
+
+        assert_noop!(
+            EterraSlots::set_price(RuntimeOrigin::signed(escrow), unknown_escrow, 1),
+            Error::<Test>::LegacyCardFrozen
+        );
+        assert_noop!(
+            EterraSlots::transfer_card(RuntimeOrigin::signed(escrow), unknown_escrow, 4),
+            Error::<Test>::LegacyCardFrozen
+        );
+
+        assert_ok!(EterraSlots::transfer_card(
+            RuntimeOrigin::signed(2),
+            ordinary,
+            4
+        ));
+        let moved =
+            crate::LegacyCardClassifications::<Test>::get(ordinary).expect("sidecar retained");
+        assert_eq!(moved.beneficial_owner, Some(4));
+        assert_eq!(moved.custody, crate::LegacyCustodyKind::Ordinary);
+        assert!(!crate::RepairedLegacyCardsByOwnerV16::<Test>::get(
+            2, ordinary
+        ));
+        assert!(crate::RepairedLegacyCardsByOwnerV16::<Test>::get(
+            4, ordinary
+        ));
+
+        assert_ok!(EterraSlots::unwrap_from_nft(
+            RuntimeOrigin::signed(2),
+            nft_wrapped
+        ));
+        let unwrapped =
+            crate::LegacyCardClassifications::<Test>::get(nft_wrapped).expect("sidecar retained");
+        assert_eq!(unwrapped.beneficial_owner, Some(2));
+        assert_eq!(unwrapped.custody, crate::LegacyCustodyKind::Ordinary);
+    });
+}
+
+#[test]
+fn v15_to_v16_migration_preserves_vault_owner_and_safe_exit() {
+    use frame_support::traits::{Hooks, StorageVersion};
+
+    new_test_ext().execute_with(|| {
+        let owner = 1;
+        let recipient = 2;
+        let card_id = NextCardId::<Test>::get();
+        assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(owner)));
+        seed_collection_card(owner, card_id, 10);
+        NexusCollectionCards::<Test>::mutate(card_id, |record| {
+            record.as_mut().expect("seeded card").location = NexusStorageLocation::Vault;
+        });
+        NexusSubjectCopyCounts::<Test>::insert(owner, 2, 1);
+        let metadata_uri = b"ipfs://nexus-v2-vault-variant"
+            .to_vec()
+            .try_into()
+            .expect("bounded URI");
+        crate::VaultVariants::<Test>::insert(
+            7,
+            crate::VaultVariant {
+                variant_id: 7,
+                card_record_id: card_id,
+                subject_id: 2,
+                sealed_at: System::block_number(),
+                metadata_uri,
+                trade_eligible: true,
+                config_version: 1,
+            },
+        );
+
+        StorageVersion::new(15).put::<EterraSlots>();
+        <EterraSlots as Hooks<u64>>::on_runtime_upgrade();
+        assert_eq!(EterraSlots::migrate_v16_batch(100), 1);
+        attest_v16_migration();
+
+        let classification =
+            crate::LegacyCardClassifications::<Test>::get(card_id).expect("classified");
+        assert_eq!(classification.custody, crate::LegacyCustodyKind::Ordinary);
+        assert_eq!(classification.beneficial_owner, Some(owner));
+        assert!(!classification.frozen);
+        assert!(!crate::TcgMigrationAnomaliesV16::<Test>::contains_key(
+            card_id
+        ));
+
+        assert_ok!(EterraSlots::transfer_card(
+            RuntimeOrigin::signed(owner),
+            card_id,
+            recipient
+        ));
+        let moved =
+            crate::LegacyCardClassifications::<Test>::get(card_id).expect("sidecar retained");
+        assert_eq!(moved.beneficial_owner, Some(recipient));
+        assert_eq!(moved.custody, crate::LegacyCustodyKind::Ordinary);
+        assert_eq!(
+            NexusCollectionCards::<Test>::get(card_id)
+                .expect("Nexus record retained")
+                .owner,
+            recipient
+        );
+        assert_eq!(
+            crate::VaultVariants::<Test>::get(7)
+                .expect("Vault metadata retained")
+                .card_record_id,
+            card_id
+        );
+    });
+}
+
+#[test]
+fn v16_on_idle_respects_both_ref_time_and_proof_size_limits() {
+    use frame_support::traits::{Hooks, StorageVersion};
+    use frame_support::weights::Weight;
+
+    new_test_ext().execute_with(|| {
+        for owner in 1..=3 {
+            assert_ok!(EterraSlots::mint_card(RuntimeOrigin::signed(owner)));
+        }
+        StorageVersion::new(14).put::<EterraSlots>();
+        <EterraSlots as Hooks<u64>>::on_runtime_upgrade();
+
+        let proof_constrained = Weight::from_parts(u64::MAX / 4, 64 * 1024);
+        let used = <EterraSlots as Hooks<u64>>::on_idle(1, proof_constrained);
+        assert!(used.all_lte(proof_constrained));
+        assert_eq!(
+            crate::TcgMigrationStateStorageV16::<Test>::get()
+                .unwrap()
+                .cursor,
+            0
+        );
+
+        let generous = Weight::from_parts(u64::MAX / 4, u64::MAX / 4);
+        let used = <EterraSlots as Hooks<u64>>::on_idle(2, generous);
+        assert!(used.all_lte(generous));
+        assert_eq!(
+            crate::TcgMigrationStateStorageV16::<Test>::get()
+                .unwrap()
+                .phase,
+            crate::MigrationPhaseV16::AwaitingVerification
+        );
+        assert!(crate::LegacyWritesPausedV16::<Test>::get());
+        attest_v16_migration();
+    });
+}
+
+#[test]
+fn legacy_and_v2_call_indices_are_scale_frozen() {
+    let calls = [
+        (
+            crate::Call::<Test>::transfer_card { card_id: 7, to: 2 }.encode()[0],
+            3,
+        ),
+        (
+            crate::Call::<Test>::finalize_pack_open_v2 {
+                opening_id: [1; 32],
+            }
+            .encode()[0],
+            45,
+        ),
+        (
+            crate::Call::<Test>::timeout_pack_open_v2 {
+                opening_id: [2; 32],
+            }
+            .encode()[0],
+            46,
+        ),
+        (
+            crate::Call::<Test>::set_v2_feature_enabled {
+                feature: crate::V2Feature::Conversion,
+                enabled: false,
+            }
+            .encode()[0],
+            49,
+        ),
+        (
+            crate::Call::<Test>::finalize_conversion_v2 {
+                request_id: [3; 32],
+            }
+            .encode()[0],
+            51,
+        ),
+        (
+            crate::Call::<Test>::timeout_conversion_v2 {
+                request_id: [4; 32],
+            }
+            .encode()[0],
+            52,
+        ),
+        (
+            crate::Call::<Test>::configure_mythical_ascension_season_v2 {
+                config: crate::MythicalAscensionSeasonConfig {
+                    season_id: 1,
+                    set_id: 1,
+                    pool_id: 1,
+                    pool_version: 1,
+                    starts_at: 10,
+                    ends_at: 100,
+                    required_mastery: 10,
+                    required_marks: 10,
+                    available_weeks: 12,
+                    config_hash: [5; 32],
+                },
+            }
+            .encode()[0],
+            53,
+        ),
+        (
+            crate::Call::<Test>::configure_mythical_ascension_subject_v2 {
+                config: crate::MythicalAscensionSubjectConfig {
+                    season_id: 1,
+                    subject_id: 1,
+                    subject_version: 1,
+                    foundation_pose_definition_id: 10,
+                    foundation_background_definition_id: 1000,
+                    config_hash: [6; 32],
+                },
+            }
+            .encode()[0],
+            54,
+        ),
+        (
+            crate::Call::<Test>::link_season_eligibility_v2 {
+                account: 1,
+                season_id: 1,
+                season_eligibility_id: [7; 32],
+            }
+            .encode()[0],
+            55,
+        ),
+        (
+            crate::Call::<Test>::record_mythical_ascension_progress_v2 {
+                season_eligibility_id: [8; 32],
+                season_id: 1,
+                subject_id: 1,
+                economic_realm: eterra_nexus_primitives::EconomicRealm::Production,
+                mastery_level: Some(10),
+                convergence_week: Some(0),
+                grant_catalyst: true,
+                evidence_id: [9; 32],
+            }
+            .encode()[0],
+            56,
+        ),
+        (
+            crate::Call::<Test>::ascend_mythical_v2 {
+                season_id: 1,
+                subject_id: 1,
+                input: crate::MythicalAscensionInput::LegendaryFoundation,
+            }
+            .encode()[0],
+            57,
+        ),
+        (
+            crate::Call::<Test>::complete_legacy_migration_v16 {
+                expected_cards_seen: 1,
+                expected_anomalies: 0,
+                verification_hash: [10; 32],
+            }
+            .encode()[0],
+            58,
+        ),
+        (
+            crate::Call::<Test>::transfer_wrapped_card_nft_v16 {
+                card_id: 1,
+                new_owner: 2,
+            }
+            .encode()[0],
+            59,
+        ),
+    ];
+    for (encoded, expected) in calls {
+        assert_eq!(encoded, expected);
+    }
+}
+
+#[test]
+fn v2_team_call_rejects_oversized_vectors_during_scale_decode() {
+    let mut encoded = vec![48u8];
+    let oversized = (1..=u64::from(MaxV2TeamSize::get()) + 1).collect::<Vec<_>>();
+    encoded.extend((1u32, 1u32, 1u32, oversized).encode());
+    assert!(
+        crate::Call::<Test>::decode(&mut encoded.as_slice()).is_err(),
+        "the call boundary must reject more than MaxV2TeamSize before dispatch"
+    );
+}
+
+#[test]
+fn legacy_magic_vec_weight_scales_with_decoded_length() {
+    let short = <() as crate::weights::WeightInfo>::set_card_magic_loadout(3);
+    let oversized = <() as crate::weights::WeightInfo>::set_card_magic_loadout(1_000_000);
+    assert!(short.ref_time() < oversized.ref_time());
+    assert!(short.proof_size() < oversized.proof_size());
 }

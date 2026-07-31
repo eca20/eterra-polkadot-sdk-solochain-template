@@ -23,6 +23,10 @@ members = [
     "pallets/eterra-authority",
     "pallets/eterra-economy",
     "pallets/eterra-flow",
+    "pallets/eterra-randomness",
+    "pallets/eterra-creatures",
+    "pallets/eterra-magic",
+    "pallets/eterra-game-results",
     "pallets/eterra-profile",
     "pallets/eterra-arcade-core",
     "pallets/eterra-arcade-ouro",
@@ -31,6 +35,9 @@ members = [
     "pallets/alpha-access",
     "pallets/cryptostrike",
     "crates/eterra-card-ai-adapter",   
+    "crates/eterra-drand-quicknet",
+    "crates/eterra-nexus-primitives",
+    "tools/nexus-v2-migration-verifier",
     "runtime",
 ]
 resolver = "2"
@@ -88,6 +95,7 @@ frame-support = { version = "38.0.0", default-features = false }
 frame-system-benchmarking = { version = "38.0.0", default-features = false }
 frame-system-rpc-runtime-api = { version = "34.0.0", default-features = false }
 frame-try-runtime = { version = "0.44.0", default-features = false }
+frame-remote-externalities = { version = "=0.46.0" }
 pallet-aura = { version = "37.0.0", default-features = false }
 pallet-assets = { version = "40.0.0", default-features = false }
 pallet-balances = { version = "39.0.0", default-features = false }
@@ -99,6 +107,7 @@ pallet-sudo = { version = "38.0.0", default-features = false }
 pallet-treasury = { version = "=37.0.0", default-features = false }
 pallet-timestamp = { version = "37.0.0", default-features = false }
 pallet-transaction-payment-rpc-runtime-api = { version = "38.0.0", default-features = false }
+pallet-utility = { version = "38.0.0", default-features = false }
 scale-info = { version = "2.11.1", default-features = false }
 sp-genesis-builder = { version = "0.15.1", default-features = false }
 sp-offchain = { version = "34.0.0", default-features = false }
@@ -110,6 +119,10 @@ sp-version = { version = "37.0.0", default-features = false }
 substrate-wasm-builder = { version = "24.0.1", default-features = false }
 rand = { version = "0.9.1", default-features = false, features = ["std"] }
 rand_chacha = { version = "0.3", features = ["std"] }
+bls12_381 = { version = "=0.8.0", default-features = false, features = ["alloc", "groups", "pairings", "experimental"] }
+pairing = { version = "=0.23.0", default-features = false }
+sha2-09 = { package = "sha2", version = "=0.9.9", default-features = false }
+sha2 = { version = "0.10.8" }
 # Substrate Gaming Pallets
 pallet-eterra                           = { path = "pallets/eterra", default-features = false }
 pallet-eterra-faucet                    = { path = "pallets/eterra-faucet", default-features = false }
@@ -119,12 +132,18 @@ pallet-eterra-simple-tcg                = { path = "pallets/eterra-simple-tcg", 
 pallet-eterra-simple-matchmaker         = { path = "pallets/eterra-simple-matchmaker", default-features = false }
 pallet-eterra-monte-carlo-ai            = { path = "pallets/eterra-monte-carlo-ai", default-features = false }
 eterra-card-ai-adapter                  = { path = "crates/eterra-card-ai-adapter", default-features = false, features = ["std"] }
+eterra-drand-quicknet                   = { path = "crates/eterra-drand-quicknet", default-features = false }
+eterra-nexus-primitives                 = { path = "crates/eterra-nexus-primitives", default-features = false }
 pallet-eterra-gamer                     = { path = "pallets/eterra-gamer", default-features = false }
 pallet-eterra-game-authority            = { path = "pallets/eterra-game-authority", default-features = false }
 pallet-eterra-card-escrow               = { path = "pallets/eterra-card-escrow", default-features = false }
 pallet-eterra-authority                 = { path = "pallets/eterra-authority", default-features = false }
 pallet-eterra-economy                   = { path = "pallets/eterra-economy", default-features = false }
 pallet-eterra-flow                      = { path = "pallets/eterra-flow", default-features = false }
+pallet-eterra-randomness                = { path = "pallets/eterra-randomness", default-features = false }
+pallet-eterra-creatures                 = { path = "pallets/eterra-creatures", default-features = false }
+pallet-eterra-magic                     = { path = "pallets/eterra-magic", default-features = false }
+pallet-eterra-game-results              = { path = "pallets/eterra-game-results", default-features = false }
 pallet-eterra-profile                   = { path = "pallets/eterra-profile", default-features = false }
 pallet-eterra-arcade-core               = { path = "pallets/eterra-arcade-core", default-features = false }
 pallet-eterra-arcade-ouro               = { path = "pallets/eterra-arcade-ouro", default-features = false }

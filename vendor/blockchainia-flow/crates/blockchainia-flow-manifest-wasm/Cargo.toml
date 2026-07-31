@@ -13,7 +13,7 @@ description = "WASM compiler boundary for Blockchainia Flow v0 manifests"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-blockchainia-flow-manifest = { path = "../blockchainia-flow-manifest" }
+blockchainia-flow-manifest = { version = "=0.1.0-alpha.1", path = "../blockchainia-flow-manifest" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 wasm-bindgen = "0.2"

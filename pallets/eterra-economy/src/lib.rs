@@ -10,6 +10,7 @@ pub mod weights;
 pub use weights::WeightInfo;
 
 use codec::{Decode, Encode, MaxEncodedLen};
+use eterra_nexus_primitives::{EconomicRealm, PackCreditSource};
 use frame_support::dispatch::DispatchResult;
 use scale_info::TypeInfo;
 use sp_runtime::{DispatchError, RuntimeDebug};
@@ -53,6 +54,42 @@ pub trait NativePaymentProvider<AccountId> {
     fn pay_treasury(account: &AccountId, amount: u128) -> DispatchResult;
 }
 
+/// Runtime adapter into the Nexus V2 non-transferable Pack Credit issuer.
+///
+/// The economy pallet owns ticket pricing, redemption limits, and replay
+/// protection. The TCG pallet remains authoritative for the referenced pack
+/// catalog and the resulting credit.
+pub trait V2PackCreditIssuer<AccountId> {
+    fn validate_target(pack_sku: u32, sku_version: u32, realm: EconomicRealm) -> DispatchResult;
+
+    fn issue_pack_credit(
+        owner: &AccountId,
+        pack_sku: u32,
+        sku_version: u32,
+        realm: EconomicRealm,
+        source: PackCreditSource,
+    ) -> DispatchResult;
+
+    #[cfg(feature = "runtime-benchmarks")]
+    fn prepare_benchmark_target(_pack_sku: u32, _sku_version: u32, _realm: EconomicRealm) {}
+}
+
+impl<AccountId> V2PackCreditIssuer<AccountId> for () {
+    fn validate_target(_pack_sku: u32, _sku_version: u32, _realm: EconomicRealm) -> DispatchResult {
+        Err(DispatchError::Other("V2 pack credit provider unavailable"))
+    }
+
+    fn issue_pack_credit(
+        _owner: &AccountId,
+        _pack_sku: u32,
+        _sku_version: u32,
+        _realm: EconomicRealm,
+        _source: PackCreditSource,
+    ) -> DispatchResult {
+        Err(DispatchError::Other("V2 pack credit provider unavailable"))
+    }
+}
+
 /// Runtime adapter into the Nexus TCG acquisition implementation.
 pub trait PrizeFulfillmentProvider<AccountId> {
     fn validate_pool(pool_id: PoolId, featured_subjects: &[SubjectId]) -> DispatchResult;
@@ -86,6 +123,9 @@ impl<AccountId> PrizeFulfillmentProvider<AccountId> for () {
 
 pub trait AccountEligibilityProvider<AccountId> {
     fn eligible(account: &AccountId) -> bool;
+
+    #[cfg(feature = "runtime-benchmarks")]
+    fn prepare_benchmark_account(_account: &AccountId) {}
 }
 
 impl<AccountId> AccountEligibilityProvider<AccountId> for () {
@@ -109,7 +149,9 @@ pub mod pallet {
         weights::WeightInfo, AccountEligibilityProvider, ArcadeRandomnessProvider, AssetId,
         NativePaymentProvider, PoolId, PrizeAcquisitionSource, PrizeFulfillmentKind,
         PrizeFulfillmentProvider, SubjectId, TicketAssetProvider, TicketBalance,
+        V2PackCreditIssuer,
     };
+    use eterra_nexus_primitives::{EconomicRealm, Hash32, PackCreditSource};
     use frame_support::{
         dispatch::DispatchResult,
         pallet_prelude::*,
@@ -118,7 +160,7 @@ pub mod pallet {
         weights::Weight,
     };
     use frame_system::pallet_prelude::*;
-    use sp_runtime::traits::{SaturatedConversion, Saturating};
+    use sp_runtime::traits::{SaturatedConversion, Saturating, Zero};
     use sp_std::vec::Vec;
 
     pub type GameId = u64;
@@ -210,15 +252,17 @@ pub mod pallet {
         TicketRedemption,
         RandomVending,
         FeaturedVending,
+        PackCreditRedemptionV2,
     }
 
     impl PauseDomain {
-        pub const ALL: [Self; 5] = [
+        pub const ALL: [Self; 6] = [
             Self::TicketEarning,
             Self::TicketTransfers,
             Self::TicketRedemption,
             Self::RandomVending,
             Self::FeaturedVending,
+            Self::PackCreditRedemptionV2,
         ];
     }
 
@@ -293,6 +337,40 @@ pub mod pallet {
         UnsafeOrInvalidConfiguration,
     }
 
+    /// Versioned Prize Counter offer that redeems Tickets for one Nexus V2
+    /// Pack Credit. Alpha offers are deliberately restricted to Training.
+    #[derive(Encode, Decode, MaxEncodedLen, TypeInfo, Clone, PartialEq, Eq, RuntimeDebug)]
+    pub struct ArcadePackCreditSkuV2<BlockNumber> {
+        pub pack_sku: u32,
+        pub pack_sku_version: u32,
+        pub economic_realm: EconomicRealm,
+        pub ticket_price: TicketBalance,
+        pub policy_version: u32,
+        pub enabled: bool,
+        pub total_cap: Option<u64>,
+        pub per_account_window_cap: u32,
+        pub window_blocks: BlockNumber,
+        pub config_version: u32,
+    }
+
+    /// Globally keyed replay receipt for an Arcade Prize Pack Credit
+    /// redemption. A retry is a no-op only when its complete caller-supplied
+    /// request identity matches this receipt.
+    #[derive(
+        Encode, Decode, MaxEncodedLen, TypeInfo, CloneNoBound, PartialEqNoBound, RuntimeDebugNoBound,
+    )]
+    #[scale_info(skip_type_params(T))]
+    pub struct ArcadePackCreditRedemptionReceiptV2<T: Config> {
+        pub account: T::AccountId,
+        pub sku_id: SkuId,
+        pub sku_config_version: u32,
+        pub pack_sku: u32,
+        pub pack_sku_version: u32,
+        pub economic_realm: EconomicRealm,
+        pub ticket_amount: TicketBalance,
+        pub policy_version: u32,
+    }
+
     #[pallet::config]
     pub trait Config: frame_system::Config {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
@@ -301,6 +379,7 @@ pub mod pallet {
         type TicketAssets: TicketAssetProvider<Self::AccountId>;
         type NativePayments: NativePaymentProvider<Self::AccountId>;
         type PrizeFulfillment: PrizeFulfillmentProvider<Self::AccountId>;
+        type PackCreditIssuer: V2PackCreditIssuer<Self::AccountId>;
         type AccountEligibility: AccountEligibilityProvider<Self::AccountId>;
         type RandomnessProvider: ArcadeRandomnessProvider;
 
@@ -326,7 +405,7 @@ pub mod pallet {
         type MaxPrizeCards: Get<u32>;
     }
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 
     #[pallet::genesis_config]
     pub struct GenesisConfig<T: Config> {
@@ -485,6 +564,44 @@ pub mod pallet {
     >;
 
     #[pallet::storage]
+    #[pallet::getter(fn arcade_pack_credit_sku_v2)]
+    pub type ArcadePackCreditSkusV2<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        SkuId,
+        ArcadePackCreditSkuV2<BlockNumberFor<T>>,
+        OptionQuery,
+    >;
+
+    #[pallet::storage]
+    pub type ArcadePackCreditSkuSoldV2<T: Config> =
+        StorageMap<_, Blake2_128Concat, SkuId, u64, ValueQuery>;
+
+    #[pallet::storage]
+    pub type ArcadePackCreditSkuAccountWindowsV2<T: Config> = StorageNMap<
+        _,
+        (
+            NMapKey<Blake2_128Concat, SkuId>,
+            NMapKey<Blake2_128Concat, T::AccountId>,
+            NMapKey<Blake2_128Concat, u64>,
+        ),
+        u32,
+        ValueQuery,
+    >;
+
+    /// The redemption ID namespace is global across every account and every
+    /// Prize Counter SKU.
+    #[pallet::storage]
+    #[pallet::getter(fn arcade_pack_credit_redemption_receipt_v2)]
+    pub type ArcadePackCreditRedemptionReceiptsV2<T: Config> = StorageMap<
+        _,
+        Blake2_128Concat,
+        Hash32,
+        ArcadePackCreditRedemptionReceiptV2<T>,
+        OptionQuery,
+    >;
+
+    #[pallet::storage]
     #[pallet::getter(fn featured_rotation_config)]
     pub type FeaturedRotationSettings<T: Config> =
         StorageValue<_, FeaturedRotationConfig<T>, OptionQuery>;
@@ -512,12 +629,20 @@ pub mod pallet {
     impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
         fn on_runtime_upgrade() -> Weight {
             let mut weight = T::DbWeight::get().reads(1);
-            if StorageVersion::get::<Pallet<T>>() < STORAGE_VERSION {
+            let on_chain = StorageVersion::get::<Pallet<T>>();
+            if on_chain < StorageVersion::new(2) {
                 for domain in PauseDomain::ALL {
                     PausedDomains::<T>::insert(domain, true);
                 }
                 STORAGE_VERSION.put::<Pallet<T>>();
-                weight = weight.saturating_add(T::DbWeight::get().writes(6));
+                weight = weight
+                    .saturating_add(T::DbWeight::get().writes(PauseDomain::ALL.len() as u64 + 1));
+            } else if on_chain < STORAGE_VERSION {
+                // V2 state keeps every prior pause decision. The new Pack
+                // Credit bridge alone starts explicitly fail-closed.
+                PausedDomains::<T>::insert(PauseDomain::PackCreditRedemptionV2, true);
+                STORAGE_VERSION.put::<Pallet<T>>();
+                weight = weight.saturating_add(T::DbWeight::get().writes(2));
             }
             weight
         }
@@ -672,6 +797,26 @@ pub mod pallet {
             card_ids: PrizeCardIdsOf<T>,
             config_version: u32,
         },
+        ArcadePackCreditSkuUpdatedV2 {
+            sku_id: SkuId,
+            pack_sku: u32,
+            pack_sku_version: u32,
+            economic_realm: EconomicRealm,
+            policy_version: u32,
+            config_version: u32,
+            enabled: bool,
+        },
+        ArcadePackCreditRedeemedV2 {
+            account: T::AccountId,
+            sku_id: SkuId,
+            redemption_id: Hash32,
+            pack_sku: u32,
+            pack_sku_version: u32,
+            economic_realm: EconomicRealm,
+            ticket_amount: TicketBalance,
+            policy_version: u32,
+            config_version: u32,
+        },
     }
 
     #[pallet::error]
@@ -704,6 +849,12 @@ pub mod pallet {
         StaleRotation,
         TooManyPrizeCards,
         PrizeFulfillmentFailed,
+        ArcadePackCreditSkuNotFound,
+        ArcadePackCreditSkuDisabled,
+        ArcadePackCreditProductionDisabled,
+        InvalidArcadePackCreditSku,
+        InvalidArcadePackCreditRedemptionId,
+        ArcadePackCreditRedemptionConflict,
     }
 
     #[pallet::call]
@@ -1039,6 +1190,8 @@ pub mod pallet {
             Ok(())
         }
 
+        /// LegacyV1 direct-card Ticket redemption retained for SCALE
+        /// compatibility. Nexus V2 Prize Counter clients must use call 20.
         #[pallet::call_index(17)]
         #[pallet::weight(T::WeightInfo::redeem_prize_with_tickets())]
         #[transactional]
@@ -1061,6 +1214,74 @@ pub mod pallet {
         ) -> DispatchResult {
             let account = ensure_signed(origin)?;
             Self::try_purchase_prize_with_native(&account, target, expected_version)
+        }
+
+        /// Configure a versioned Training-only Prize Counter Pack Credit offer.
+        #[pallet::call_index(19)]
+        #[pallet::weight(T::WeightInfo::upsert_arcade_pack_credit_sku_v2())]
+        pub fn upsert_arcade_pack_credit_sku_v2(
+            origin: OriginFor<T>,
+            sku_id: SkuId,
+            sku: ArcadePackCreditSkuV2<BlockNumberFor<T>>,
+        ) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            Self::validate_arcade_pack_credit_sku_v2(&sku)?;
+            T::PackCreditIssuer::validate_target(
+                sku.pack_sku,
+                sku.pack_sku_version,
+                sku.economic_realm,
+            )?;
+            if let Some(current) = ArcadePackCreditSkusV2::<T>::get(sku_id) {
+                ensure!(
+                    sku.config_version > current.config_version,
+                    Error::<T>::InvalidConfigVersion
+                );
+            }
+            let event = Event::ArcadePackCreditSkuUpdatedV2 {
+                sku_id,
+                pack_sku: sku.pack_sku,
+                pack_sku_version: sku.pack_sku_version,
+                economic_realm: sku.economic_realm,
+                policy_version: sku.policy_version,
+                config_version: sku.config_version,
+                enabled: sku.enabled,
+            };
+            ArcadePackCreditSkusV2::<T>::insert(sku_id, sku);
+            Self::deposit_event(event);
+            Ok(())
+        }
+
+        /// Atomically burn Tickets and issue one non-transferable Nexus V2 Pack
+        /// Credit. `redemption_id` is globally replay protected.
+        #[pallet::call_index(20)]
+        #[pallet::weight(T::WeightInfo::redeem_arcade_pack_credit_with_tickets_v2())]
+        #[transactional]
+        pub fn redeem_arcade_pack_credit_with_tickets_v2(
+            origin: OriginFor<T>,
+            sku_id: SkuId,
+            expected_version: u32,
+            redemption_id: Hash32,
+        ) -> DispatchResult {
+            let account = ensure_signed(origin)?;
+            ensure!(
+                redemption_id != [0u8; 32],
+                Error::<T>::InvalidArcadePackCreditRedemptionId
+            );
+            if let Some(receipt) = ArcadePackCreditRedemptionReceiptsV2::<T>::get(redemption_id) {
+                ensure!(
+                    receipt.account == account
+                        && receipt.sku_id == sku_id
+                        && receipt.sku_config_version == expected_version,
+                    Error::<T>::ArcadePackCreditRedemptionConflict
+                );
+                return Ok(());
+            }
+            Self::try_redeem_arcade_pack_credit_with_tickets_v2(
+                &account,
+                sku_id,
+                expected_version,
+                redemption_id,
+            )
         }
     }
 
@@ -1264,7 +1485,7 @@ pub mod pallet {
             {
                 return Ok(0);
             }
-            if TicketRewardedResults::<T>::get(&result_id_hash) {
+            if TicketRewardedResults::<T>::get(result_id_hash) {
                 return Ok(0);
             }
 
@@ -1282,7 +1503,7 @@ pub mod pallet {
             let remaining = policy.per_account_window_cap.saturating_sub(issued);
             let amount = desired.min(remaining);
 
-            TicketRewardedResults::<T>::insert(&result_id_hash, true);
+            TicketRewardedResults::<T>::insert(result_id_hash, true);
             if amount == 0 {
                 return Ok(0);
             }
@@ -1436,6 +1657,122 @@ pub mod pallet {
                 Error::<T>::PrizeAccountLimitReached
             );
             Ok((sold, account_count, window))
+        }
+
+        fn validate_arcade_pack_credit_sku_v2(
+            sku: &ArcadePackCreditSkuV2<BlockNumberFor<T>>,
+        ) -> DispatchResult {
+            ensure!(
+                sku.economic_realm == EconomicRealm::Training,
+                Error::<T>::ArcadePackCreditProductionDisabled
+            );
+            ensure!(
+                sku.pack_sku > 0
+                    && sku.pack_sku_version > 0
+                    && sku.ticket_price > 0
+                    && sku.policy_version > 0
+                    && sku.per_account_window_cap > 0
+                    && !sku.window_blocks.is_zero()
+                    && sku.config_version > 0
+                    && sku.total_cap.map(|cap| cap > 0).unwrap_or(true),
+                Error::<T>::InvalidArcadePackCreditSku
+            );
+            Ok(())
+        }
+
+        fn ensure_arcade_pack_credit_sku_capacity_v2(
+            account: &T::AccountId,
+            sku_id: SkuId,
+            sku: &ArcadePackCreditSkuV2<BlockNumberFor<T>>,
+        ) -> Result<(u64, u32, u64), DispatchError> {
+            let sold = ArcadePackCreditSkuSoldV2::<T>::get(sku_id);
+            if let Some(cap) = sku.total_cap {
+                ensure!(sold < cap, Error::<T>::PrizeSoldOut);
+            }
+            let window = Self::window_index(sku.window_blocks);
+            let account_count =
+                ArcadePackCreditSkuAccountWindowsV2::<T>::get((sku_id, account, window));
+            ensure!(
+                account_count < sku.per_account_window_cap,
+                Error::<T>::PrizeAccountLimitReached
+            );
+            Ok((sold, account_count, window))
+        }
+
+        #[transactional]
+        fn try_redeem_arcade_pack_credit_with_tickets_v2(
+            account: &T::AccountId,
+            sku_id: SkuId,
+            expected_version: u32,
+            redemption_id: Hash32,
+        ) -> DispatchResult {
+            ensure!(
+                !PausedDomains::<T>::get(PauseDomain::PackCreditRedemptionV2),
+                Error::<T>::SubsystemPaused
+            );
+            Self::ensure_account_eligible(account)?;
+            let sku = ArcadePackCreditSkusV2::<T>::get(sku_id)
+                .ok_or(Error::<T>::ArcadePackCreditSkuNotFound)?;
+            ensure!(sku.enabled, Error::<T>::ArcadePackCreditSkuDisabled);
+            ensure!(
+                sku.config_version == expected_version,
+                Error::<T>::InvalidConfigVersion
+            );
+            Self::validate_arcade_pack_credit_sku_v2(&sku)?;
+            T::PackCreditIssuer::validate_target(
+                sku.pack_sku,
+                sku.pack_sku_version,
+                sku.economic_realm,
+            )?;
+            let (sold, account_count, window) =
+                Self::ensure_arcade_pack_credit_sku_capacity_v2(account, sku_id, &sku)?;
+            let next_sold = sold.checked_add(1).ok_or(Error::<T>::ArithmeticOverflow)?;
+            let next_account_count = account_count
+                .checked_add(1)
+                .ok_or(Error::<T>::ArithmeticOverflow)?;
+            let asset = TicketAsset::<T>::get().ok_or(Error::<T>::TicketAssetNotConfigured)?;
+            let source = PackCreditSource::ArcadePrize {
+                policy_version: sku.policy_version,
+                redemption_id,
+            };
+            T::PackCreditIssuer::issue_pack_credit(
+                account,
+                sku.pack_sku,
+                sku.pack_sku_version,
+                sku.economic_realm,
+                source,
+            )?;
+            T::TicketAssets::burn(asset.asset_id, account, sku.ticket_price)?;
+            ArcadePackCreditSkuSoldV2::<T>::insert(sku_id, next_sold);
+            ArcadePackCreditSkuAccountWindowsV2::<T>::insert(
+                (sku_id, account, window),
+                next_account_count,
+            );
+            ArcadePackCreditRedemptionReceiptsV2::<T>::insert(
+                redemption_id,
+                ArcadePackCreditRedemptionReceiptV2::<T> {
+                    account: account.clone(),
+                    sku_id,
+                    sku_config_version: sku.config_version,
+                    pack_sku: sku.pack_sku,
+                    pack_sku_version: sku.pack_sku_version,
+                    economic_realm: sku.economic_realm,
+                    ticket_amount: sku.ticket_price,
+                    policy_version: sku.policy_version,
+                },
+            );
+            Self::deposit_event(Event::ArcadePackCreditRedeemedV2 {
+                account: account.clone(),
+                sku_id,
+                redemption_id,
+                pack_sku: sku.pack_sku,
+                pack_sku_version: sku.pack_sku_version,
+                economic_realm: sku.economic_realm,
+                ticket_amount: sku.ticket_price,
+                policy_version: sku.policy_version,
+                config_version: sku.config_version,
+            });
+            Ok(())
         }
 
         #[transactional]
@@ -1754,6 +2091,7 @@ mod tests {
         type TicketAssets = MockTicketAssets;
         type NativePayments = MockNativePayments;
         type PrizeFulfillment = MockPrizeFulfillment;
+        type PackCreditIssuer = MockPackCreditIssuer;
         type AccountEligibility = MockAccountEligibility;
         type RandomnessProvider = MockRandomness;
         type ArcadeCreditFaucetGameId = ArcadeCreditFaucetGameId;
@@ -1770,11 +2108,54 @@ mod tests {
 
     pub struct MockTicketAssets;
     thread_local! {
-        static MOCK_TICKET_BALANCES: RefCell<BTreeMap<AccountId, TicketBalance>> = RefCell::new(BTreeMap::new());
+        static MOCK_TICKET_BALANCES: RefCell<BTreeMap<AccountId, TicketBalance>> =
+            const { RefCell::new(BTreeMap::new()) };
         static MOCK_NATIVE_PAYMENTS: RefCell<Vec<(AccountId, u128)>> = const { RefCell::new(Vec::new()) };
         static MOCK_MINT_FAILS: RefCell<bool> = const { RefCell::new(false) };
         static MOCK_NATIVE_PAYMENT_FAILS: RefCell<bool> = const { RefCell::new(false) };
         static MOCK_FULFILLMENT_FAILS: RefCell<bool> = const { RefCell::new(false) };
+        static MOCK_PACK_CREDIT_ISSUANCE_FAILS: RefCell<bool> = const { RefCell::new(false) };
+    }
+
+    type MockIssuedPackCredit = (AccountId, u32, u32, EconomicRealm, PackCreditSource);
+    const MOCK_ISSUED_PACK_CREDITS_KEY: &[u8] = b":eterra-economy:test:issued-pack-credits";
+
+    fn mock_issued_pack_credits() -> Vec<MockIssuedPackCredit> {
+        sp_io::storage::get(MOCK_ISSUED_PACK_CREDITS_KEY)
+            .and_then(|encoded| Vec::<MockIssuedPackCredit>::decode(&mut &encoded[..]).ok())
+            .unwrap_or_default()
+    }
+
+    pub struct MockPackCreditIssuer;
+    impl V2PackCreditIssuer<AccountId> for MockPackCreditIssuer {
+        fn validate_target(
+            pack_sku: u32,
+            sku_version: u32,
+            realm: EconomicRealm,
+        ) -> DispatchResult {
+            if pack_sku == 1 && sku_version == 1 && realm == EconomicRealm::Training {
+                Ok(())
+            } else {
+                Err(DispatchError::Other("mock pack target missing"))
+            }
+        }
+
+        fn issue_pack_credit(
+            owner: &AccountId,
+            pack_sku: u32,
+            sku_version: u32,
+            realm: EconomicRealm,
+            source: PackCreditSource,
+        ) -> DispatchResult {
+            if MOCK_PACK_CREDIT_ISSUANCE_FAILS.with(|fails| *fails.borrow()) {
+                return Err(DispatchError::Other("mock pack credit issuance failed"));
+            }
+            Self::validate_target(pack_sku, sku_version, realm)?;
+            let mut issued = mock_issued_pack_credits();
+            issued.push((*owner, pack_sku, sku_version, realm, source));
+            sp_io::storage::set(MOCK_ISSUED_PACK_CREDITS_KEY, &issued.encode());
+            Ok(())
+        }
     }
 
     impl TicketAssetProvider<AccountId> for MockTicketAssets {
@@ -1895,6 +2276,8 @@ mod tests {
             MOCK_MINT_FAILS.with(|fails| *fails.borrow_mut() = false);
             MOCK_NATIVE_PAYMENT_FAILS.with(|fails| *fails.borrow_mut() = false);
             MOCK_FULFILLMENT_FAILS.with(|fails| *fails.borrow_mut() = false);
+            MOCK_PACK_CREDIT_ISSUANCE_FAILS.with(|fails| *fails.borrow_mut() = false);
+            sp_io::storage::clear(MOCK_ISSUED_PACK_CREDITS_KEY);
         });
         ext
     }
@@ -1983,7 +2366,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_migration_pauses_every_new_domain_and_is_idempotent() {
+    fn economy_migration_adds_v2_bridge_pause_without_reopening_or_repausing_legacy() {
         new_test_ext().execute_with(|| {
             StorageVersion::new(1).put::<Pallet<Test>>();
             for domain in PauseDomain::ALL {
@@ -1994,15 +2377,37 @@ mod tests {
             <Pallet<Test> as Hooks<u64>>::on_runtime_upgrade();
             assert_eq!(
                 Pallet::<Test>::on_chain_storage_version(),
-                StorageVersion::new(2)
+                StorageVersion::new(3)
             );
             for domain in PauseDomain::ALL {
                 assert!(PausedDomains::<Test>::get(domain));
             }
 
+            // A live storage-V2 chain keeps all prior legacy pause choices;
+            // only the newly introduced V2 bridge is materialized as paused.
+            StorageVersion::new(2).put::<Pallet<Test>>();
             PausedDomains::<Test>::insert(PauseDomain::TicketTransfers, false);
+            PausedDomains::<Test>::insert(PauseDomain::TicketRedemption, false);
+            PausedDomains::<Test>::remove(PauseDomain::PackCreditRedemptionV2);
+            assert!(!PausedDomains::<Test>::contains_key(
+                PauseDomain::PackCreditRedemptionV2
+            ));
             <Pallet<Test> as Hooks<u64>>::on_runtime_upgrade();
             assert!(!PausedDomains::<Test>::get(PauseDomain::TicketTransfers));
+            assert!(!PausedDomains::<Test>::get(PauseDomain::TicketRedemption));
+            assert!(PausedDomains::<Test>::get(
+                PauseDomain::PackCreditRedemptionV2
+            ));
+            assert_eq!(
+                Pallet::<Test>::on_chain_storage_version(),
+                StorageVersion::new(3)
+            );
+
+            PausedDomains::<Test>::insert(PauseDomain::PackCreditRedemptionV2, false);
+            <Pallet<Test> as Hooks<u64>>::on_runtime_upgrade();
+            assert!(!PausedDomains::<Test>::get(
+                PauseDomain::PackCreditRedemptionV2
+            ));
         });
     }
 
@@ -2197,6 +2602,21 @@ mod tests {
             pool_id: 9,
             ticket_price: Some(20),
             native_price: Some(500),
+            enabled: true,
+            total_cap: Some(10),
+            per_account_window_cap: 2,
+            window_blocks: 100,
+            config_version,
+        }
+    }
+
+    fn arcade_pack_credit_sku_v2(config_version: u32) -> ArcadePackCreditSkuV2<u64> {
+        ArcadePackCreditSkuV2 {
+            pack_sku: 1,
+            pack_sku_version: 1,
+            economic_realm: EconomicRealm::Training,
+            ticket_price: 20,
+            policy_version: 7,
             enabled: true,
             total_cap: Some(10),
             per_account_window_cap: 2,
@@ -2539,6 +2959,454 @@ mod tests {
             );
             assert_eq!(EterraEconomy::ticket_balance(&42), 100);
             assert_eq!(EterraEconomy::ticket_balance(&7), 0);
+        });
+    }
+
+    #[test]
+    fn arcade_pack_credit_catalog_is_versioned_and_training_only() {
+        new_test_ext().execute_with(|| {
+            let mut invalid = arcade_pack_credit_sku_v2(1);
+            invalid.economic_realm = EconomicRealm::Production;
+            assert_noop!(
+                EterraEconomy::upsert_arcade_pack_credit_sku_v2(
+                    RuntimeOrigin::root(),
+                    7001,
+                    invalid,
+                ),
+                Error::<Test>::ArcadePackCreditProductionDisabled
+            );
+
+            let mut invalid = arcade_pack_credit_sku_v2(1);
+            invalid.policy_version = 0;
+            assert_noop!(
+                EterraEconomy::upsert_arcade_pack_credit_sku_v2(
+                    RuntimeOrigin::root(),
+                    7001,
+                    invalid,
+                ),
+                Error::<Test>::InvalidArcadePackCreditSku
+            );
+
+            let mut missing_target = arcade_pack_credit_sku_v2(1);
+            missing_target.pack_sku = 2;
+            assert_eq!(
+                EterraEconomy::upsert_arcade_pack_credit_sku_v2(
+                    RuntimeOrigin::root(),
+                    7001,
+                    missing_target,
+                ),
+                Err(DispatchError::Other("mock pack target missing"))
+            );
+
+            assert_ok!(EterraEconomy::upsert_arcade_pack_credit_sku_v2(
+                RuntimeOrigin::root(),
+                7001,
+                arcade_pack_credit_sku_v2(1),
+            ));
+            assert_noop!(
+                EterraEconomy::upsert_arcade_pack_credit_sku_v2(
+                    RuntimeOrigin::root(),
+                    7001,
+                    arcade_pack_credit_sku_v2(1),
+                ),
+                Error::<Test>::InvalidConfigVersion
+            );
+            let mut next = arcade_pack_credit_sku_v2(2);
+            next.enabled = false;
+            assert_ok!(EterraEconomy::upsert_arcade_pack_credit_sku_v2(
+                RuntimeOrigin::root(),
+                7001,
+                next,
+            ));
+            assert_eq!(
+                EterraEconomy::arcade_pack_credit_sku_v2(7001)
+                    .expect("V2 arcade SKU exists")
+                    .config_version,
+                2
+            );
+        });
+    }
+
+    #[test]
+    fn arcade_prize_redemption_issues_exact_pack_credit_and_burns_tickets() {
+        new_test_ext().execute_with(|| {
+            assert_ok!(EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 3, 1));
+            assert_ok!(EterraEconomy::upsert_arcade_pack_credit_sku_v2(
+                RuntimeOrigin::root(),
+                7001,
+                arcade_pack_credit_sku_v2(1),
+            ));
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::PackCreditRedemptionV2,
+                false,
+            ));
+            assert_ok!(MockTicketAssets::mint(3, &42, 100));
+            let redemption_id = [0xA5; 32];
+
+            assert_ok!(EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                RuntimeOrigin::signed(42),
+                7001,
+                1,
+                redemption_id,
+            ));
+
+            assert_eq!(EterraEconomy::ticket_balance(&42), 80);
+            assert_eq!(ArcadePackCreditSkuSoldV2::<Test>::get(7001), 1);
+            assert_eq!(
+                ArcadePackCreditSkuAccountWindowsV2::<Test>::get((7001, 42, 0)),
+                1
+            );
+            assert_eq!(
+                mock_issued_pack_credits(),
+                vec![(
+                    42,
+                    1,
+                    1,
+                    EconomicRealm::Training,
+                    PackCreditSource::ArcadePrize {
+                        policy_version: 7,
+                        redemption_id,
+                    },
+                )]
+            );
+            assert_eq!(
+                EterraEconomy::arcade_pack_credit_redemption_receipt_v2(redemption_id),
+                Some(ArcadePackCreditRedemptionReceiptV2::<Test> {
+                    account: 42,
+                    sku_id: 7001,
+                    sku_config_version: 1,
+                    pack_sku: 1,
+                    pack_sku_version: 1,
+                    economic_realm: EconomicRealm::Training,
+                    ticket_amount: 20,
+                    policy_version: 7,
+                })
+            );
+            System::assert_last_event(RuntimeEvent::EterraEconomy(
+                Event::ArcadePackCreditRedeemedV2 {
+                    account: 42,
+                    sku_id: 7001,
+                    redemption_id,
+                    pack_sku: 1,
+                    pack_sku_version: 1,
+                    economic_realm: EconomicRealm::Training,
+                    ticket_amount: 20,
+                    policy_version: 7,
+                    config_version: 1,
+                },
+            ));
+        });
+    }
+
+    #[test]
+    fn arcade_prize_redemption_id_is_globally_idempotent_with_exact_conflicts() {
+        new_test_ext().execute_with(|| {
+            assert_ok!(EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 3, 1));
+            assert_ok!(EterraEconomy::upsert_arcade_pack_credit_sku_v2(
+                RuntimeOrigin::root(),
+                7001,
+                arcade_pack_credit_sku_v2(1),
+            ));
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::PackCreditRedemptionV2,
+                false,
+            ));
+            assert_ok!(MockTicketAssets::mint(3, &42, 20));
+            let redemption_id = [0xB6; 32];
+            assert_ok!(EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                RuntimeOrigin::signed(42),
+                7001,
+                1,
+                redemption_id,
+            ));
+
+            // An exact retry is a no-op even if mutable gates and catalog
+            // state have changed since the finalized redemption.
+            PausedDomains::<Test>::insert(PauseDomain::PackCreditRedemptionV2, true);
+            RestrictedAccounts::<Test>::insert(42, true);
+            TicketAsset::<Test>::kill();
+            ArcadePackCreditSkusV2::<Test>::remove(7001);
+            assert_ok!(EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                RuntimeOrigin::signed(42),
+                7001,
+                1,
+                redemption_id,
+            ));
+            assert_eq!(mock_issued_pack_credits().len(), 1);
+            assert_eq!(ArcadePackCreditSkuSoldV2::<Test>::get(7001), 1);
+
+            assert_noop!(
+                EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                    RuntimeOrigin::signed(7),
+                    7001,
+                    1,
+                    redemption_id,
+                ),
+                Error::<Test>::ArcadePackCreditRedemptionConflict
+            );
+            assert_noop!(
+                EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                    RuntimeOrigin::signed(42),
+                    7002,
+                    1,
+                    redemption_id,
+                ),
+                Error::<Test>::ArcadePackCreditRedemptionConflict
+            );
+            assert_noop!(
+                EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                    RuntimeOrigin::signed(42),
+                    7001,
+                    2,
+                    redemption_id,
+                ),
+                Error::<Test>::ArcadePackCreditRedemptionConflict
+            );
+        });
+    }
+
+    #[test]
+    fn arcade_prize_redemption_failures_roll_back_all_chain_state() {
+        new_test_ext().execute_with(|| {
+            assert_ok!(EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 3, 1));
+            assert_ok!(EterraEconomy::upsert_arcade_pack_credit_sku_v2(
+                RuntimeOrigin::root(),
+                7001,
+                arcade_pack_credit_sku_v2(1),
+            ));
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::PackCreditRedemptionV2,
+                false,
+            ));
+            assert_ok!(MockTicketAssets::mint(3, &42, 20));
+
+            let issuance_failure_id = [0xC7; 32];
+            MOCK_PACK_CREDIT_ISSUANCE_FAILS.with(|fails| *fails.borrow_mut() = true);
+            assert_eq!(
+                EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                    RuntimeOrigin::signed(42),
+                    7001,
+                    1,
+                    issuance_failure_id,
+                ),
+                Err(DispatchError::Other("mock pack credit issuance failed"))
+            );
+            assert_eq!(EterraEconomy::ticket_balance(&42), 20);
+            assert!(mock_issued_pack_credits().is_empty());
+            assert!(!ArcadePackCreditRedemptionReceiptsV2::<Test>::contains_key(
+                issuance_failure_id
+            ));
+
+            // Issuance happens before the asset burn, so this also proves the
+            // cross-pallet write is rolled back when payment fails.
+            MOCK_PACK_CREDIT_ISSUANCE_FAILS.with(|fails| *fails.borrow_mut() = false);
+            MOCK_TICKET_BALANCES.with(|balances| balances.borrow_mut().insert(42, 0));
+            let payment_failure_id = [0xD8; 32];
+            assert_eq!(
+                EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                    RuntimeOrigin::signed(42),
+                    7001,
+                    1,
+                    payment_failure_id,
+                ),
+                Err(TokenError::FundsUnavailable.into())
+            );
+            assert!(mock_issued_pack_credits().is_empty());
+            assert_eq!(ArcadePackCreditSkuSoldV2::<Test>::get(7001), 0);
+            assert_eq!(
+                ArcadePackCreditSkuAccountWindowsV2::<Test>::get((7001, 42, 0)),
+                0
+            );
+            assert!(!ArcadePackCreditRedemptionReceiptsV2::<Test>::contains_key(
+                payment_failure_id
+            ));
+
+            ArcadePackCreditSkusV2::<Test>::mutate(7001, |maybe_sku| {
+                maybe_sku.as_mut().expect("SKU exists").total_cap = None;
+            });
+            ArcadePackCreditSkuSoldV2::<Test>::insert(7001, u64::MAX);
+            assert_ok!(MockTicketAssets::mint(3, &42, 20));
+            let overflow_id = [0xE9; 32];
+            assert_noop!(
+                EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                    RuntimeOrigin::signed(42),
+                    7001,
+                    1,
+                    overflow_id,
+                ),
+                Error::<Test>::ArithmeticOverflow
+            );
+            assert_eq!(EterraEconomy::ticket_balance(&42), 20);
+            assert!(mock_issued_pack_credits().is_empty());
+            assert!(!ArcadePackCreditRedemptionReceiptsV2::<Test>::contains_key(
+                overflow_id
+            ));
+        });
+    }
+
+    #[test]
+    fn arcade_prize_redemption_rejects_zero_ids_pauses_access_and_caps() {
+        new_test_ext().execute_with(|| {
+            assert_ok!(EterraEconomy::set_ticket_asset(RuntimeOrigin::root(), 3, 1));
+            let mut sku = arcade_pack_credit_sku_v2(1);
+            sku.total_cap = Some(2);
+            sku.per_account_window_cap = 1;
+            assert_ok!(EterraEconomy::upsert_arcade_pack_credit_sku_v2(
+                RuntimeOrigin::root(),
+                7001,
+                sku,
+            ));
+            assert_ok!(MockTicketAssets::mint(3, &42, 60));
+            assert_ok!(MockTicketAssets::mint(3, &7, 20));
+
+            assert_noop!(
+                EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                    RuntimeOrigin::signed(42),
+                    7001,
+                    1,
+                    [0u8; 32],
+                ),
+                Error::<Test>::InvalidArcadePackCreditRedemptionId
+            );
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::TicketRedemption,
+                false,
+            ));
+            assert_noop!(
+                EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                    RuntimeOrigin::signed(42),
+                    7001,
+                    1,
+                    [1u8; 32],
+                ),
+                Error::<Test>::SubsystemPaused
+            );
+            assert_ok!(EterraEconomy::set_arcade_economy_pause(
+                RuntimeOrigin::root(),
+                PauseDomain::PackCreditRedemptionV2,
+                false,
+            ));
+            assert_noop!(
+                EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                    RuntimeOrigin::signed(99),
+                    7001,
+                    1,
+                    [2u8; 32],
+                ),
+                Error::<Test>::AccountNotEligible
+            );
+            assert_ok!(EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                RuntimeOrigin::signed(42),
+                7001,
+                1,
+                [3u8; 32],
+            ));
+            assert_noop!(
+                EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                    RuntimeOrigin::signed(42),
+                    7001,
+                    1,
+                    [4u8; 32],
+                ),
+                Error::<Test>::PrizeAccountLimitReached
+            );
+            assert_ok!(EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                RuntimeOrigin::signed(7),
+                7001,
+                1,
+                [5u8; 32],
+            ));
+            assert_noop!(
+                EterraEconomy::redeem_arcade_pack_credit_with_tickets_v2(
+                    RuntimeOrigin::signed(8),
+                    7001,
+                    1,
+                    [6u8; 32],
+                ),
+                Error::<Test>::PrizeSoldOut
+            );
+        });
+    }
+
+    #[test]
+    fn arcade_pack_credit_bridge_only_appends_scale_discriminants() {
+        new_test_ext().execute_with(|| {
+            assert_eq!(
+                Call::<Test>::redeem_prize_with_tickets {
+                    sku_id: 1,
+                    expected_version: 1,
+                }
+                .encode()[0],
+                17
+            );
+            assert_eq!(
+                Call::<Test>::purchase_prize_with_native {
+                    target: PurchaseTarget::CatalogSku(1),
+                    expected_version: 1,
+                }
+                .encode()[0],
+                18
+            );
+            assert_eq!(
+                Call::<Test>::upsert_arcade_pack_credit_sku_v2 {
+                    sku_id: 1,
+                    sku: arcade_pack_credit_sku_v2(1),
+                }
+                .encode()[0],
+                19
+            );
+            assert_eq!(
+                Call::<Test>::redeem_arcade_pack_credit_with_tickets_v2 {
+                    sku_id: 1,
+                    expected_version: 1,
+                    redemption_id: [1u8; 32],
+                }
+                .encode()[0],
+                20
+            );
+            assert_eq!(
+                Event::<Test>::PrizePurchased {
+                    account: 42,
+                    target: PurchaseTarget::CatalogSku(1),
+                    native_amount: 1,
+                    card_ids: vec![1].try_into().expect("bounded card ids"),
+                    config_version: 1,
+                }
+                .encode()[0],
+                21
+            );
+            assert_eq!(
+                Event::<Test>::ArcadePackCreditSkuUpdatedV2 {
+                    sku_id: 1,
+                    pack_sku: 1,
+                    pack_sku_version: 1,
+                    economic_realm: EconomicRealm::Training,
+                    policy_version: 1,
+                    config_version: 1,
+                    enabled: true,
+                }
+                .encode()[0],
+                22
+            );
+            assert_eq!(Error::<Test>::PrizeFulfillmentFailed.encode()[0], 27);
+            assert_eq!(
+                Error::<Test>::ArcadePackCreditRedemptionConflict.encode()[0],
+                33
+            );
+            assert_eq!(
+                PackCreditSource::ArcadePrize {
+                    policy_version: 1,
+                    redemption_id: [1u8; 32],
+                }
+                .encode()[0],
+                3
+            );
+            assert_eq!(PauseDomain::TicketRedemption.encode()[0], 2);
+            assert_eq!(PauseDomain::PackCreditRedemptionV2.encode()[0], 5);
         });
     }
 

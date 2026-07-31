@@ -11,6 +11,7 @@ version.workspace    = true
 targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
+eterra-nexus-primitives = { workspace = true }
 # General (wasm)
 log = { workspace = true }
 hex = { workspace = true, features = ["alloc"] }
@@ -30,6 +31,8 @@ pallet-eterra-media = { workspace = true }
 pallet-eterra-seasons = { workspace = true }
 pallet-nfts = { workspace = true }
 pallet-alpha-access = { workspace = true, default-features = false }
+pallet-eterra-creatures = { workspace = true }
+pallet-eterra-randomness = { workspace = true }
 
 [dev-dependencies]
 sp-core = { workspace = true }
@@ -38,6 +41,7 @@ pallet-balances = { workspace = true, features = ["std"] }
 [features]
 default = ["std"]
 std = [
+    "eterra-nexus-primitives/std",
     "parity-scale-codec/std",
     "scale-info/std",
 	"frame-support/std",
@@ -48,6 +52,8 @@ std = [
     "pallet-eterra-seasons/std",
     "pallet-nfts/std",
     "pallet-alpha-access/std",
+    "pallet-eterra-creatures/std",
+    "pallet-eterra-randomness/std",
 ]
 try-runtime = ["frame-support/try-runtime"]
 runtime-benchmarks = [

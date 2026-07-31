@@ -61,10 +61,11 @@ use super::{HandProviderAdapter, UNIT};
 use super::{
     pallet_alpha_access, pallet_cryptostrike, pallet_eterra, pallet_eterra_arcade_aegis_run,
     pallet_eterra_arcade_core, pallet_eterra_arcade_nova_rail, pallet_eterra_arcade_ouro,
-    pallet_eterra_authority, pallet_eterra_card_escrow, pallet_eterra_daily_slots,
-    pallet_eterra_economy, pallet_eterra_faucet, pallet_eterra_flow, pallet_eterra_game_authority,
-    pallet_eterra_gamer, pallet_eterra_media, pallet_eterra_profile, pallet_eterra_seasons,
-    pallet_eterra_simple_matchmaker, pallet_eterra_tcg, pallet_nfts,
+    pallet_eterra_authority, pallet_eterra_card_escrow, pallet_eterra_creatures,
+    pallet_eterra_daily_slots, pallet_eterra_economy, pallet_eterra_faucet, pallet_eterra_flow,
+    pallet_eterra_game_authority, pallet_eterra_game_results, pallet_eterra_gamer,
+    pallet_eterra_magic, pallet_eterra_media, pallet_eterra_profile, pallet_eterra_randomness,
+    pallet_eterra_seasons, pallet_eterra_simple_matchmaker, pallet_eterra_tcg, pallet_nfts,
 };
 // Monte Carlo AI pallet lives at the crate root; bring it in explicitly.
 
@@ -252,59 +253,51 @@ impl pallet_eterra_flow::EconomyProvider<AccountId> for EterraFlowEconomyProvide
     }
 
     fn consume_credit(
-        account: &AccountId,
-        game_id: pallet_eterra_flow::GameId,
-        credit_type: pallet_eterra_flow::CreditTypeId,
-        amount: u64,
+        _account: &AccountId,
+        _game_id: pallet_eterra_flow::GameId,
+        _credit_type: pallet_eterra_flow::CreditTypeId,
+        _amount: u64,
     ) -> DispatchResult {
-        pallet_eterra_economy::Pallet::<Runtime>::try_consume_credit(
-            account,
-            game_id,
-            credit_type,
-            amount,
-        )
+        Err(DispatchError::Other(
+            "Flow economic effects are disabled in Nexus V2 private alpha",
+        ))
     }
 
     fn grant_credit(
-        account: &AccountId,
-        game_id: pallet_eterra_flow::GameId,
-        credit_type: pallet_eterra_flow::CreditTypeId,
-        amount: u64,
+        _account: &AccountId,
+        _game_id: pallet_eterra_flow::GameId,
+        _credit_type: pallet_eterra_flow::CreditTypeId,
+        _amount: u64,
     ) -> DispatchResult {
-        pallet_eterra_economy::Pallet::<Runtime>::try_grant_credit(
-            account,
-            game_id,
-            credit_type,
-            amount,
-        )
+        Err(DispatchError::Other(
+            "Flow economic effects are disabled in Nexus V2 private alpha",
+        ))
     }
 
     fn grant_entitlement(
-        account: &AccountId,
-        game_id: pallet_eterra_flow::GameId,
-        entitlement_id: pallet_eterra_flow::EntitlementId,
+        _account: &AccountId,
+        _game_id: pallet_eterra_flow::GameId,
+        _entitlement_id: pallet_eterra_flow::EntitlementId,
     ) -> DispatchResult {
-        pallet_eterra_economy::Pallet::<Runtime>::try_grant_entitlement(
-            account,
-            game_id,
-            entitlement_id,
-        )
+        Err(DispatchError::Other(
+            "Flow economic effects are disabled in Nexus V2 private alpha",
+        ))
     }
 
     fn revoke_entitlement(
-        account: &AccountId,
-        game_id: pallet_eterra_flow::GameId,
-        entitlement_id: pallet_eterra_flow::EntitlementId,
+        _account: &AccountId,
+        _game_id: pallet_eterra_flow::GameId,
+        _entitlement_id: pallet_eterra_flow::EntitlementId,
     ) -> DispatchResult {
-        pallet_eterra_economy::Pallet::<Runtime>::try_revoke_entitlement(
-            account,
-            game_id,
-            entitlement_id,
-        )
+        Err(DispatchError::Other(
+            "Flow economic effects are disabled in Nexus V2 private alpha",
+        ))
     }
 
-    fn spend_sponsor_funds(game_id: pallet_eterra_flow::GameId, amount: u128) -> DispatchResult {
-        pallet_eterra_economy::Pallet::<Runtime>::try_spend_sponsor_funds(game_id, amount)
+    fn spend_sponsor_funds(_game_id: pallet_eterra_flow::GameId, _amount: u128) -> DispatchResult {
+        Err(DispatchError::Other(
+            "Flow economic effects are disabled in Nexus V2 private alpha",
+        ))
     }
 }
 
@@ -317,6 +310,9 @@ impl pallet_eterra_arcade_core::EconomyProvider<AccountId> for EterraArcadeEcono
         credit_type: pallet_eterra_arcade_core::CreditTypeId,
         amount: u64,
     ) -> DispatchResult {
+        if amount == 0 {
+            return Ok(());
+        }
         pallet_eterra_economy::Pallet::<Runtime>::try_consume_credit(
             account,
             game_id,
@@ -423,6 +419,11 @@ impl pallet_eterra_economy::AccountEligibilityProvider<AccountId>
         )
         .is_ok()
     }
+
+    #[cfg(feature = "runtime-benchmarks")]
+    fn prepare_benchmark_account(_account: &AccountId) {
+        pallet_alpha_access::AccessMode::<Runtime>::put(pallet_alpha_access::GateMode::Open);
+    }
 }
 
 pub struct EterraArcadeRandomness;
@@ -490,6 +491,67 @@ impl pallet_eterra_economy::PrizeFulfillmentProvider<AccountId> for EterraPrizeF
     }
 }
 
+pub struct EterraArcadePackCreditIssuer;
+
+impl pallet_eterra_economy::V2PackCreditIssuer<AccountId> for EterraArcadePackCreditIssuer {
+    fn validate_target(
+        pack_sku: u32,
+        sku_version: u32,
+        realm: eterra_nexus_primitives::EconomicRealm,
+    ) -> DispatchResult {
+        if realm != eterra_nexus_primitives::EconomicRealm::Training {
+            return Err(
+                pallet_eterra_tcg::Error::<Runtime>::V2ProductionAlphaIssuanceDisabled.into(),
+            );
+        }
+        if !pallet_eterra_tcg::PackSkuVersionsV2::<Runtime>::contains_key((pack_sku, sku_version)) {
+            return Err(pallet_eterra_tcg::Error::<Runtime>::V2PackSkuMissing.into());
+        }
+        Ok(())
+    }
+
+    fn issue_pack_credit(
+        owner: &AccountId,
+        pack_sku: u32,
+        sku_version: u32,
+        realm: eterra_nexus_primitives::EconomicRealm,
+        source: eterra_nexus_primitives::PackCreditSource,
+    ) -> DispatchResult {
+        <super::EterraTCG as pallet_eterra_tcg::V2PackCreditManager<AccountId>>::issue_credit(
+            owner,
+            pack_sku,
+            sku_version,
+            realm,
+            source,
+        )
+    }
+
+    #[cfg(feature = "runtime-benchmarks")]
+    fn prepare_benchmark_target(
+        pack_sku: u32,
+        sku_version: u32,
+        _realm: eterra_nexus_primitives::EconomicRealm,
+    ) {
+        pallet_eterra_tcg::PackSkuVersionsV2::<Runtime>::insert(
+            (pack_sku, sku_version),
+            eterra_nexus_primitives::PackSkuVersion {
+                pack_sku,
+                version: sku_version,
+                card_count: eterra_nexus_primitives::PACK_CARD_COUNT,
+                set_id: 1,
+                pool_id: 1,
+                pool_version: 1,
+                rarity_weights: [6_800, 2_200, 750, 200, 50],
+                discovery_policy: eterra_nexus_primitives::DiscoveryPolicy::Standard,
+                odds_metadata_hash: [0u8; 32],
+                immutable_config_hash: [0u8; 32],
+                active_from: 0,
+                active_until: None,
+            },
+        );
+    }
+}
+
 pub struct EterraArcadeAuthorityProvider;
 
 impl pallet_eterra_arcade_core::AuthorityProvider<AccountId> for EterraArcadeAuthorityProvider {
@@ -513,25 +575,31 @@ pub struct EterraFlowProfileProvider;
 
 impl pallet_eterra_flow::ProfileProvider<AccountId> for EterraFlowProfileProvider {
     fn update_passport_counter(
-        account: &AccountId,
-        field_id: pallet_eterra_flow::PassportFieldId,
-        amount: u64,
+        _account: &AccountId,
+        _field_id: pallet_eterra_flow::PassportFieldId,
+        _amount: u64,
     ) -> DispatchResult {
-        pallet_eterra_profile::Pallet::<Runtime>::try_increment_counter(account, field_id, amount)
+        Err(DispatchError::Other(
+            "Flow global profile effects are disabled in Nexus V2 private alpha",
+        ))
     }
 
     fn grant_passport_badge(
-        account: &AccountId,
-        badge_id: pallet_eterra_flow::PassportBadgeId,
+        _account: &AccountId,
+        _badge_id: pallet_eterra_flow::PassportBadgeId,
     ) -> DispatchResult {
-        pallet_eterra_profile::Pallet::<Runtime>::try_grant_badge(account, badge_id)
+        Err(DispatchError::Other(
+            "Flow global profile effects are disabled in Nexus V2 private alpha",
+        ))
     }
 
     fn revoke_passport_badge(
-        account: &AccountId,
-        badge_id: pallet_eterra_flow::PassportBadgeId,
+        _account: &AccountId,
+        _badge_id: pallet_eterra_flow::PassportBadgeId,
     ) -> DispatchResult {
-        pallet_eterra_profile::Pallet::<Runtime>::try_revoke_badge(account, badge_id)
+        Err(DispatchError::Other(
+            "Flow global profile effects are disabled in Nexus V2 private alpha",
+        ))
     }
 }
 
@@ -559,6 +627,18 @@ impl pallet_eterra_tcg::ProgressionAuthorityProvider<AccountId>
         pallet_eterra_authority::Pallet::<Runtime>::resolve_authority(
             account, game_id, version_id, event_type,
         )
+    }
+}
+
+pub struct TcgLegacyEscrowOwnerProvider;
+
+impl pallet_eterra_tcg::LegacyEscrowOwnerProvider<AccountId> for TcgLegacyEscrowOwnerProvider {
+    fn beneficial_owner(card_id: u32) -> Option<AccountId> {
+        pallet_eterra_card_escrow::EscrowEntries::<Runtime>::get(card_id).map(|entry| entry.owner)
+    }
+
+    fn custodian_account() -> Option<AccountId> {
+        Some(pallet_eterra_card_escrow::Pallet::<Runtime>::account_id())
     }
 }
 
@@ -624,6 +704,11 @@ impl pallet_eterra_game_authority::GameLifecycleHooks<AccountId> for EscrowGameL
         _server: &AccountId,
         _players: &[AccountId],
     ) -> DispatchResult {
+        if pallet_eterra_tcg::LegacyWritesPausedV16::<Runtime>::get() {
+            return Err(DispatchError::Other(
+                "legacy game creation is paused during TCG V16 migration",
+            ));
+        }
         pallet_eterra_card_escrow::Pallet::<Runtime>::handle_game_created(game_id)
     }
 
@@ -684,9 +769,133 @@ pub struct EterraRuntimeCallFilter;
 
 impl Contains<RuntimeCall> for EterraRuntimeCallFilter {
     fn contains(call: &RuntimeCall) -> bool {
-        let Some(ticket) = pallet_eterra_economy::TicketAsset::<Runtime>::get() else {
-            return true;
-        };
+        // Flow V0 remains byte/storage compatible at pallet 29, but its
+        // current public authoring surface has zero-deposit state growth and
+        // legacy Economy/Profile effects. The extracted Blockchainia product
+        // and builder remain testable; Eterra private alpha keeps the adapter
+        // read-only until bounded admission and benchmarked weights ship.
+        if matches!(call, RuntimeCall::EterraFlow(_)) {
+            return false;
+        }
+
+        // Legacy Media lets any signer create zero-deposit collections and
+        // append unbounded records. Nexus V2 uses immutable, hash-pinned media
+        // manifests and TCG catalog definitions instead.
+        if matches!(call, RuntimeCall::EterraMedia(_)) {
+            return false;
+        }
+
+        // The legacy ring-buffer matchmaker can accumulate tombstones and
+        // execute a 1,024-slot scan behind constant weights. Unity V2 uses the
+        // authority/session service, so retire this public pallet surface.
+        if matches!(call, RuntimeCall::EterraSimpleMatchMaker(_)) {
+            return false;
+        }
+
+        // The legacy CryptoStrike economy can mint native balances from
+        // server-authored settlements without the bounded V2 reward budget.
+        // Keep only owner-controlled recovery exits for preexisting stake and
+        // allowance state; all issuance, registration and gameplay writes are
+        // fail-closed.
+        if let RuntimeCall::CryptoStrike(inner) = call {
+            return matches!(
+                inner,
+                pallet_cryptostrike::Call::request_unstake { .. }
+                    | pallet_cryptostrike::Call::finalize_unstake { .. }
+                    | pallet_cryptostrike::Call::revoke_server_allowance { .. }
+            );
+        }
+
+        // Public native faucets and all public paid/transfer marketplace
+        // surfaces remain disabled for the economically valueless alpha.
+        if matches!(
+            call,
+            RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { .. })
+                | RuntimeCall::EterraTCG(
+                    pallet_eterra_tcg::Call::set_price { .. }
+                        | pallet_eterra_tcg::Call::buy_card { .. }
+                        | pallet_eterra_tcg::Call::buy_card_capacity { .. }
+                )
+                | RuntimeCall::EterraEconomy(
+                    pallet_eterra_economy::Call::consume_credit { .. }
+                        | pallet_eterra_economy::Call::fulfill_product { .. }
+                        | pallet_eterra_economy::Call::claim_arcade_credit { .. }
+                        | pallet_eterra_economy::Call::transfer_tickets { .. }
+                        | pallet_eterra_economy::Call::redeem_prize_with_tickets { .. }
+                        | pallet_eterra_economy::Call::purchase_prize_with_native { .. }
+                )
+                | RuntimeCall::EterraArcadeCore(
+                    pallet_eterra_arcade_core::Call::start_run { .. }
+                        | pallet_eterra_arcade_core::Call::pay_continue { .. }
+                )
+                | RuntimeCall::EterraArcadeNovaRail(
+                    pallet_eterra_arcade_nova_rail::Call::pay_continue { .. }
+                )
+        ) {
+            return false;
+        }
+
+        // Legacy extraction rewards are economically valueless in private
+        // alpha. Keep custody deposits/withdrawals available, but reject both
+        // native-mint reward extrinsics.
+        if matches!(
+            call,
+            RuntimeCall::EterraCardEscrow(
+                pallet_eterra_card_escrow::Call::record_enemy_defeat_with_event_id { .. }
+                    | pallet_eterra_card_escrow::Call::record_enemy_elimination_with_event_id { .. }
+            )
+        ) {
+            return false;
+        }
+
+        // The legacy GameAuthority/CardEscrow FPS lane is retired. Preserve
+        // end-game recovery, deposits and withdrawals, but do not admit new
+        // games or elimination writes after the V2 cutover.
+        if matches!(
+            call,
+            RuntimeCall::EterraGameAuthority(
+                pallet_eterra_game_authority::Call::create_game_with_round_id { .. }
+                    | pallet_eterra_game_authority::Call::record_eliminations_with_event_id { .. }
+            )
+        ) {
+            return false;
+        }
+
+        // DailySlots remains legacy presentation code; its public positive-EV
+        // native faucet is disabled for the economically valueless alpha.
+        if matches!(
+            call,
+            RuntimeCall::EterraDailySlots(pallet_eterra_daily_slots::Call::roll { .. })
+        ) {
+            return false;
+        }
+
+        // Upstream pallet-node-authorization 38 exposes unbounded public
+        // connection vectors behind flat weights. Eterra only needs the four
+        // governance-managed well-known-node calls, so claims and connection
+        // mutation remain fail-closed at the runtime boundary.
+        if matches!(
+            call,
+            RuntimeCall::NodeAuthorization(
+                pallet_node_authorization::Call::claim_node { .. }
+                    | pallet_node_authorization::Call::remove_claim { .. }
+                    | pallet_node_authorization::Call::transfer_node { .. }
+                    | pallet_node_authorization::Call::add_connections { .. }
+                    | pallet_node_authorization::Call::remove_connections { .. }
+            )
+        ) {
+            return false;
+        }
+
+        // pallet-nfts is configured with zero storage deposits. Its complete
+        // public call surface is disabled to prevent free state growth,
+        // transfers, markets, or custody-index bypass. TCG uses custody-aware
+        // internal `do_create`/`do_mint` and call 59 for wrapped transfers.
+        // Governance retains explicit `dispatch_bypass_filter` recovery.
+        if matches!(call, RuntimeCall::Nfts(_)) {
+            return false;
+        }
+
         match call {
             RuntimeCall::Assets(pallet_assets::Call::transfer { id, .. })
             | RuntimeCall::Assets(pallet_assets::Call::transfer_keep_alive { id, .. })
@@ -695,7 +904,13 @@ impl Contains<RuntimeCall> for EterraRuntimeCallFilter {
             | RuntimeCall::Assets(pallet_assets::Call::cancel_approval { id, .. })
             | RuntimeCall::Assets(pallet_assets::Call::transfer_approved { id, .. })
             | RuntimeCall::Assets(pallet_assets::Call::transfer_all { id, .. }) => {
-                *id != ticket.asset_id
+                // Raw fungible transfers are disabled for private alpha. The
+                // Economy pallet may still mint/burn valueless Tickets through
+                // its internal typed adapter. Avoid a dynamic TicketAsset
+                // storage read in BaseCallFilter, which would otherwise be
+                // uncharged on every dispatch.
+                let _ = id;
+                false
             }
             _ => true,
         }
@@ -801,90 +1016,9 @@ parameter_types! {
     pub FeeMultiplier: Multiplier = Multiplier::one();
 }
 
-// --- Make faucet.claim feeless by customizing OnChargeTransaction ---
-use pallet_transaction_payment::OnChargeTransaction;
-#[cfg(feature = "runtime-production")]
-use sp_runtime::traits::Zero;
-use sp_runtime::traits::{DispatchInfoOf, PostDispatchInfoOf};
-use sp_runtime::transaction_validity::TransactionValidityError;
-
-pub struct FreeFaucetOrCurrencyAdapter;
-
-impl OnChargeTransaction<Runtime> for FreeFaucetOrCurrencyAdapter {
-    type Balance = Balance;
-    type LiquidityInfo =
-        <pallet_transaction_payment::FungibleAdapter<Balances, ()> as OnChargeTransaction<
-            Runtime,
-        >>::LiquidityInfo;
-
-    fn withdraw_fee(
-        who: &AccountId,
-        call: &RuntimeCall,
-        info: &DispatchInfoOf<RuntimeCall>,
-        fee: Self::Balance,
-        tip: Self::Balance,
-    ) -> Result<Self::LiquidityInfo, TransactionValidityError> {
-        #[cfg(not(feature = "runtime-production"))]
-        {
-            // Dev/test mode: sponsor all self-claims for fast onboarding/testing.
-            if let RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { dest }) = call {
-                if dest == who {
-                    System::deposit_event(RuntimeEvent::EterraFaucet(
-                        pallet_eterra_faucet::Event::<Runtime>::FeeSponsorshipApplied {
-                            who: who.clone(),
-                        },
-                    ));
-                    return Ok(Default::default());
-                }
-            }
-        }
-
-        #[cfg(feature = "runtime-production")]
-        {
-            // Production mode: sponsor only capped self-claims where signer cannot
-            // afford normal fee withdrawal, and only with zero tip.
-            if let RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { dest }) = call {
-                let now = System::block_number();
-                let sponsored_ok = pallet_eterra_faucet::Pallet::<Runtime>::can_receive_sponsored_claim_pre_dispatch(who, now, fee);
-                if dest == who && sponsored_ok && tip.is_zero() {
-                    System::deposit_event(RuntimeEvent::EterraFaucet(
-                        pallet_eterra_faucet::Event::<Runtime>::FeeSponsorshipApplied {
-                            who: who.clone(),
-                        },
-                    ));
-                    return Ok(Default::default());
-                }
-            }
-        }
-
-        // Otherwise delegate to the default adapter.
-        <pallet_transaction_payment::FungibleAdapter<Balances, ()> as OnChargeTransaction<
-            Runtime,
-        >>::withdraw_fee(who, call, info, fee, tip)
-    }
-
-    fn correct_and_deposit_fee(
-        who: &AccountId,
-        info: &DispatchInfoOf<RuntimeCall>,
-        post_info: &PostDispatchInfoOf<RuntimeCall>,
-        corrected_fee: Self::Balance,
-        tip: Self::Balance,
-        paid: Self::LiquidityInfo,
-    ) -> Result<(), TransactionValidityError> {
-        // If we skipped withdrawing (paid is default/None), do nothing on deposit.
-        if paid == Default::default() {
-            return Ok(());
-        }
-        // Otherwise delegate to the default adapter.
-        <pallet_transaction_payment::FungibleAdapter<Balances, ()> as OnChargeTransaction<
-            Runtime,
-        >>::correct_and_deposit_fee(who, info, post_info, corrected_fee, tip, paid)
-    }
-}
-
 impl pallet_transaction_payment::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    type OnChargeTransaction = FreeFaucetOrCurrencyAdapter;
+    type OnChargeTransaction = pallet_transaction_payment::FungibleAdapter<Balances, ()>;
     type OperationalFeeMultiplier = ConstU8<5>;
     type WeightToFee = IdentityFee<Balance>;
     type LengthToFee = IdentityFee<Balance>;
@@ -972,9 +1106,7 @@ pub struct TreasuryBenchHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
 impl pallet_treasury::ArgumentsFactory<(), AccountId> for TreasuryBenchHelper {
-    fn create_asset_kind(_: u32) -> () {
-        ()
-    }
+    fn create_asset_kind(_: u32) {}
 
     fn create_beneficiary(seed: [u8; 32]) -> AccountId {
         AccountId::from(seed)
@@ -1015,7 +1147,56 @@ impl pallet_node_authorization::Config for Runtime {
     type SwapOrigin = PrivilegedControlOrigin;
     type ResetOrigin = PrivilegedControlOrigin;
 
-    type WeightInfo = ();
+    type WeightInfo = EterraNodeAuthorizationWeights;
+}
+
+pub struct EterraNodeAuthorizationWeights;
+
+impl pallet_node_authorization::WeightInfo for EterraNodeAuthorizationWeights {
+    fn add_well_known_node() -> Weight {
+        Weight::from_parts(100_000_000_000, 65_536)
+            .saturating_add(RocksDbWeight::get().reads(1))
+            .saturating_add(RocksDbWeight::get().writes(2))
+    }
+
+    fn remove_well_known_node() -> Weight {
+        Weight::from_parts(100_000_000_000, 65_536)
+            .saturating_add(RocksDbWeight::get().reads(1))
+            .saturating_add(RocksDbWeight::get().writes(3))
+    }
+
+    fn swap_well_known_node() -> Weight {
+        Weight::from_parts(150_000_000_000, 131_072)
+            .saturating_add(RocksDbWeight::get().reads(3))
+            .saturating_add(RocksDbWeight::get().writes(5))
+    }
+
+    fn reset_well_known_nodes() -> Weight {
+        // Fixed worst-case bound for fewer than MaxWellKnownNodes (128).
+        Weight::from_parts(1_000_000_000_000, 4_000_000)
+            .saturating_add(RocksDbWeight::get().reads(1))
+            .saturating_add(RocksDbWeight::get().writes(129))
+    }
+
+    fn claim_node() -> Weight {
+        Weight::MAX
+    }
+
+    fn remove_claim() -> Weight {
+        Weight::MAX
+    }
+
+    fn transfer_node() -> Weight {
+        Weight::MAX
+    }
+
+    fn add_connections() -> Weight {
+        Weight::MAX
+    }
+
+    fn remove_connections() -> Weight {
+        Weight::MAX
+    }
 }
 
 #[derive(Clone, TypeInfo)]
@@ -1063,17 +1244,17 @@ parameter_types! {
 
     // Payout is 1000 whole tokens (adjust UNIT to your decimals)
     pub FaucetPayoutAmount: Balance = 1_000 * UNIT;
-    pub RewardPerWinAmount: Balance = 100 * UNIT;
+    pub RewardPerWinAmount: Balance = 0;
 
     // `pallet-assets` ids for additional fungible currencies.
     pub const DevCoinAssetId: u32 = 1;
     pub const BetaCoinAssetId: u32 = 2;
 
     // Per-win rewards for the Eterra game.
-    pub EterraWinRewardCoin: Balance = 10 * UNIT;
-    pub EterraWinRewardDevCoin: Balance = 100 * UNIT;
-    pub EterraWinRewardBetaCoin: Balance = 100 * UNIT;
-    pub const EterraWinRewardExperience: u128 = 100;
+    pub EterraWinRewardCoin: Balance = 0;
+    pub EterraWinRewardDevCoin: Balance = 0;
+    pub EterraWinRewardBetaCoin: Balance = 0;
+    pub const EterraWinRewardExperience: u128 = 0;
 }
 
 #[cfg(not(feature = "runtime-production"))]
@@ -1107,12 +1288,70 @@ parameter_types! {
     pub const AvatarCidMaxLen: u32 = 96; // or 128
     pub const GamerRegionCodeMaxLen: u32 = 2;
     pub const SteamLinkSignatureMaxLen: u32 = 64;
-    pub const GamerChangeFee: Balance = 100 * UNIT;
+    pub const GamerChangeFee: Balance = 0;
+    pub const MaxV2XpGrant: u128 = 1_000_000;
+    pub const MaxPackCreditsPerAllocation: u32 = 16;
 }
+
+#[cfg(feature = "runtime-benchmarks")]
+type V2OwnerAccessControl = ();
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+type V2OwnerAccessControl = super::AlphaAccess;
+
+pub struct TcgPackCreditIssuer;
+
+impl pallet_eterra_gamer::PackCreditIssuer<AccountId> for TcgPackCreditIssuer {
+    fn issue_pack_credit(
+        owner: &AccountId,
+        pack_sku: u32,
+        sku_version: u32,
+        realm: eterra_nexus_primitives::EconomicRealm,
+        source: eterra_nexus_primitives::PackCreditSource,
+    ) -> DispatchResult {
+        <super::EterraTCG as pallet_eterra_tcg::V2PackCreditManager<AccountId>>::issue_credit(
+            owner,
+            pack_sku,
+            sku_version,
+            realm,
+            source,
+        )
+    }
+}
+
+pub struct TcgPackTrackCatalogPolicy;
+
+impl pallet_eterra_gamer::PackTrackCatalogPolicy for TcgPackTrackCatalogPolicy {
+    fn ensure_earned_pack_sku(pack_sku: u32, sku_version: u32) -> DispatchResult {
+        let sku = pallet_eterra_tcg::PackSkuVersionsV2::<Runtime>::get((pack_sku, sku_version))
+            .ok_or(DispatchError::Other("pack SKU missing"))?;
+        if sku.discovery_policy != eterra_nexus_primitives::DiscoveryPolicy::Earned {
+            return Err(DispatchError::Other("pack SKU is not Earned"));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct BenchmarkPackTrackCatalogPolicy;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_eterra_gamer::PackTrackCatalogPolicy for BenchmarkPackTrackCatalogPolicy {
+    fn ensure_earned_pack_sku(_pack_sku: u32, _sku_version: u32) -> DispatchResult {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+type RuntimePackTrackCatalogPolicy = BenchmarkPackTrackCatalogPolicy;
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+type RuntimePackTrackCatalogPolicy = TcgPackTrackCatalogPolicy;
+
 impl pallet_eterra_gamer::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Currency = Balances;
-    type AccessControl = super::AlphaAccess;
+    type AccessControl = V2OwnerAccessControl;
     type ExpIssuerOrigin = PrivilegedControlOrigin;
     type AdminOrigin = PrivilegedControlOrigin;
     type FaucetAccount = TreasuryAccount;
@@ -1122,7 +1361,248 @@ impl pallet_eterra_gamer::Config for Runtime {
     type MaxAvatarCidLen = AvatarCidMaxLen;
     type MaxRegionCodeLen = GamerRegionCodeMaxLen;
     type MaxSteamLinkSignatureLen = SteamLinkSignatureMaxLen;
+    type PackCreditIssuer = TcgPackCreditIssuer;
+    type PackTrackCatalogPolicy = RuntimePackTrackCatalogPolicy;
+    type MaxV2XpGrant = MaxV2XpGrant;
+    type MaxPackCreditsPerAllocation = MaxPackCreditsPerAllocation;
     type WeightInfo = pallet_eterra_gamer::weights::SubstrateWeight<Runtime>;
+}
+
+/// The verifier pins Quicknet's chain hash and public key in no-std code.
+/// Activation remains fail-closed behind `CryptographyReviewApproved`; passing
+/// interoperability vectors is not a substitute for external review.
+pub struct PinnedDrandQuicknetVerifier;
+
+impl pallet_eterra_randomness::DrandProofVerifier for PinnedDrandQuicknetVerifier {
+    fn verify_quicknet(
+        chain_hash: &eterra_nexus_primitives::Hash32,
+        round: u64,
+        raw_signature: &[u8],
+    ) -> Option<eterra_nexus_primitives::Hash32> {
+        if chain_hash != &eterra_drand_quicknet::QUICKNET_CHAIN_HASH {
+            return None;
+        }
+        eterra_drand_quicknet::verify_and_derive(round, raw_signature)
+    }
+}
+
+parameter_types! {
+    pub const RandomnessMinFutureEpochs: u64 = 4;
+    pub const RandomnessMinAlphaDelayBlocks: BlockNumber = 2;
+    pub const RandomnessRequestTimeoutBlocks: BlockNumber = 7 * DAYS;
+    pub const RandomnessBeaconStaleAfterBlocks: BlockNumber = 5;
+    pub const RandomnessMaxCheckpointLagRounds: u64 = 10;
+    pub const RandomnessMaxSignatureBytes: u32 = 48;
+}
+
+pub struct RuntimeRandomnessChainContext;
+
+impl pallet_eterra_randomness::RandomnessChainContextProvider for RuntimeRandomnessChainContext {
+    fn genesis_hash() -> eterra_nexus_primitives::Hash32 {
+        *System::block_hash(0).as_fixed_bytes()
+    }
+
+    fn pallet_instance_id() -> u8 {
+        35
+    }
+}
+
+impl pallet_eterra_randomness::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type AdminOrigin = PrivilegedControlOrigin;
+    type ChainContext = RuntimeRandomnessChainContext;
+    type DrandVerifier = PinnedDrandQuicknetVerifier;
+    type MinFutureEpochs = RandomnessMinFutureEpochs;
+    type MinAlphaDelayBlocks = RandomnessMinAlphaDelayBlocks;
+    type RequestTimeoutBlocks = RandomnessRequestTimeoutBlocks;
+    type BeaconStaleAfterBlocks = RandomnessBeaconStaleAfterBlocks;
+    type MaxCheckpointLagRounds = RandomnessMaxCheckpointLagRounds;
+    type UnixTime = Timestamp;
+    type MaxSignatureBytes = RandomnessMaxSignatureBytes;
+    type WeightInfo = pallet_eterra_randomness::weights::SubstrateWeight<Runtime>;
+}
+
+parameter_types! {
+    pub const MaxEntityLearnedMoves: u32 = 12;
+    pub const MaxEntityEquippedMoves: u32 = 4;
+    pub const MaxEntityProfileMoves: u32 = 48;
+    pub const MaxEntityLeagueAllowedMoves: u32 = 48;
+    pub const MaxEntityExperienceGrant: u64 = 1_000_000;
+}
+
+impl pallet_eterra_creatures::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type AdminOrigin = PrivilegedControlOrigin;
+    type ResultOrigin = PrivilegedControlOrigin;
+    type AccessControl = V2OwnerAccessControl;
+    type Essence = super::EterraMagic;
+    type MaxLearnedMoves = MaxEntityLearnedMoves;
+    type MaxEquippedMoves = MaxEntityEquippedMoves;
+    type MaxProfileMoves = MaxEntityProfileMoves;
+    type MaxLeagueAllowedMoves = MaxEntityLeagueAllowedMoves;
+    type MaxExperienceGrant = MaxEntityExperienceGrant;
+    type WeightInfo = pallet_eterra_creatures::weights::SubstrateWeight<Runtime>;
+}
+
+parameter_types! {
+    pub const MaxChargeDefinitionsPerSession: u32 = 12;
+    pub const MaxMagicCraftBatch: u32 = 10;
+    pub const MaxPrismXpGrant: u64 = 1_000_000;
+}
+
+impl pallet_eterra_magic::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type AdminOrigin = PrivilegedControlOrigin;
+    type AccessControl = V2OwnerAccessControl;
+    type Currency = Balances;
+    type CraftingFeeDestination = TreasuryAccount;
+    type ProductionCraftingEnabled = ConstBool<false>;
+    type MaxChargeDefinitionsPerSession = MaxChargeDefinitionsPerSession;
+    type MaxCraftBatch = MaxMagicCraftBatch;
+    type MaxPrismXpGrant = MaxPrismXpGrant;
+    type WeightInfo = pallet_eterra_magic::weights::SubstrateWeight<Runtime>;
+}
+
+pub struct RuntimeGenesisHashProvider;
+
+impl pallet_eterra_game_results::GenesisHashProvider for RuntimeGenesisHashProvider {
+    fn genesis_hash() -> eterra_nexus_primitives::Hash32 {
+        *System::block_hash(0).as_fixed_bytes()
+    }
+}
+
+impl pallet_eterra_tcg::V2ChainDomainProvider for RuntimeGenesisHashProvider {
+    fn genesis_hash() -> eterra_nexus_primitives::Hash32 {
+        *System::block_hash(0).as_fixed_bytes()
+    }
+}
+
+pub struct RuntimeResultSignatureVerifier;
+
+impl pallet_eterra_game_results::ServerSignatureVerifier for RuntimeResultSignatureVerifier {
+    fn verify(
+        public_key: &[u8; 32],
+        payload_hash: &eterra_nexus_primitives::Hash32,
+        signature: &[u8],
+    ) -> bool {
+        #[cfg(feature = "runtime-benchmarks")]
+        if *public_key == [38; 32]
+            && signature.len() == 64
+            && signature[..32] == payload_hash[..]
+            && signature[32..] == [38; 32]
+        {
+            // A deterministic benchmark-only witness avoids relying on native
+            // keystore/signing APIs in the Wasm benchmark runtime. Production
+            // builds do not compile this branch.
+            return true;
+        }
+        let Ok(raw_signature) = <[u8; 64]>::try_from(signature) else {
+            return false;
+        };
+        let signature = sp_core::sr25519::Signature::from_raw(raw_signature);
+        let public_key = sp_core::sr25519::Public::from_raw(*public_key);
+        sp_io::crypto::sr25519_verify(&signature, payload_hash, &public_key)
+    }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct GameResultsBenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_eterra_game_results::BenchmarkHelper for GameResultsBenchmarkHelper {
+    fn authority_public_key() -> [u8; 32] {
+        [38; 32]
+    }
+
+    fn sign_result(payload_hash: &eterra_nexus_primitives::Hash32) -> Vec<u8> {
+        let mut witness = Vec::with_capacity(64);
+        witness.extend_from_slice(payload_hash);
+        witness.extend_from_slice(&[38; 32]);
+        witness
+    }
+
+    fn seed_finalized_randomness(
+        request_id: eterra_nexus_primitives::Hash32,
+        output: eterra_nexus_primitives::Hash32,
+    ) {
+        pallet_eterra_randomness::Outputs::<Runtime>::insert(
+            request_id,
+            pallet_eterra_randomness::VerifiedRandomnessOutput {
+                epoch: 1,
+                output,
+                proof_hash: [39; 32],
+                finalized_at: System::block_number(),
+                deterministic_alpha: true,
+            },
+        );
+    }
+
+    fn seed_timed_out_randomness(request_id: eterra_nexus_primitives::Hash32) {
+        let now = System::block_number();
+        pallet_eterra_randomness::Requests::<Runtime>::insert(
+            request_id,
+            pallet_eterra_randomness::RandomnessRequest {
+                request_id,
+                domain: [40; 32],
+                commitment: [41; 32],
+                immutable_config_hash: [42; 32],
+                exact_epoch: 1,
+                requested_at: now,
+                not_before: now,
+                timeout_at: now,
+                mode: pallet_eterra_randomness::RandomnessMode::DeterministicPrivateAlpha,
+                status: pallet_eterra_randomness::RequestStatus::TimedOut,
+            },
+        );
+    }
+}
+
+parameter_types! {
+    pub const GameResultsPalletInstanceId: u8 = 38;
+    pub const MaxSessionEntities: u32 = 3;
+    pub const MaxSessionPrisms: u32 = 4;
+    pub const MaxSessionChargeDefinitions: u32 = 12;
+    pub const MaxResultSignatureBytes: u32 = 64;
+    pub const MaxActiveSessionsPerAccount: u32 = 4;
+    pub const MaxActiveSessionsPerAuthority: u32 = 64;
+    pub const MaxSessionAuthorizationReceiptsPerEpoch: u32 = 256;
+    pub const MaxPendingDropsPerAccount: u32 = 4;
+    pub const MaxGameSessionLifetime: BlockNumber = 2 * HOURS;
+    pub const GameSessionExpiryGrace: BlockNumber = 10;
+    pub const ResultEpochSize: u64 = 256;
+    pub const MaxResultsPerEpoch: u32 = 1_024;
+    pub const ResultDisputeWindow: BlockNumber = 7 * DAYS;
+    pub const RewardDayBlocks: u64 = DAYS as u64;
+}
+
+impl pallet_eterra_game_results::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type AdminOrigin = PrivilegedControlOrigin;
+    type AccessControl = V2OwnerAccessControl;
+    type SignatureVerifier = RuntimeResultSignatureVerifier;
+    type Entities = super::EterraCreatures;
+    type Magic = super::EterraMagic;
+    type PlayerProgression = super::EterraGamer;
+    type Randomness = super::EterraRandomness;
+    type GenesisHashProvider = RuntimeGenesisHashProvider;
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHelper = GameResultsBenchmarkHelper;
+    type PalletInstanceId = GameResultsPalletInstanceId;
+    type MaxSessionEntities = MaxSessionEntities;
+    type MaxSessionPrisms = MaxSessionPrisms;
+    type MaxChargeDefinitions = MaxSessionChargeDefinitions;
+    type MaxSignatureBytes = MaxResultSignatureBytes;
+    type MaxActiveSessionsPerAccount = MaxActiveSessionsPerAccount;
+    type MaxActiveSessionsPerAuthority = MaxActiveSessionsPerAuthority;
+    type MaxSessionAuthorizationReceiptsPerEpoch = MaxSessionAuthorizationReceiptsPerEpoch;
+    type MaxPendingDropsPerAccount = MaxPendingDropsPerAccount;
+    type MaxSessionLifetime = MaxGameSessionLifetime;
+    type ExpiryGrace = GameSessionExpiryGrace;
+    type ResultEpochSize = ResultEpochSize;
+    type MaxResultsPerEpoch = MaxResultsPerEpoch;
+    type ResultDisputeWindow = ResultDisputeWindow;
+    type RewardDayBlocks = RewardDayBlocks;
+    type WeightInfo = pallet_eterra_game_results::weights::SubstrateWeight<Runtime>;
 }
 
 #[cfg(feature = "runtime-benchmarks")]
@@ -1133,11 +1613,12 @@ impl pallet_eterra_monte_carlo_ai::BenchmarkHelper<eterra_card_ai_adapter::eterr
     for MonteCarloBenchHelper
 {
     fn bench_state() -> eterra_card_ai_adapter::eterra_adapter::State {
-        let mut s = eterra_card_ai_adapter::eterra_adapter::State::default();
-        s.max_rounds = 1;
-        s.round = 0;
-        s.player_turn = 0;
-        s
+        eterra_card_ai_adapter::eterra_adapter::State {
+            max_rounds: 1,
+            round: 0,
+            player_turn: 0,
+            ..Default::default()
+        }
     }
 }
 
@@ -1162,6 +1643,7 @@ impl pallet_eterra_game_authority::Config for Runtime {
     type MaxOutcomeLen = frame_support::traits::ConstU32<128>;
     type AdminOrigin = PrivilegedControlOrigin;
     type MaxExpirationsPerBlock = MaxExpirationsPerBlock;
+    type MaxScheduledExpirationsPerBlock = ConstU32<8>;
     // If your BlockNumber is u32/u64, set 30 blocks:
     type MaxRoundBlocks = frame_support::traits::ConstU32<30>;
     // or, if BlockNumber is u64:
@@ -1177,7 +1659,7 @@ impl pallet_eterra_card_escrow::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type AccessControl = super::AlphaAccess;
     type Currency = Balances;
-    type RewardAmount = ConstU128<{ 100 * UNIT }>;
+    type RewardAmount = ConstU128<0>;
     type MaxEscrowedPerOwner = ConstU32<5>;
     type MaxReservedPerGame = ConstU32<5>;
     type MaxEventIdLen = ConstU32<128>;
@@ -1195,7 +1677,7 @@ impl pallet_alpha_access::Config for Runtime {
     type AdminOrigin = PrivilegedControlOrigin;
     type TimeProvider = Timestamp;
     type MaxRevokeReasonLen = AlphaAccessMaxRevokeReasonLen;
-    type WeightInfo = ();
+    type WeightInfo = pallet_alpha_access::weights::SubstrateWeight<Runtime>;
 }
 
 impl pallet_cryptostrike::Config for Runtime {
@@ -1212,7 +1694,7 @@ impl pallet_cryptostrike::Config for Runtime {
     type StakeLedger = CryptoStrikeNativeStakeLedger;
     type ServerSignatureVerifier = CryptoStrikeAlphaSignatureVerifier;
     type IdentityProvider = CryptoStrikeGamerIdentityProvider;
-    type WeightInfo = ();
+    type WeightInfo = pallet_cryptostrike::weights::SubstrateWeight<Runtime>;
 }
 
 parameter_types! {
@@ -1248,6 +1730,7 @@ impl pallet_eterra_economy::Config for Runtime {
     type TicketAssets = EterraTicketAssetProvider;
     type NativePayments = EterraNativePaymentProvider;
     type PrizeFulfillment = EterraPrizeFulfillmentProvider;
+    type PackCreditIssuer = EterraArcadePackCreditIssuer;
     type AccountEligibility = EterraArcadeAccountEligibility;
     type RandomnessProvider = EterraArcadeRandomness;
     type ArcadeCreditFaucetGameId = EterraEconomyArcadeCreditFaucetGameId;
@@ -1378,6 +1861,7 @@ impl pallet_eterra_daily_slots::Config for Runtime {
     type MaxDrawingEntries = MaxDrawingEntries;
     type Currency = Balances;
     type RewardPerWin = RewardPerWinAmount; // defined below
+    type DrawingsEnabled = ConstBool<false>;
     type WeightInfo = pallet_eterra_daily_slots::weights::SubstrateWeight<Runtime>;
 }
 
@@ -1417,13 +1901,108 @@ type MatchmakerHandProvider = BenchmarkHandProvider;
 #[cfg(not(feature = "runtime-benchmarks"))]
 type MatchmakerHandProvider = HandProviderAdapter;
 
+#[cfg(feature = "runtime-benchmarks")]
+type TcgAccessControl = ();
+
+#[cfg(not(feature = "runtime-benchmarks"))]
+type TcgAccessControl = super::AlphaAccess;
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct TcgV2BenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_eterra_tcg::V2BenchmarkHelper for TcgV2BenchmarkHelper {
+    fn prepare_randomness() {
+        pallet_eterra_randomness::CurrentMode::<Runtime>::put(
+            pallet_eterra_randomness::RandomnessMode::DeterministicPrivateAlpha,
+        );
+    }
+
+    fn seed_finalized_randomness(
+        request_id: eterra_nexus_primitives::Hash32,
+        output: eterra_nexus_primitives::Hash32,
+    ) {
+        pallet_eterra_randomness::Outputs::<Runtime>::insert(
+            request_id,
+            pallet_eterra_randomness::VerifiedRandomnessOutput {
+                epoch: 1,
+                output,
+                proof_hash: [71; 32],
+                finalized_at: System::block_number(),
+                deterministic_alpha: true,
+            },
+        );
+    }
+
+    fn seed_timed_out_randomness(request_id: eterra_nexus_primitives::Hash32) {
+        let now = System::block_number();
+        pallet_eterra_randomness::Requests::<Runtime>::insert(
+            request_id,
+            pallet_eterra_randomness::RandomnessRequest {
+                request_id,
+                domain: [72; 32],
+                commitment: [73; 32],
+                immutable_config_hash: [74; 32],
+                exact_epoch: 1,
+                requested_at: now,
+                not_before: now,
+                timeout_at: now,
+                mode: pallet_eterra_randomness::RandomnessMode::DeterministicPrivateAlpha,
+                status: pallet_eterra_randomness::RequestStatus::TimedOut,
+            },
+        );
+    }
+
+    fn prepare_conversion_entity_profile(
+        subject_id: u32,
+        subject_version: u32,
+        rarity: eterra_nexus_primitives::CardRarity,
+    ) {
+        let profile_id = 50_000u32
+            .saturating_add(subject_id.saturating_mul(5))
+            .saturating_add(rarity.index() as u32);
+        pallet_eterra_creatures::CpLevelCurves::<Runtime>::insert(
+            1,
+            pallet_eterra_creatures::CpLevelCurve {
+                version: 1,
+                ratios_bps: [10_000; 50],
+                curve_hash: [75; 32],
+            },
+        );
+        pallet_eterra_creatures::EntityProfiles::<Runtime>::insert(
+            subject_id,
+            rarity,
+            eterra_nexus_primitives::EntityProfile {
+                profile_id,
+                subject_id,
+                subject_version,
+                rarity,
+                role: eterra_nexus_primitives::EntityRole::Hero,
+                base_combat_stats: [10; 6],
+                base_max_cp: 1_000,
+                genetic_cp_span: 600,
+                starter_moves: [1, 2],
+                formula_version: 1,
+                definition_hash: [76; 32],
+            },
+        );
+        pallet_eterra_creatures::EntityProfileActivation::<Runtime>::insert(profile_id, true);
+    }
+}
+
 impl pallet_eterra_tcg::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    type AccessControl = super::AlphaAccess;
+    type AccessControl = TcgAccessControl;
 
     type PaymentCurrency = Balances;
     type HandChecker = TcgHandChecker;
     type ProgressionAuthorityProvider = TcgProgressionAuthorityProvider;
+    type V2Randomness = super::EterraRandomness;
+    type V2ChainDomain = RuntimeGenesisHashProvider;
+    #[cfg(feature = "runtime-benchmarks")]
+    type V2BenchmarkHelper = TcgV2BenchmarkHelper;
+    type V2Entities = super::EterraCreatures;
+    type LegacyEscrowOwnerProvider = TcgLegacyEscrowOwnerProvider;
     type PackPrice = ConstU128<{ 500 * UNIT }>;
     type PackPriceReceiver = TreasuryAccount;
     type ProPrice = ConstU128<{ 200 * UNIT }>;
@@ -1461,6 +2040,19 @@ impl pallet_eterra_tcg::Config for Runtime {
     type CardXpPerLevel = ConstU32<100>;
     type MaxCardXpGrantAmount = ConstU32<500>;
     type MaxNexusMatchPlayers = ConstU32<2>;
+    type MaxV2PoolProfiles = ConstU32<400>;
+    type MaxV2PoolPoses = ConstU32<256>;
+    type MaxV2PoolBackgrounds = ConstU32<32>;
+    type MaxV2CreditsPerAccountSku = ConstU32<64>;
+    type MaxV2ProtectionBytes = ConstU32<600>;
+    type MaxV2TeamSize = ConstU32<6>;
+    type V2OperationalCardWarningThreshold = ConstU64<9_000>;
+    type V2OperationalCardLimit = ConstU64<10_000>;
+    type V16MigrationBatchSize = ConstU32<100>;
+    type MinimumActiveCardsAfterConversion = ConstU32<5>;
+    type MaxPendingConversionsPerAccount = ConstU32<2>;
+    type MythicalAscensionSeasonDurationBlocks = ConstU32<{ 90u32.saturating_mul(DAYS) }>;
+    type MythicalAscensionWeekDurationBlocks = ConstU32<{ 7u32.saturating_mul(DAYS) }>;
     type WeightInfo = pallet_eterra_tcg::weights::SubstrateWeight<Runtime>;
 }
 
@@ -1595,4 +2187,11 @@ impl pallet_nfts::Config for Runtime {
     type Helper = ();
 
     type WeightInfo = pallet_nfts::weights::SubstrateWeight<Runtime>;
+}
+
+impl pallet_utility::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type RuntimeCall = RuntimeCall;
+    type PalletsOrigin = super::OriginCaller;
+    type WeightInfo = pallet_utility::weights::SubstrateWeight<Runtime>;
 }

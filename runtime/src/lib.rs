@@ -33,14 +33,18 @@ pub use pallet_eterra_arcade_nova_rail;
 pub use pallet_eterra_arcade_ouro;
 pub use pallet_eterra_authority;
 pub use pallet_eterra_card_escrow;
+pub use pallet_eterra_creatures;
 pub use pallet_eterra_daily_slots;
 pub use pallet_eterra_economy;
 pub use pallet_eterra_faucet;
 pub use pallet_eterra_flow;
 pub use pallet_eterra_game_authority;
+pub use pallet_eterra_game_results;
 pub use pallet_eterra_gamer;
+pub use pallet_eterra_magic;
 pub use pallet_eterra_media;
 pub use pallet_eterra_profile;
+pub use pallet_eterra_randomness;
 pub use pallet_eterra_seasons;
 pub use pallet_eterra_simple_matchmaker;
 pub use pallet_eterra_tcg;
@@ -97,7 +101,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     //   `spec_version`, and `authoring_version` are the same between Wasm and native.
     // This value is set to 100 to notify Polkadot-JS App (https://polkadot.js.org/apps) to use
     //   the compatible custom types.
-    spec_version: 105,
+    spec_version: 106,
     impl_version: 1,
     apis: apis::RUNTIME_API_VERSIONS,
     transaction_version: 1,
@@ -331,6 +335,24 @@ mod runtime {
 
     #[runtime::pallet_index(34)]
     pub type CryptoStrike = pallet_cryptostrike;
+
+    #[runtime::pallet_index(35)]
+    pub type EterraRandomness = pallet_eterra_randomness;
+
+    #[runtime::pallet_index(36)]
+    pub type EterraCreatures = pallet_eterra_creatures;
+
+    #[runtime::pallet_index(37)]
+    pub type EterraMagic = pallet_eterra_magic;
+
+    #[runtime::pallet_index(38)]
+    pub type EterraGameResults = pallet_eterra_game_results;
+
+    /// Atomic, bounded administration batches used by the deterministic
+    /// private-alpha catalog seeder. Added at a new index; no legacy encoding
+    /// moves.
+    #[runtime::pallet_index(39)]
+    pub type Utility = pallet_utility;
 }
 
 #[cfg(test)]

@@ -47,6 +47,10 @@ pub trait WeightInfo {
 	fn freeze_player() -> Weight;
 	fn unfreeze_player() -> Weight;
 	fn set_region() -> Weight;
+	fn commit_legacy_progression_audit() -> Weight;
+	fn publish_v2_pack_track() -> Weight;
+	fn set_v2_pack_track_activation() -> Weight;
+	fn allocate_player_xp(credits: u32) -> Weight;
 }
 
 impl WeightInfo for () {
@@ -66,22 +70,38 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn set_steam_link_authority() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(20_000_000_000, 4_096)
 	}
 	fn link_steam() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(300_000_000_000, 65_536)
 	}
 	fn unlink_steam() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(50_000_000_000, 16_384)
 	}
 	fn freeze_player() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(30_000_000_000, 8_192)
 	}
 	fn unfreeze_player() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(30_000_000_000, 8_192)
 	}
 	fn set_region() -> Weight {
+		Weight::from_parts(50_000_000_000, 16_384)
+	}
+	fn commit_legacy_progression_audit() -> Weight {
 		Weight::from_parts(10_000, 0)
+	}
+	fn publish_v2_pack_track() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn set_v2_pack_track_activation() -> Weight {
+		Weight::from_parts(10_000, 0)
+	}
+	fn allocate_player_xp(credits: u32) -> Weight {
+		Weight::from_parts(50_000_000_000, 65_536)
+			.saturating_add(
+				Weight::from_parts(20_000_000_000, 65_536)
+					.saturating_mul(credits.into()),
+			)
 	}
 }
 
@@ -153,21 +173,60 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
 	fn set_steam_link_authority() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(20_000_000_000, 4_096)
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	fn link_steam() -> Weight {
-		Weight::from_parts(10_000, 0)
+		// Includes sr25519 verification on the invalid-signature path.
+		Weight::from_parts(300_000_000_000, 65_536)
+			.saturating_add(T::DbWeight::get().reads(5))
+			.saturating_add(T::DbWeight::get().writes(4))
 	}
 	fn unlink_steam() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(50_000_000_000, 16_384)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(3))
 	}
 	fn freeze_player() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(30_000_000_000, 8_192)
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	fn unfreeze_player() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(30_000_000_000, 8_192)
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	fn set_region() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(50_000_000_000, 16_384)
+			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+	fn commit_legacy_progression_audit() -> Weight {
+		Weight::from_parts(15_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+	fn publish_v2_pack_track() -> Weight {
+		Weight::from_parts(20_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+	fn set_v2_pack_track_activation() -> Weight {
+		Weight::from_parts(18_000_000, 0)
+			.saturating_add(T::DbWeight::get().reads(1))
+			.saturating_add(T::DbWeight::get().writes(1))
+	}
+	fn allocate_player_xp(credits: u32) -> Weight {
+		// PackTrack allocation can synchronously issue each credit through the
+		// TCG adapter. Charge that adapter's queue/counter/storage work per
+		// credit in addition to Gamer's own conservation bookkeeping.
+		Weight::from_parts(50_000_000_000, 65_536)
+			.saturating_add(
+				Weight::from_parts(20_000_000_000, 65_536)
+					.saturating_mul(credits.into()),
+			)
+			.saturating_add(T::DbWeight::get().reads(12 + 5 * u64::from(credits)))
+			.saturating_add(T::DbWeight::get().writes(6 + 5 * u64::from(credits)))
 	}
 }

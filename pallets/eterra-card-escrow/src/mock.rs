@@ -34,11 +34,13 @@ pub struct GameRecord {
 thread_local! {
     static CARDS: RefCell<BTreeMap<u32, CardRecord>> = const { RefCell::new(BTreeMap::new()) };
     static GAMES: RefCell<BTreeMap<GameId, GameRecord>> = const { RefCell::new(BTreeMap::new()) };
+    static FAIL_WITHDRAW: RefCell<bool> = const { RefCell::new(false) };
 }
 
 pub fn reset_fixtures() {
     CARDS.with(|cards| cards.borrow_mut().clear());
     GAMES.with(|games| games.borrow_mut().clear());
+    FAIL_WITHDRAW.with(|fail| *fail.borrow_mut() = false);
 }
 
 pub fn seed_card(card_id: u32, owner: AccountId, genome: CardGenomeHash) {
@@ -64,6 +66,10 @@ pub fn seed_game(game_id: GameId, server: AccountId, players: Vec<AccountId>, ac
 
 pub fn card_owner(card_id: u32) -> Option<AccountId> {
     CARDS.with(|cards| cards.borrow().get(&card_id).map(|record| record.owner))
+}
+
+pub fn set_withdraw_failure(fail: bool) {
+    FAIL_WITHDRAW.with(|configured| *configured.borrow_mut() = fail);
 }
 
 parameter_types! {
@@ -149,6 +155,9 @@ impl CardCustodian<AccountId> for TestCardCustodian {
         owner: &AccountId,
         card_id: u32,
     ) -> frame_support::dispatch::DispatchResult {
+        if FAIL_WITHDRAW.with(|fail| *fail.borrow()) {
+            return Err(DispatchError::Other("forced_withdraw_failure"));
+        }
         CARDS.with(|cards| {
             let mut cards = cards.borrow_mut();
             let record = cards

@@ -36,6 +36,7 @@ pallet-sudo.workspace = true
 pallet-timestamp.workspace = true
 pallet-treasury.workspace = true
 pallet-transaction-payment.workspace = true
+pallet-utility.workspace = true
 sp-api.workspace = true
 sp-block-builder.workspace = true
 sp-consensus-aura = { features = ["serde"], workspace = true }
@@ -56,9 +57,15 @@ frame-benchmarking = { optional = true, workspace = true }
 frame-system-benchmarking = { optional = true, workspace = true }
 
 # Local Dependencies
+eterra-drand-quicknet = { workspace = true }
+eterra-nexus-primitives = { workspace = true }
 pallet-eterra                             = { workspace = true }
 pallet-eterra-tcg = { workspace = true }
 pallet-eterra-gamer = { workspace = true }
+pallet-eterra-randomness = { workspace = true }
+pallet-eterra-creatures = { workspace = true }
+pallet-eterra-magic = { workspace = true }
+pallet-eterra-game-results = { workspace = true }
 pallet-eterra-media = { workspace = true }
 pallet-eterra-seasons = { workspace = true }
 pallet-nfts = { workspace = true }
@@ -113,9 +120,16 @@ std = [
 	"pallet-treasury/std",
 	"pallet-transaction-payment-rpc-runtime-api/std",
 	"pallet-transaction-payment/std",
+	"pallet-utility/std",
 
   "pallet-eterra/std",
+  "eterra-drand-quicknet/std",
+  "eterra-nexus-primitives/std",
     "pallet-eterra-gamer/std",
+    "pallet-eterra-randomness/std",
+    "pallet-eterra-creatures/std",
+    "pallet-eterra-magic/std",
+    "pallet-eterra-game-results/std",
     "pallet-eterra-faucet/std",
    "pallet-eterra-simple-matchmaker/std",
   "pallet-eterra-game-authority/std",
@@ -166,11 +180,16 @@ runtime-benchmarks = [
 	"pallet-sudo/runtime-benchmarks",
 	"pallet-timestamp/runtime-benchmarks",
 	"pallet-treasury/runtime-benchmarks",
+	"pallet-utility/runtime-benchmarks",
 	"pallet-eterra/runtime-benchmarks",
 	"pallet-eterra-simple-matchmaker/runtime-benchmarks",
 	"pallet-eterra-daily-slots/runtime-benchmarks",
 	"pallet-eterra-faucet/runtime-benchmarks",
 	"pallet-eterra-gamer/runtime-benchmarks",
+	"pallet-eterra-randomness/runtime-benchmarks",
+	"pallet-eterra-creatures/runtime-benchmarks",
+	"pallet-eterra-magic/runtime-benchmarks",
+	"pallet-eterra-game-results/runtime-benchmarks",
 	"pallet-eterra-media/runtime-benchmarks",
 	"pallet-eterra-seasons/runtime-benchmarks",
 	"pallet-eterra-monte-carlo-ai/runtime-benchmarks",
@@ -206,7 +225,13 @@ try-runtime = [
 	"pallet-timestamp/try-runtime",
 	"pallet-transaction-payment/try-runtime",
 	"pallet-treasury/try-runtime",
+	"pallet-utility/try-runtime",
 	"pallet-nfts/try-runtime",
+	"pallet-eterra-tcg/try-runtime",
+	"pallet-eterra-randomness/try-runtime",
+	"pallet-eterra-creatures/try-runtime",
+	"pallet-eterra-magic/try-runtime",
+	"pallet-eterra-game-results/try-runtime",
 	"pallet-eterra-authority/try-runtime",
 	"pallet-eterra-economy/try-runtime",
 	"pallet-eterra-flow/try-runtime",

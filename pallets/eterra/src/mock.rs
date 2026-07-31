@@ -90,6 +90,21 @@ parameter_types! {
     pub const CardXpPerLevelConst: u32 = 100;
     pub const MaxCardXpGrantAmountConst: u32 = 500;
     pub const MaxNexusMatchPlayersConst: u32 = 2;
+    pub const MaxV2PoolProfilesConst: u32 = 400;
+    pub const MaxV2PoolPosesConst: u32 = 256;
+    pub const MaxV2PoolBackgroundsConst: u32 = 32;
+    pub const MaxV2CreditsPerAccountSkuConst: u32 = 16;
+    pub const MaxV2ProtectionBytesConst: u32 = 600;
+    pub const MaxV2TeamSizeConst: u32 = 6;
+    pub const V2OperationalCardWarningThresholdConst: u64 = 9_000;
+    pub const V2OperationalCardLimitConst: u64 = 10_000;
+    pub const V16MigrationBatchSizeConst: u32 = 50;
+    pub const MinimumActiveCardsAfterConversionConst: u32 = 1;
+    pub const MaxPendingConversionsPerAccountConst: u32 = 2;
+    pub const MythicalAscensionSeasonDurationBlocksConst: u64 = 90;
+    pub const MythicalAscensionWeekDurationBlocksConst: u64 = 7;
+    pub const MaxV2XpGrantConst: u128 = 100_000;
+    pub const MaxPackCreditsPerAllocationConst: u32 = 8;
     pub const MaxMediaUriLen: u32 = 256;
     pub const MaxMediaContentTypeLen: u32 = 64;
     pub const MaxMediaNameLen: u32 = 64;
@@ -315,8 +330,39 @@ impl pallet_eterra_gamer::Config for Test {
     type MaxAvatarCidLen = GamerAvatarCidMaxLen;
     type MaxRegionCodeLen = GamerRegionCodeMaxLen;
     type MaxSteamLinkSignatureLen = GamerSteamLinkSignatureMaxLen;
+    type PackCreditIssuer = ();
+    type PackTrackCatalogPolicy = ();
+    type MaxV2XpGrant = MaxV2XpGrantConst;
+    type MaxPackCreditsPerAllocation = MaxPackCreditsPerAllocationConst;
     type RuntimeEvent = RuntimeEvent;
     type WeightInfo = ();
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct MockV2BenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_eterra_tcg::V2BenchmarkHelper for MockV2BenchmarkHelper {
+    fn prepare_randomness() {}
+
+    fn seed_finalized_randomness(_request_id: [u8; 32], _output: [u8; 32]) {}
+
+    fn seed_timed_out_randomness(_request_id: [u8; 32]) {}
+
+    fn prepare_conversion_entity_profile(
+        _subject_id: u32,
+        _subject_version: u32,
+        _rarity: eterra_nexus_primitives::CardRarity,
+    ) {
+    }
+}
+
+pub struct MockV2ChainDomain;
+
+impl pallet_eterra_tcg::V2ChainDomainProvider for MockV2ChainDomain {
+    fn genesis_hash() -> [u8; 32] {
+        [0xA5; 32]
+    }
 }
 
 impl pallet_eterra_tcg::Config for Test {
@@ -325,6 +371,12 @@ impl pallet_eterra_tcg::Config for Test {
     type PaymentCurrency = Balances;
     type HandChecker = MockHandChecker;
     type ProgressionAuthorityProvider = ();
+    type V2Randomness = ();
+    type V2ChainDomain = MockV2ChainDomain;
+    #[cfg(feature = "runtime-benchmarks")]
+    type V2BenchmarkHelper = MockV2BenchmarkHelper;
+    type V2Entities = ();
+    type LegacyEscrowOwnerProvider = ();
     type PackPrice = PackPriceConst;
     type PackPriceReceiver = PackPriceReceiverConst;
     type ProPrice = ProPriceConst;
@@ -362,6 +414,19 @@ impl pallet_eterra_tcg::Config for Test {
     type CardXpPerLevel = CardXpPerLevelConst;
     type MaxCardXpGrantAmount = MaxCardXpGrantAmountConst;
     type MaxNexusMatchPlayers = MaxNexusMatchPlayersConst;
+    type MaxV2PoolProfiles = MaxV2PoolProfilesConst;
+    type MaxV2PoolPoses = MaxV2PoolPosesConst;
+    type MaxV2PoolBackgrounds = MaxV2PoolBackgroundsConst;
+    type MaxV2CreditsPerAccountSku = MaxV2CreditsPerAccountSkuConst;
+    type MaxV2ProtectionBytes = MaxV2ProtectionBytesConst;
+    type MaxV2TeamSize = MaxV2TeamSizeConst;
+    type V2OperationalCardWarningThreshold = V2OperationalCardWarningThresholdConst;
+    type V2OperationalCardLimit = V2OperationalCardLimitConst;
+    type V16MigrationBatchSize = V16MigrationBatchSizeConst;
+    type MinimumActiveCardsAfterConversion = MinimumActiveCardsAfterConversionConst;
+    type MaxPendingConversionsPerAccount = MaxPendingConversionsPerAccountConst;
+    type MythicalAscensionSeasonDurationBlocks = MythicalAscensionSeasonDurationBlocksConst;
+    type MythicalAscensionWeekDurationBlocks = MythicalAscensionWeekDurationBlocksConst;
     type WeightInfo = ();
 }
 
@@ -498,6 +563,10 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
     let mut ext = sp_io::TestExternalities::from(storage);
     ext.execute_with(|| {
         System::set_block_number(1); // Reset block number
+                                     // This legacy game pallet's historical tests mint LegacyV1 cards as
+                                     // fixtures. Production/fresh V16 genesis remains sealed by default;
+                                     // only this isolated mock explicitly opts into the legacy test path.
+        pallet_eterra_tcg::LegacyCreationSealedV16::<Test>::put(false);
 
         // Create devCOIN (asset 1) and betaCOIN (asset 2) for reward tests.
         let _ = Assets::force_create(

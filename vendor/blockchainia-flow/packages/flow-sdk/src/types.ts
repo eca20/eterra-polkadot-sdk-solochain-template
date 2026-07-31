@@ -174,6 +174,21 @@ export interface ManifestMetrics {
   attestedPolicies: number;
 }
 
+export type CostSubject =
+  | { transition: number }
+  | { attestedEvent: number };
+
+export interface CostEstimate {
+  subject: CostSubject;
+  storageReads: number;
+  storageWrites: number;
+  authorityProviderCalls: number;
+  economyProviderCalls: number;
+  profileProviderCalls: number;
+  conditionAtoms: number;
+  effects: number;
+}
+
 export interface CompileSuccess {
   ok: true;
   authoringLabel: typeof FLOW_AUTHORING_LABEL;
@@ -184,7 +199,7 @@ export interface CompileSuccess {
   metrics: ManifestMetrics;
   diagnostics: CompilerDiagnostic[];
   graph: unknown;
-  costEstimates: unknown[];
+  costEstimates: CostEstimate[];
 }
 
 export interface CompileFailure {

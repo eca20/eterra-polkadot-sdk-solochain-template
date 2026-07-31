@@ -13,24 +13,109 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
+use eterra_nexus_primitives::{EconomicRealm, Hash32, PackCreditSource, PlayerXpTarget};
 use frame_support::{
     pallet_prelude::*,
     traits::{Currency, ExistenceRequirement},
+    transactional,
 };
 use frame_system::pallet_prelude::*;
-use pallet_alpha_access::AccessControl;
 use sp_core::sr25519;
+use sp_runtime::DispatchError;
 use sp_std::vec::Vec;
 
 pub type SteamHash = [u8; 32];
 pub type SteamLinkNonce = [u8; 32];
 pub type ReasonHash = [u8; 32];
+pub const PRODUCTION_PACK_TRACK_THRESHOLD_V1: u128 = 2_400;
+pub const TRAINING_PACK_TRACK_THRESHOLD_V1: u128 = 600;
 
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
 pub struct GamerProfile<BlockNumber> {
     pub linked_at: BlockNumber,
     pub frozen: bool,
     pub freeze_reason: Option<ReasonHash>,
+}
+
+#[derive(Encode, Decode, Clone, Copy, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen)]
+pub struct PackTrackConfig {
+    pub track_id: u32,
+    pub pack_sku: u32,
+    pub sku_version: u32,
+    pub economy_version: u32,
+    pub threshold: u128,
+    pub economic_realm: EconomicRealm,
+    pub config_hash: Hash32,
+}
+
+#[derive(
+    Encode, Decode, Clone, Copy, Default, PartialEq, Eq, RuntimeDebug, TypeInfo, MaxEncodedLen,
+)]
+pub struct V2XpConservation {
+    pub total_granted: u128,
+    pub advancement_allocated: u128,
+    pub pack_allocated: u128,
+}
+
+pub trait PackCreditIssuer<AccountId> {
+    fn issue_pack_credit(
+        owner: &AccountId,
+        pack_sku: u32,
+        sku_version: u32,
+        realm: EconomicRealm,
+        source: PackCreditSource,
+    ) -> frame_support::dispatch::DispatchResult;
+}
+
+/// Runtime bridge proving a Pack Track points only at an immutable Earned
+/// pack SKU. The catalog remains TCG-owned; Gamer only consumes this narrow
+/// policy fact and never mirrors catalog state.
+pub trait PackTrackCatalogPolicy {
+    fn ensure_earned_pack_sku(
+        pack_sku: u32,
+        sku_version: u32,
+    ) -> frame_support::dispatch::DispatchResult;
+}
+
+impl PackTrackCatalogPolicy for () {
+    fn ensure_earned_pack_sku(
+        _pack_sku: u32,
+        _sku_version: u32,
+    ) -> frame_support::dispatch::DispatchResult {
+        Err(DispatchError::Other("pack track catalog unavailable"))
+    }
+}
+
+impl<AccountId> PackCreditIssuer<AccountId> for () {
+    fn issue_pack_credit(
+        _owner: &AccountId,
+        _pack_sku: u32,
+        _sku_version: u32,
+        _realm: EconomicRealm,
+        _source: PackCreditSource,
+    ) -> frame_support::dispatch::DispatchResult {
+        Err(DispatchError::Other("pack credit issuer unavailable"))
+    }
+}
+
+pub trait V2PlayerProgressionManager<AccountId> {
+    fn grant_settled_fps_xp(
+        owner: &AccountId,
+        realm: EconomicRealm,
+        amount: u128,
+        result_id: Hash32,
+    ) -> frame_support::dispatch::DispatchResult;
+}
+
+impl<AccountId> V2PlayerProgressionManager<AccountId> for () {
+    fn grant_settled_fps_xp(
+        _owner: &AccountId,
+        _realm: EconomicRealm,
+        _amount: u128,
+        _result_id: Hash32,
+    ) -> frame_support::dispatch::DispatchResult {
+        Err(DispatchError::Other("V2 progression provider unavailable"))
+    }
 }
 
 /// Minimal interface for other pallets to grant experience to an account.
@@ -52,6 +137,7 @@ pub mod pallet {
     use super::*;
     use crate::weights::WeightInfo;
     use frame_support::traits::StorageVersion;
+    use pallet_alpha_access::AccessControl;
 
     type BalanceOf<T> =
         <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
@@ -99,6 +185,20 @@ pub mod pallet {
         /// Maximum bytes for Steam link authority signatures.
         #[pallet::constant]
         type MaxSteamLinkSignatureLen: Get<u32>;
+
+        /// The only route from V2 Pack Track completion into TCG pack credits.
+        type PackCreditIssuer: crate::PackCreditIssuer<Self::AccountId>;
+
+        /// Proves published Pack Tracks reference immutable Earned SKUs.
+        type PackTrackCatalogPolicy: crate::PackTrackCatalogPolicy;
+
+        /// Maximum V2 XP accepted from one settled FPS result.
+        #[pallet::constant]
+        type MaxV2XpGrant: Get<u128>;
+
+        /// Maximum credits one allocation may issue, bounding dispatch work.
+        #[pallet::constant]
+        type MaxPackCreditsPerAllocation: Get<u32>;
 
         /// Runtime event
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
@@ -180,6 +280,97 @@ pub mod pallet {
     #[pallet::getter(fn steam_link_authority)]
     pub type SteamLinkAuthority<T: Config> = StorageValue<_, [u8; 32], OptionQuery>;
 
+    /// Immutable audit commitment over LegacyPlayerProgression balances before V2 activation.
+    #[pallet::storage]
+    #[pallet::getter(fn legacy_progression_audit_hash)]
+    pub type LegacyProgressionAuditHash<T> = StorageValue<_, Hash32, OptionQuery>;
+
+    #[pallet::storage]
+    #[pallet::getter(fn v2_lifetime_player_xp)]
+    pub type V2LifetimePlayerXp<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        Blake2_128Concat,
+        EconomicRealm,
+        u128,
+        ValueQuery,
+    >;
+
+    #[pallet::storage]
+    #[pallet::getter(fn v2_unallocated_player_xp)]
+    pub type V2UnallocatedPlayerXp<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        Blake2_128Concat,
+        EconomicRealm,
+        u128,
+        ValueQuery,
+    >;
+
+    #[pallet::storage]
+    #[pallet::getter(fn v2_player_advancement_xp)]
+    pub type V2PlayerAdvancementXp<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        Blake2_128Concat,
+        EconomicRealm,
+        u128,
+        ValueQuery,
+    >;
+
+    #[pallet::storage]
+    #[pallet::getter(fn v2_player_level)]
+    pub type V2PlayerLevel<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        Blake2_128Concat,
+        EconomicRealm,
+        u16,
+        ValueQuery,
+    >;
+
+    #[pallet::storage]
+    #[pallet::getter(fn v2_pack_track_config)]
+    pub type V2PackTrackConfigs<T> =
+        StorageMap<_, Blake2_128Concat, (u32, u32, u32), PackTrackConfig, OptionQuery>;
+
+    #[pallet::storage]
+    #[pallet::getter(fn v2_pack_track_active)]
+    pub type V2PackTrackActivation<T> =
+        StorageMap<_, Blake2_128Concat, (u32, u32, u32), bool, ValueQuery>;
+
+    #[pallet::storage]
+    #[pallet::getter(fn v2_pack_progress)]
+    pub type V2PackProgress<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        Blake2_128Concat,
+        (EconomicRealm, u32, u32, u32),
+        u128,
+        ValueQuery,
+    >;
+
+    #[pallet::storage]
+    #[pallet::getter(fn v2_xp_conservation)]
+    pub type V2XpConservationByAccount<T: Config> = StorageDoubleMap<
+        _,
+        Blake2_128Concat,
+        T::AccountId,
+        Blake2_128Concat,
+        EconomicRealm,
+        V2XpConservation,
+        ValueQuery,
+    >;
+
+    #[pallet::storage]
+    #[pallet::getter(fn processed_v2_xp_result)]
+    pub type ProcessedV2XpResults<T> = StorageMap<_, Blake2_128Concat, Hash32, (), OptionQuery>;
+
     #[pallet::event]
     #[pallet::generate_deposit(pub(super) fn deposit_event)]
     pub enum Event<T: Config> {
@@ -228,6 +419,52 @@ pub mod pallet {
         PlayerUnfrozen {
             account: T::AccountId,
         },
+        LegacyProgressionAuditCommitted {
+            audit_hash: Hash32,
+        },
+        V2PackTrackPublished {
+            track_id: u32,
+            pack_sku: u32,
+            sku_version: u32,
+            economy_version: u32,
+            threshold: u128,
+            economic_realm: EconomicRealm,
+            config_hash: Hash32,
+        },
+        V2PackTrackActivationChanged {
+            pack_sku: u32,
+            sku_version: u32,
+            economy_version: u32,
+            active: bool,
+        },
+        PlayerExperienceGrantedV2 {
+            owner: T::AccountId,
+            economic_realm: EconomicRealm,
+            amount: u128,
+            result_id: Hash32,
+        },
+        PlayerExperienceAllocatedV2 {
+            owner: T::AccountId,
+            economic_realm: EconomicRealm,
+            amount: u128,
+            target: PlayerXpTarget,
+        },
+        PlayerAdvancementLeveledV2 {
+            owner: T::AccountId,
+            economic_realm: EconomicRealm,
+            old_level: u16,
+            new_level: u16,
+        },
+        PackProgressAdvancedV2 {
+            owner: T::AccountId,
+            economic_realm: EconomicRealm,
+            pack_sku: u32,
+            sku_version: u32,
+            economy_version: u32,
+            allocated: u128,
+            remainder: u128,
+            credits_issued: u32,
+        },
     }
 
     #[pallet::error]
@@ -253,9 +490,23 @@ pub mod pallet {
         PlayerFrozen,
         InitialsTooShort,
         InvalidInitials,
+        LegacyProgressionAuditAlreadyCommitted,
+        LegacyProgressionAuditRequired,
+        V2XpGrantTooLarge,
+        V2XpResultAlreadyProcessed,
+        V2XpAmountInvalid,
+        InsufficientV2UnallocatedXp,
+        PackTrackAlreadyPublished,
+        PackTrackMissing,
+        PackTrackInactive,
+        PackTrackRealmMismatch,
+        PackTrackThresholdInvalid,
+        TooManyPackCreditsInAllocation,
+        V2ArithmeticOverflow,
+        PackTrackSkuNotEarned,
     }
 
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(4);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(5);
 
     #[pallet::pallet]
     #[pallet::storage_version(STORAGE_VERSION)]
@@ -398,6 +649,72 @@ pub mod pallet {
                 sp_io::crypto::sr25519_verify(&signature, &payload, &public),
                 Error::<T>::InvalidSteamLinkSignature
             );
+            Ok(())
+        }
+
+        fn v2_level_for_xp(xp: u128) -> u16 {
+            let mut level = 0u16;
+            while level < 100 {
+                let next = u128::from(level) + 1;
+                let threshold = next.saturating_mul(next).saturating_mul(1_000);
+                if xp < threshold {
+                    break;
+                }
+                level = level.saturating_add(1);
+            }
+            level
+        }
+
+        #[transactional]
+        pub(crate) fn do_grant_settled_fps_xp(
+            owner: &T::AccountId,
+            realm: EconomicRealm,
+            amount: u128,
+            result_id: Hash32,
+        ) -> DispatchResult {
+            ensure!(
+                LegacyProgressionAuditHash::<T>::exists(),
+                Error::<T>::LegacyProgressionAuditRequired
+            );
+            ensure!(amount > 0, Error::<T>::V2XpAmountInvalid);
+            ensure!(
+                amount <= T::MaxV2XpGrant::get(),
+                Error::<T>::V2XpGrantTooLarge
+            );
+            ensure!(
+                !ProcessedV2XpResults::<T>::contains_key(result_id),
+                Error::<T>::V2XpResultAlreadyProcessed
+            );
+            V2LifetimePlayerXp::<T>::try_mutate(owner, realm, |xp| -> DispatchResult {
+                *xp = xp
+                    .checked_add(amount)
+                    .ok_or(Error::<T>::V2ArithmeticOverflow)?;
+                Ok(())
+            })?;
+            V2UnallocatedPlayerXp::<T>::try_mutate(owner, realm, |xp| -> DispatchResult {
+                *xp = xp
+                    .checked_add(amount)
+                    .ok_or(Error::<T>::V2ArithmeticOverflow)?;
+                Ok(())
+            })?;
+            V2XpConservationByAccount::<T>::try_mutate(
+                owner,
+                realm,
+                |conservation| -> DispatchResult {
+                    conservation.total_granted = conservation
+                        .total_granted
+                        .checked_add(amount)
+                        .ok_or(Error::<T>::V2ArithmeticOverflow)?;
+                    Ok(())
+                },
+            )?;
+            ProcessedV2XpResults::<T>::insert(result_id, ());
+            Self::deposit_event(Event::PlayerExperienceGrantedV2 {
+                owner: owner.clone(),
+                economic_realm: realm,
+                amount,
+                result_id,
+            });
             Ok(())
         }
     }
@@ -670,6 +987,213 @@ pub mod pallet {
             });
             Ok(())
         }
+
+        /// Commits the pre-V2 audit of legacy Experience/Level without converting it.
+        #[pallet::call_index(11)]
+        #[pallet::weight(T::WeightInfo::commit_legacy_progression_audit())]
+        pub fn commit_legacy_progression_audit(
+            origin: OriginFor<T>,
+            audit_hash: Hash32,
+        ) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            ensure!(
+                !LegacyProgressionAuditHash::<T>::exists(),
+                Error::<T>::LegacyProgressionAuditAlreadyCommitted
+            );
+            ensure!(
+                audit_hash.iter().any(|byte| *byte != 0),
+                Error::<T>::V2XpAmountInvalid
+            );
+            LegacyProgressionAuditHash::<T>::put(audit_hash);
+            Self::deposit_event(Event::LegacyProgressionAuditCommitted { audit_hash });
+            Ok(())
+        }
+
+        #[pallet::call_index(12)]
+        #[pallet::weight(T::WeightInfo::publish_v2_pack_track())]
+        pub fn publish_v2_pack_track(
+            origin: OriginFor<T>,
+            config: PackTrackConfig,
+        ) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            ensure!(
+                LegacyProgressionAuditHash::<T>::exists(),
+                Error::<T>::LegacyProgressionAuditRequired
+            );
+            let required_threshold = match config.economic_realm {
+                EconomicRealm::Production => PRODUCTION_PACK_TRACK_THRESHOLD_V1,
+                EconomicRealm::Training => TRAINING_PACK_TRACK_THRESHOLD_V1,
+            };
+            ensure!(
+                config.threshold == required_threshold,
+                Error::<T>::PackTrackThresholdInvalid
+            );
+            T::PackTrackCatalogPolicy::ensure_earned_pack_sku(config.pack_sku, config.sku_version)
+                .map_err(|_| Error::<T>::PackTrackSkuNotEarned)?;
+            let key = (config.pack_sku, config.sku_version, config.economy_version);
+            ensure!(
+                !V2PackTrackConfigs::<T>::contains_key(key),
+                Error::<T>::PackTrackAlreadyPublished
+            );
+            V2PackTrackConfigs::<T>::insert(key, config);
+            Self::deposit_event(Event::V2PackTrackPublished {
+                track_id: config.track_id,
+                pack_sku: config.pack_sku,
+                sku_version: config.sku_version,
+                economy_version: config.economy_version,
+                threshold: config.threshold,
+                economic_realm: config.economic_realm,
+                config_hash: config.config_hash,
+            });
+            Ok(())
+        }
+
+        #[pallet::call_index(13)]
+        #[pallet::weight(T::WeightInfo::set_v2_pack_track_activation())]
+        pub fn set_v2_pack_track_activation(
+            origin: OriginFor<T>,
+            pack_sku: u32,
+            sku_version: u32,
+            economy_version: u32,
+            active: bool,
+        ) -> DispatchResult {
+            T::AdminOrigin::ensure_origin(origin)?;
+            let key = (pack_sku, sku_version, economy_version);
+            ensure!(
+                V2PackTrackConfigs::<T>::contains_key(key),
+                Error::<T>::PackTrackMissing
+            );
+            V2PackTrackActivation::<T>::insert(key, active);
+            Self::deposit_event(Event::V2PackTrackActivationChanged {
+                pack_sku,
+                sku_version,
+                economy_version,
+                active,
+            });
+            Ok(())
+        }
+
+        #[pallet::call_index(14)]
+        #[pallet::weight(T::WeightInfo::allocate_player_xp(T::MaxPackCreditsPerAllocation::get()))]
+        #[transactional]
+        pub fn allocate_player_xp(
+            origin: OriginFor<T>,
+            economic_realm: EconomicRealm,
+            amount: u128,
+            target: PlayerXpTarget,
+        ) -> DispatchResult {
+            let owner = ensure_signed(origin)?;
+            T::AccessControl::ensure_whitelisted(&owner)?;
+            Self::ensure_account_not_frozen(&owner)?;
+            ensure!(amount > 0, Error::<T>::V2XpAmountInvalid);
+            let available = V2UnallocatedPlayerXp::<T>::get(&owner, economic_realm);
+            ensure!(available >= amount, Error::<T>::InsufficientV2UnallocatedXp);
+
+            match target {
+                PlayerXpTarget::PlayerAdvancement => {
+                    let old_level = V2PlayerLevel::<T>::get(&owner, economic_realm);
+                    let advancement = V2PlayerAdvancementXp::<T>::get(&owner, economic_realm);
+                    let new_advancement = advancement
+                        .checked_add(amount)
+                        .ok_or(Error::<T>::V2ArithmeticOverflow)?;
+                    let new_level = Self::v2_level_for_xp(new_advancement);
+                    V2PlayerAdvancementXp::<T>::insert(&owner, economic_realm, new_advancement);
+                    V2PlayerLevel::<T>::insert(&owner, economic_realm, new_level);
+                    V2XpConservationByAccount::<T>::try_mutate(
+                        &owner,
+                        economic_realm,
+                        |conservation| -> DispatchResult {
+                            conservation.advancement_allocated = conservation
+                                .advancement_allocated
+                                .checked_add(amount)
+                                .ok_or(Error::<T>::V2ArithmeticOverflow)?;
+                            Ok(())
+                        },
+                    )?;
+                    if old_level != new_level {
+                        Self::deposit_event(Event::PlayerAdvancementLeveledV2 {
+                            owner: owner.clone(),
+                            economic_realm,
+                            old_level,
+                            new_level,
+                        });
+                    }
+                }
+                PlayerXpTarget::PackTrack {
+                    pack_sku,
+                    sku_version,
+                    economy_version,
+                } => {
+                    let key = (pack_sku, sku_version, economy_version);
+                    let config =
+                        V2PackTrackConfigs::<T>::get(key).ok_or(Error::<T>::PackTrackMissing)?;
+                    ensure!(
+                        V2PackTrackActivation::<T>::get(key),
+                        Error::<T>::PackTrackInactive
+                    );
+                    ensure!(
+                        config.economic_realm == economic_realm,
+                        Error::<T>::PackTrackRealmMismatch
+                    );
+                    let progress_key = (economic_realm, pack_sku, sku_version, economy_version);
+                    let old_progress = V2PackProgress::<T>::get(&owner, progress_key);
+                    let total = old_progress
+                        .checked_add(amount)
+                        .ok_or(Error::<T>::V2ArithmeticOverflow)?;
+                    let credits_u128 = total / config.threshold;
+                    let credits = u32::try_from(credits_u128)
+                        .map_err(|_| Error::<T>::TooManyPackCreditsInAllocation)?;
+                    ensure!(
+                        credits <= T::MaxPackCreditsPerAllocation::get(),
+                        Error::<T>::TooManyPackCreditsInAllocation
+                    );
+                    let remainder = total % config.threshold;
+                    for _ in 0..credits {
+                        T::PackCreditIssuer::issue_pack_credit(
+                            &owner,
+                            pack_sku,
+                            sku_version,
+                            economic_realm,
+                            PackCreditSource::FpsPackTrack {
+                                track_id: config.track_id,
+                                economy_version,
+                            },
+                        )?;
+                    }
+                    V2PackProgress::<T>::insert(&owner, progress_key, remainder);
+                    V2XpConservationByAccount::<T>::try_mutate(
+                        &owner,
+                        economic_realm,
+                        |conservation| -> DispatchResult {
+                            conservation.pack_allocated = conservation
+                                .pack_allocated
+                                .checked_add(amount)
+                                .ok_or(Error::<T>::V2ArithmeticOverflow)?;
+                            Ok(())
+                        },
+                    )?;
+                    Self::deposit_event(Event::PackProgressAdvancedV2 {
+                        owner: owner.clone(),
+                        economic_realm,
+                        pack_sku,
+                        sku_version,
+                        economy_version,
+                        allocated: amount,
+                        remainder,
+                        credits_issued: credits,
+                    });
+                }
+            }
+
+            V2UnallocatedPlayerXp::<T>::insert(&owner, economic_realm, available - amount);
+            Self::deposit_event(Event::PlayerExperienceAllocatedV2 {
+                owner,
+                economic_realm,
+                amount,
+                target,
+            });
+            Ok(())
+        }
     }
 }
 
@@ -680,6 +1204,17 @@ impl<T: pallet::Config> ExperienceManager<T::AccountId> for pallet::Pallet<T> {
             to: to.clone(),
             amount,
         });
+    }
+}
+
+impl<T: pallet::Config> V2PlayerProgressionManager<T::AccountId> for pallet::Pallet<T> {
+    fn grant_settled_fps_xp(
+        owner: &T::AccountId,
+        realm: EconomicRealm,
+        amount: u128,
+        result_id: Hash32,
+    ) -> frame_support::dispatch::DispatchResult {
+        pallet::Pallet::<T>::do_grant_settled_fps_xp(owner, realm, amount, result_id)
     }
 }
 

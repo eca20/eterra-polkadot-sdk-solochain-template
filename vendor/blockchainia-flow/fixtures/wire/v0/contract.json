@@ -18,6 +18,137 @@
       "create_instance": 4,
       "submit_action": 5,
       "submit_attested_event": 6
+    },
+    "callCodecSha256": {
+      "create_game": "01e1eb37f05061c348bb027c976fe53d2c4486f38c3747e38d5d27756debe6e4",
+      "upload_version_chunk": "ff3b8d916192ab5c406148b1e02db6e35f2ed6a8031194ff04b085d11bc31fbb",
+      "finalize_version": "113f5734eb2078854131b9154ee1ce56fcfb8e17441fce727fe7b055cca22b6e",
+      "activate_version": "8a93889564174f9fe5091e6cf983415812d6efaf99028d365689b7587a50a275",
+      "create_instance": "abdd4b8df3864280a419dcba243cbfa509df3bae22cb4259dccc887524b9f3b5",
+      "submit_action": "04fcac1f5993d355583860c91b549619fd5db1c470ba9cc2fcda10a762453539",
+      "submit_attested_event": "ca09d859c4771fb87048100aaa07c0ac843907edffce6be28c7418a9c55b0107"
+    },
+    "storage": {
+      "Games": ["Blake2_128Concat"],
+      "Versions": ["Blake2_128Concat", "Blake2_128Concat"],
+      "VersionChunks": [
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat"
+      ],
+      "Manifests": ["Blake2_128Concat", "Blake2_128Concat"],
+      "Instances": ["Blake2_128Concat"],
+      "ActorNonces": [
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat"
+      ],
+      "AttestedSequences": [
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat"
+      ],
+      "AttestedReplayHashes": [
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat"
+      ],
+      "VariableValues": [
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat"
+      ],
+      "MachineStates": [
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat"
+      ],
+      "Inventory": [
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat",
+        "Blake2_128Concat"
+      ]
+    },
+    "storageCodecSha256": {
+      "Games": "2ebac9da637a13838571e1c2c50f997c71b021c7561b468c3f66b6d538f81217",
+      "Versions": "c507dc7be26327f120a5d03ff7ead0eff1fe479167e6dc6085382366ea18fe5a",
+      "VersionChunks": "0e07c11a30c3071cad1bc7e42a8bd7e8fa8849c85bc000066244db4b505d305b",
+      "Manifests": "7038e21b05d4bfe31b4f6a1ad688f446549fe127ecd250b80493dea5140943be",
+      "Instances": "b5c2a9672b60317ba1b66d2d104827f2649ee3d7a3c43a826ab92a75b022ce29",
+      "ActorNonces": "18535966a72201e67e6752344bf613131b7d283295d7ddea40445ea847cf53c3",
+      "AttestedSequences": "806efa9d6f0a3538587e4e20e2477a87091734abee539420a7594051e29fc41d",
+      "AttestedReplayHashes": "b64dc8ea0fc4f53d8aa5f9f3a6852381c7cd15e1fcd9ff32aaa18e7c3d16c985",
+      "VariableValues": "77ca6b997a50442cb2d6c308f780eda7d4f358f9b3613ed1a0e860e704a191d5",
+      "MachineStates": "6dfac054338edc84e71d4f69c1034149267ffd4cff6987505f83331d1c1cf8d0",
+      "Inventory": "cd5ac612f1729e1c8d40922c857eca25fc92404a4018172f915391853a92e37c"
+    },
+    "eventCodecSha256": "9bdabd69a5e5b29e6b9f62d2bba42e21808d67901ed01bb1a9707767deaaa897",
+    "errorCodecSha256": "f679c1476ea671d4c036001a413eca32585ae254551c0378ceb112c503e13172",
+    "eventDiscriminants": {
+      "GameCreated": 0,
+      "VersionChunkUploaded": 1,
+      "VersionFinalized": 2,
+      "VersionActivated": 3,
+      "InstanceCreated": 4,
+      "ActionSubmitted": 5,
+      "AttestedEventAccepted": 6
+    },
+    "errorDiscriminants": {
+      "GameAlreadyExists": 0,
+      "GameNotFound": 1,
+      "NotGameOwner": 2,
+      "GamePausedOrRetired": 3,
+      "VersionNotFound": 4,
+      "VersionAlreadyFinalized": 5,
+      "VersionNotFinalized": 6,
+      "InvalidActiveVersion": 7,
+      "InvalidChunkIndex": 8,
+      "ManifestTooLarge": 9,
+      "ManifestMissingChunk": 10,
+      "ManifestHashMismatch": 11,
+      "ManifestDecodeFailed": 12,
+      "ManifestVersionUnsupported": 13,
+      "ManifestGameMismatch": 14,
+      "ManifestVersionMismatch": 15,
+      "EmptyManifest": 16,
+      "DuplicateMachine": 17,
+      "DuplicateState": 18,
+      "DuplicateVariable": 19,
+      "DuplicateAction": 20,
+      "DuplicateTransition": 21,
+      "UnknownMachine": 22,
+      "UnknownState": 23,
+      "UnknownVariable": 24,
+      "UnknownAction": 25,
+      "InvalidCondition": 26,
+      "InvalidEconomyGate": 27,
+      "InvalidEffect": 28,
+      "DuplicateEvent": 29,
+      "UnknownEvent": 30,
+      "InvalidAttestedEffect": 31,
+      "ValueTypeMismatch": 32,
+      "AmbiguousTransition": 33,
+      "VersionManifestMissing": 34,
+      "InstanceAlreadyExists": 35,
+      "InstanceNotFound": 36,
+      "InstanceNotActive": 37,
+      "NonceMismatch": 38,
+      "PayloadTooLarge": 39,
+      "UnauthorizedAuthority": 40,
+      "SequenceMismatch": 41,
+      "NoMatchingTransition": 42,
+      "PaymentRequired": 43,
+      "MissingEntitlement": 44,
+      "InvalidEffectActor": 45,
+      "InsufficientItem": 46,
+      "Underflow": 47,
+      "ArithmeticOverflow": 48
     }
   },
   "enumDiscriminants": {
@@ -74,4 +205,3 @@
   },
   "manifestHash": "blake2b-256(exact SCALE ManifestV0 bytes)"
 }
-

@@ -64,6 +64,10 @@ pub mod pallet {
         #[pallet::constant]
         type RewardPerWin: Get<BalanceOf<Self>>;
 
+        /// Runtime kill switch for the legacy lottery and its mandatory draw hook.
+        #[pallet::constant]
+        type DrawingsEnabled: Get<bool>;
+
         /// Weight information for the extrinsics in this pallet.
         type WeightInfo: WeightInfo;
 
@@ -187,6 +191,7 @@ pub mod pallet {
         InvalidConfiguration,
         NoTicketsAvailable,
         TooManyTicketHolders,
+        DrawingsDisabled,
     }
 
     // ─── DISPATCHABLE CALLS ───────────────────────────────────────────────────
@@ -198,6 +203,7 @@ pub mod pallet {
         #[pallet::weight(T::WeightInfo::roll())]
         pub fn roll(origin: OriginFor<T>) -> DispatchResult {
             let who = ensure_signed(origin)?;
+            ensure!(T::DrawingsEnabled::get(), Error::<T>::DrawingsDisabled);
 
             let slot_len = T::MaxSlotLength::get();
             let options = T::MaxOptionsPerSlot::get();
@@ -453,6 +459,10 @@ pub mod pallet {
         }
 
         fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
+            if !T::DrawingsEnabled::get() {
+                return T::WeightInfo::on_initialize_no_draw();
+            }
+
             // Only on the first block
             if _n == 1u32.into() {
                 let default_weights = vec![

@@ -10,7 +10,7 @@ rust-version = "1.81"
 description = "Pure deterministic preview engine for Blockchainia Flow v0"
 
 [dependencies]
-blockchainia-flow-manifest = { path = "../blockchainia-flow-manifest" }
+blockchainia-flow-manifest = { version = "=0.1.0-alpha.1", path = "../blockchainia-flow-manifest" }
 
 [dev-dependencies]
 serde_json = "1.0"

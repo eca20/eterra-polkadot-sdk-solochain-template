@@ -236,6 +236,18 @@ mod tests {
                     .unwrap_or_default()
             })
         }
+
+        fn grant_gameplay_tickets(
+            _account: &AccountId,
+            _game_id: GameId,
+            _ruleset_version: RulesetVersion,
+            _result_id: &[u8],
+            _score: u64,
+            _ranked: bool,
+            _ended_reason: u8,
+        ) -> DispatchResult {
+            Ok(())
+        }
     }
 
     pub struct TestAuthorityProvider;

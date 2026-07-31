@@ -492,36 +492,26 @@ pub mod pallet {
         pub fn handle_game_ended(game_id: GameId) {
             let assignments = GameEnemyAssignments::<T>::take(game_id);
             let mut released: u32 = 0;
-            let mut withdrawn: u32 = 0;
+            let withdrawn: u32 = 0;
 
             for assignment in assignments.into_inner().into_iter() {
-                let Some(mut entry) = EscrowEntries::<T>::take(assignment.card_id) else {
+                let Some(mut entry) = EscrowEntries::<T>::get(assignment.card_id) else {
                     continue;
                 };
                 entry.reserved_by = None;
+                EscrowEntries::<T>::insert(assignment.card_id, &entry);
+                released = released.saturating_add(1);
                 if entry.withdraw_requested {
-                    Self::remove_owner_card(&entry.owner, assignment.card_id);
-                    if T::CardCustodian::move_card_from_escrow(
-                        &Self::account_id(),
-                        &entry.owner,
-                        assignment.card_id,
-                    )
-                    .is_ok()
-                    {
-                        withdrawn = withdrawn.saturating_add(1);
-                        Self::deposit_event(Event::CardWithdrawn {
-                            owner: entry.owner.clone(),
-                            card_id: assignment.card_id,
-                        });
-                    } else {
-                        EscrowEntries::<T>::insert(assignment.card_id, entry);
-                    }
+                    // Do not execute the cross-pallet TCG custody transfer from
+                    // the GameAuthority lifecycle hook. Its outer dispatch/on-
+                    // initialize weight cannot safely compose as many as five
+                    // MaxOwnedCards-sized owner-index mutations. Preserve the
+                    // queued entry, now unreserved, so its owner can use the
+                    // explicitly weighted one-card withdrawal call.
                     continue;
                 }
 
-                EscrowEntries::<T>::insert(assignment.card_id, entry);
                 Self::insert_available_card(assignment.card_id);
-                released = released.saturating_add(1);
             }
 
             Self::deposit_event(Event::GameReservationsReleased {

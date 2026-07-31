@@ -13,9 +13,10 @@
     "build:sdk": "npm run build --workspace @blockchainia/flow-sdk",
     "build:wasm": "./scripts/build-wasm.sh",
     "build:builder": "npm run build --workspace @blockchainia/flow-builder",
-    "test": "npm run test:sdk && npm run test:builder",
+    "test": "npm run test:sdk && npm run test:builder && npm run test:wasm",
     "test:sdk": "npm run test --workspace @blockchainia/flow-sdk",
     "test:builder": "npm run test --workspace @blockchainia/flow-builder",
+    "test:wasm": "npm run build:wasm && node ./scripts/test-wasm.mjs",
     "check": "npm run build && npm run test"
   },
   "devDependencies": {

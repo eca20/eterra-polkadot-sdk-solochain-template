@@ -1,5 +1,6 @@
 import {
   FLOW_AUTHORING_LABEL,
+  type CostEstimate,
   type CompilerDiagnostic,
   type FlowManifest,
 } from "@blockchainia/flow-sdk";
@@ -211,6 +212,69 @@ export function validateDraft(
   return diagnostics;
 }
 
+export function addMachine(manifest: FlowManifest): number {
+  const machineId = nextId(manifest.machines.map((machine) => machine.machine_id));
+  manifest.machines.push({
+    machine_id: machineId,
+    initial_state: 1,
+    states: [1],
+  });
+  return machineId;
+}
+
+export function addState(
+  manifest: FlowManifest,
+  machineId: number,
+): number {
+  const machine = manifest.machines.find(
+    (candidate) => candidate.machine_id === machineId,
+  );
+  if (machine === undefined) {
+    throw new RangeError(`Machine ${machineId} does not exist`);
+  }
+  const stateId = nextId(machine.states);
+  machine.states.push(stateId);
+  return stateId;
+}
+
+export function addAction(manifest: FlowManifest): number {
+  const actionId = nextId(manifest.actions);
+  manifest.actions.push(actionId);
+  return actionId;
+}
+
+export interface CostSummary {
+  subjects: number;
+  maxStorageReads: number;
+  maxStorageWrites: number;
+  maxProviderCalls: number;
+}
+
+export function summarizeCosts(estimates: CostEstimate[]): CostSummary {
+  return estimates.reduce<CostSummary>(
+    (summary, estimate) => ({
+      subjects: summary.subjects + 1,
+      maxStorageReads: Math.max(summary.maxStorageReads, estimate.storageReads),
+      maxStorageWrites: Math.max(
+        summary.maxStorageWrites,
+        estimate.storageWrites,
+      ),
+      maxProviderCalls: Math.max(
+        summary.maxProviderCalls,
+        estimate.authorityProviderCalls +
+          estimate.economyProviderCalls +
+          estimate.profileProviderCalls,
+      ),
+    }),
+    {
+      subjects: 0,
+      maxStorageReads: 0,
+      maxStorageWrites: 0,
+      maxProviderCalls: 0,
+    },
+  );
+}
+
 function error(
   code: string,
   path: string,
@@ -221,4 +285,11 @@ function error(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function nextId(values: number[]): number {
+  const used = new Set(values);
+  let candidate = 1;
+  while (used.has(candidate)) candidate += 1;
+  return candidate;
 }

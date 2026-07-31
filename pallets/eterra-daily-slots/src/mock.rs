@@ -6,7 +6,7 @@ use crate::Config;
 use frame_support::BoundedVec;
 use frame_support::{
     construct_runtime, parameter_types,
-    traits::{ConstU128, ConstU16, ConstU32, Everything, UnixTime},
+    traits::{ConstBool, ConstU128, ConstU16, ConstU32, Everything, UnixTime},
 };
 use frame_system as system;
 use pallet_balances as balances;
@@ -153,6 +153,7 @@ impl pallet_eterra_daily_slots::Config for Test {
     type MaxDrawingEntries = MaxDrawingEntries;
     type Currency = Balances;
     type RewardPerWin = ConstU128<1_000>;
+    type DrawingsEnabled = ConstBool<true>;
 
     type WeightInfo = ();
 }

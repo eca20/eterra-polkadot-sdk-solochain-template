@@ -1,4 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
+// FRAME's generated pallet glue currently triggers this lint in macro expansion.
+#![allow(clippy::manual_inspect)]
 #![allow(clippy::duplicated_attributes)]
 
 pub use pallet::*;

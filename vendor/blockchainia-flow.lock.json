@@ -1,8 +1,8 @@
 {
   "schema": "blockchainia.flow.vendor-lock.v1",
   "sourceRepository": "/Users/edmundanderson/eterra_projects/blockchainia-flow",
-  "sourceCommit": "e04225009eb33f1ee4fabb0666d4eae50e443962",
-  "sourceTree": "7f3cc9a0a2a40c8d04f0b1148220f908adf55f7c",
+  "sourceCommit": "c078422c18459aa82657d5c8f761c205c5fe93f1",
+  "sourceTree": "4db0dddae74f04f073b2bde04268fccb896903a7",
   "version": "0.1.0-alpha.1",
   "vendorPath": "vendor/blockchainia-flow",
   "publicRelease": "blocked-pending-independent-license-review"

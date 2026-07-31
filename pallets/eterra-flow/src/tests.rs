@@ -178,6 +178,7 @@ fn authority_events(values: Vec<EventTypeId>) -> BoundedVec<EventTypeId, MaxAuth
     bvec(values)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn transition(
     transition_id: TransitionId,
     machine_id: MachineId,

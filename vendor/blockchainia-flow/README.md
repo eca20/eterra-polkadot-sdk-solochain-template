@@ -53,6 +53,10 @@ npm run check
 ./scripts/verify-wire-fixtures.sh
 ```
 
+`npm run test:wasm` executes the generated WebAssembly compiler under Node and
+checks the preferred/alias byte identity against the locked Zelda fixture; it
+is not only a native Rust wrapper test.
+
 This local alpha is not approval for package publication, public deployment, or
 production economic use. The release gate remains blocked until the provenance
 and third-party license review in [docs/LICENSE_REPORT.md](docs/LICENSE_REPORT.md)

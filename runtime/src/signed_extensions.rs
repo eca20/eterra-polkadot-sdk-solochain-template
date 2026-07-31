@@ -13,13 +13,11 @@ use sp_runtime::{
 
 use crate::{AccountId, Nonce, Runtime, RuntimeCall};
 
-/// Check nonce and increment to give replay protection for transactions, while allowing a
-/// brand-new account (providers == 0 and sufficients == 0) to submit a *single* signed faucet
-/// claim to itself so it can get initial funds.
+/// Check nonce and increment to give replay protection for transactions.
 ///
-/// Background: `frame_system::CheckNonce` rejects accounts with both providers and sufficients
-/// equal to zero (nonce storage "not paid for"). That blocks a new user from submitting a signed
-/// faucet claim, even when the runtime sponsors fees.
+/// The SCALE shape and `CheckNonce` identifier are retained for client
+/// compatibility. Nexus V2 private alpha deliberately disables the historical
+/// zero-balance faucet exception and fee sponsorship.
 #[derive(Encode, Decode, Clone, Eq, PartialEq, TypeInfo, Debug)]
 pub struct CheckNonceWithFaucet(#[codec(compact)] pub Nonce);
 
@@ -37,10 +35,8 @@ pub enum Pre {
 }
 
 fn is_self_faucet_claim(call: &RuntimeCall, who: &AccountId) -> bool {
-    matches!(
-        call,
-        RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { dest }) if dest == who
-    )
+    let _ = (call, who);
+    false
 }
 
 impl SignedExtension for CheckNonceWithFaucet

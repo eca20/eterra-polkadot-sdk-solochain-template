@@ -1,8 +1,10 @@
 # Visual builder
 
-The builder supports local template selection, machine/state/action editing,
-conditions, effects, validation diagnostics, warnings, JSON import/export,
-deterministic SCALE compilation, and unsigned publish-plan preparation.
+The builder supports local template selection, visual machine/state/action
+creation, transition/condition/effect editing, validation diagnostics,
+manifest-limit warnings, runtime-facing read/write/provider cost estimates,
+JSON import/export, deterministic SCALE compilation, and unsigned publish-plan
+preparation.
 
 It intentionally has:
 
@@ -21,4 +23,3 @@ wallet integration:
 Run it locally after `npm run build` by serving `apps/builder/dist` with any
 static file server. The Blockchainia website contains a separate private-alpha
 preview, not a production publisher.
-

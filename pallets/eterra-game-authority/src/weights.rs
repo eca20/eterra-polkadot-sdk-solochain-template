@@ -48,11 +48,25 @@ pub trait WeightInfo {
 pub struct SubstrateWeight<T>(PhantomData<T>);
 impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 	fn on_initialize(games_len: u32, removed_players: u32) -> Weight {
-		Weight::from_parts(0, 0)
+		// Includes up to five CardEscrow reservation-release callbacks per
+		// auto-ended game. Runtime scheduling caps games_len at eight.
+		Weight::from_parts(20_000_000_000, 16_384)
+			.saturating_add(
+				Weight::from_parts(100_000_000_000, 300_000)
+					.saturating_mul(games_len.into()),
+			)
+			.saturating_add(
+				Weight::from_parts(250_000_000, 2_500)
+					.saturating_mul(removed_players.into()),
+			)
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
-			.saturating_add(T::DbWeight::get().reads(games_len as u64))
-			.saturating_add(T::DbWeight::get().writes(games_len as u64))
+			.saturating_add(
+				T::DbWeight::get().reads((101_u64).saturating_mul(games_len.into())),
+			)
+			.saturating_add(
+				T::DbWeight::get().writes((101_u64).saturating_mul(games_len.into())),
+			)
 			.saturating_add(T::DbWeight::get().writes(removed_players as u64))
 	}
 
@@ -100,12 +114,16 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		// Minimum execution time: 23_000_000 picoseconds.
 		Weight::from_parts(17_888_768, 0)
 			.saturating_add(Weight::from_parts(0, 5535))
+			// Worst-case lifecycle hook reserves five external-escrow cards.
+			.saturating_add(Weight::from_parts(100_000_000_000, 400_000))
 			// Standard Error: 5_403
 			.saturating_add(Weight::from_parts(5_223_422, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(4))
 			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().reads(100))
+			.saturating_add(T::DbWeight::get().writes(100))
 			.saturating_add(Weight::from_parts(0, 2531).saturating_mul(n.into()))
 	}
 	/// Storage: `EterraGameAuthority::WhitelistedServers` (r:1 w:0)
@@ -123,8 +141,11 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 		// Minimum execution time: 215_000_000 picoseconds.
 		Weight::from_parts(217_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 7621))
+			// Worst-case lifecycle hook releases five escrow reservations.
+			.saturating_add(Weight::from_parts(100_000_000_000, 400_000))
 			.saturating_add(T::DbWeight::get().reads(3))
-			.saturating_add(T::DbWeight::get().writes(130))
+			.saturating_add(T::DbWeight::get().reads(100))
+			.saturating_add(T::DbWeight::get().writes(230))
 	}
 	/// Storage: `EterraGameAuthority::WhitelistedServers` (r:1 w:0)
 	/// Proof: `EterraGameAuthority::WhitelistedServers` (`max_values`: None, `max_size`: Some(48), added: 2523, mode: `MaxEncodedLen`)
@@ -148,11 +169,13 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 
 impl WeightInfo for () {
 	fn on_initialize(games_len: u32, removed_players: u32) -> Weight {
-		Weight::from_parts(0, 0)
+		Weight::from_parts(20_000_000_000, 16_384)
+			.saturating_add(Weight::from_parts(100_000_000_000, 300_000).saturating_mul(games_len.into()))
+			.saturating_add(Weight::from_parts(250_000_000, 2_500).saturating_mul(removed_players.into()))
 			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().reads(1))
 			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().writes(1))
-			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().reads(games_len as u64))
-			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().writes(games_len as u64))
+			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().reads((101_u64).saturating_mul(games_len.into())))
+			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().writes((101_u64).saturating_mul(games_len.into())))
 			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().writes(removed_players as u64))
 	}
 
@@ -173,19 +196,24 @@ impl WeightInfo for () {
 	fn create_game_with_round_id(n: u32, ) -> Weight {
 		Weight::from_parts(17_888_768, 0)
 			.saturating_add(Weight::from_parts(0, 5535))
+			.saturating_add(Weight::from_parts(100_000_000_000, 400_000))
 			.saturating_add(Weight::from_parts(5_223_422, 0).saturating_mul(n.into()))
 			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().reads(4))
 			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().writes(4))
 			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().writes((1_u64).saturating_mul(n.into())))
+			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().reads(100))
+			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().writes(100))
 			.saturating_add(Weight::from_parts(0, 2531).saturating_mul(n.into()))
 	}
 
 	fn end_game_with_command_id() -> Weight {
 		Weight::from_parts(217_000_000, 0)
 			.saturating_add(Weight::from_parts(0, 7621))
+			.saturating_add(Weight::from_parts(100_000_000_000, 400_000))
 			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().reads(3))
-			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().writes(130))
+			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().reads(100))
+			.saturating_add(frame_support::weights::constants::RocksDbWeight::get().writes(230))
 	}
 
 	fn record_eliminations_with_event_id() -> Weight {

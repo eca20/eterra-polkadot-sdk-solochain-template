@@ -6,12 +6,16 @@ use frame_support::{
     BoundedVec,
 };
 use frame_system as system;
+use parity_scale_codec::Encode;
 use sp_core::H256;
 use sp_runtime::{
     traits::{BlakeTwo256, IdentityLookup},
-    BuildStorage,
+    BuildStorage, DispatchError,
 };
-use std::{cell::RefCell, collections::BTreeSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 type Block = frame_system::mocking::MockBlock<Test>;
 
@@ -66,6 +70,19 @@ parameter_types! {
     pub const MaxProgressionTrees: u32 = 64;
     pub const CardXpPerLevel: u32 = 100;
     pub const MaxCardXpGrantAmount: u32 = 500;
+    pub const MaxV2PoolProfiles: u32 = 400;
+    pub const MaxV2PoolPoses: u32 = 256;
+    pub const MaxV2PoolBackgrounds: u32 = 32;
+    pub const MaxV2CreditsPerAccountSku: u32 = 16;
+    pub const MaxV2ProtectionBytes: u32 = 600;
+    pub const MaxV2TeamSize: u32 = 6;
+    pub const V2OperationalCardWarningThreshold: u64 = 9_000;
+    pub const V2OperationalCardLimit: u64 = 10_000;
+    pub const V16MigrationBatchSize: u32 = 50;
+    pub const MinimumActiveCardsAfterConversion: u32 = 1;
+    pub const MaxPendingConversionsPerAccount: u32 = 2;
+    pub const MythicalAscensionSeasonDurationBlocks: u64 = 90;
+    pub const MythicalAscensionWeekDurationBlocks: u64 = 7;
 
     pub const MaxMediaUriLen: u32 = 256;
     pub const MaxMediaContentTypeLen: u32 = 64;
@@ -105,6 +122,16 @@ impl pallet_eterra_slots::ProgressionAuthorityProvider<u64> for MockProgressionA
 
 std::thread_local! {
     static MOCK_CURRENT_HAND: RefCell<BTreeSet<(u64, u32)>> = const { RefCell::new(BTreeSet::new()) };
+    static MOCK_RANDOM_OUTPUTS: RefCell<BTreeMap<[u8; 32], [u8; 32]>> = const { RefCell::new(BTreeMap::new()) };
+    static MOCK_RANDOM_TIMEOUTS: RefCell<BTreeSet<[u8; 32]>> = const { RefCell::new(BTreeSet::new()) };
+    static MOCK_RANDOM_CONTEXTS: RefCell<BTreeMap<[u8; 32], (eterra_nexus_primitives::EconomicRealm, pallet_eterra_randomness::RandomnessMode)>> = const { RefCell::new(BTreeMap::new()) };
+    static MOCK_RANDOM_MODE: RefCell<pallet_eterra_randomness::RandomnessMode> = const { RefCell::new(pallet_eterra_randomness::RandomnessMode::DeterministicPrivateAlpha) };
+    static MOCK_LAST_RANDOM_REQUEST: RefCell<Option<[u8; 32]>> = const { RefCell::new(None) };
+    static MOCK_NEXT_ENTITY_ID: RefCell<u64> = const { RefCell::new(1) };
+    static MOCK_CREATED_ENTITIES: RefCell<Vec<pallet_eterra_creatures::ConversionEntityInput<u64>>> = const { RefCell::new(Vec::new()) };
+    static MOCK_CONVERSION_PROFILE_ACTIVE: RefCell<bool> = const { RefCell::new(true) };
+    static MOCK_LEGACY_ESCROW_OWNERS: RefCell<BTreeMap<u32, u64>> = const { RefCell::new(BTreeMap::new()) };
+    static MOCK_V2_GENESIS_HASH: RefCell<[u8; 32]> = const { RefCell::new([0xA5; 32]) };
 }
 
 pub fn set_mock_current_hand(owner: u64, card_id: u32) {
@@ -117,11 +144,272 @@ pub fn clear_mock_current_hands() {
     MOCK_CURRENT_HAND.with(|hand| hand.borrow_mut().clear());
 }
 
+pub fn last_random_request() -> [u8; 32] {
+    MOCK_LAST_RANDOM_REQUEST.with(|request| request.borrow().expect("random request exists"))
+}
+
+pub fn has_random_request() -> bool {
+    MOCK_LAST_RANDOM_REQUEST.with(|request| request.borrow().is_some())
+}
+
+pub fn finalize_random_request(request_id: [u8; 32], output: [u8; 32]) {
+    MOCK_RANDOM_OUTPUTS.with(|outputs| {
+        outputs.borrow_mut().insert(request_id, output);
+    });
+}
+
+pub fn set_mock_randomness_mode(mode: pallet_eterra_randomness::RandomnessMode) {
+    MOCK_RANDOM_MODE.with(|current| *current.borrow_mut() = mode);
+}
+
+pub fn timeout_random_request(request_id: [u8; 32]) {
+    MOCK_RANDOM_TIMEOUTS.with(|timeouts| {
+        timeouts.borrow_mut().insert(request_id);
+    });
+}
+
+pub fn created_entities() -> Vec<pallet_eterra_creatures::ConversionEntityInput<u64>> {
+    MOCK_CREATED_ENTITIES.with(|entities| entities.borrow().clone())
+}
+
+pub fn set_mock_conversion_profile_active(active: bool) {
+    MOCK_CONVERSION_PROFILE_ACTIVE.with(|value| *value.borrow_mut() = active);
+}
+
+pub fn set_mock_v2_genesis_hash(genesis_hash: [u8; 32]) {
+    MOCK_V2_GENESIS_HASH.with(|value| *value.borrow_mut() = genesis_hash);
+}
+
+pub fn set_mock_legacy_escrow_owner(card_id: u32, owner: u64) {
+    MOCK_LEGACY_ESCROW_OWNERS.with(|owners| {
+        owners.borrow_mut().insert(card_id, owner);
+    });
+}
+
+pub const MOCK_LEGACY_ESCROW_CUSTODIAN: u64 = 900_001;
+
 pub struct MockHandChecker;
 
 impl pallet_eterra_slots::HandChecker<u64> for MockHandChecker {
     fn is_card_in_current_hand(owner: &u64, card_id: u32) -> bool {
         MOCK_CURRENT_HAND.with(|hand| hand.borrow().contains(&(*owner, card_id)))
+    }
+}
+
+pub struct MockV2Randomness;
+
+pub struct MockV2ChainDomain;
+
+impl pallet_eterra_slots::V2ChainDomainProvider for MockV2ChainDomain {
+    fn genesis_hash() -> [u8; 32] {
+        MOCK_V2_GENESIS_HASH.with(|value| *value.borrow())
+    }
+}
+
+impl pallet_eterra_randomness::VerifiableRandomness for MockV2Randomness {
+    fn request(
+        domain: [u8; 32],
+        commitment: [u8; 32],
+        immutable_config_hash: [u8; 32],
+        min_epoch: u64,
+    ) -> Result<[u8; 32], DispatchError> {
+        Self::request_for(
+            eterra_nexus_primitives::EconomicRealm::Training,
+            Self::current_mode(),
+            domain,
+            commitment,
+            immutable_config_hash,
+            min_epoch,
+        )
+    }
+
+    fn output(request_id: [u8; 32]) -> Option<(u64, [u8; 32], [u8; 32])> {
+        MOCK_RANDOM_OUTPUTS.with(|outputs| {
+            outputs
+                .borrow()
+                .get(&request_id)
+                .copied()
+                .map(|output| (1, output, [7; 32]))
+        })
+    }
+
+    fn timed_out(request_id: [u8; 32]) -> bool {
+        MOCK_RANDOM_TIMEOUTS.with(|timeouts| timeouts.borrow().contains(&request_id))
+    }
+
+    fn current_mode() -> pallet_eterra_randomness::RandomnessMode {
+        MOCK_RANDOM_MODE.with(|mode| *mode.borrow())
+    }
+
+    fn request_for(
+        economic_realm: eterra_nexus_primitives::EconomicRealm,
+        expected_provenance: pallet_eterra_randomness::RandomnessMode,
+        domain: [u8; 32],
+        commitment: [u8; 32],
+        immutable_config_hash: [u8; 32],
+        min_epoch: u64,
+    ) -> Result<[u8; 32], DispatchError> {
+        let mode = Self::current_mode();
+        if expected_provenance == pallet_eterra_randomness::RandomnessMode::Disabled
+            || expected_provenance != mode
+            || (economic_realm == eterra_nexus_primitives::EconomicRealm::Production
+                && expected_provenance != pallet_eterra_randomness::RandomnessMode::DrandQuicknet)
+        {
+            return Err(DispatchError::Other(
+                "mock randomness realm or provenance mismatch",
+            ));
+        }
+        let request_id = sp_io::hashing::blake2_256(
+            &(
+                economic_realm,
+                expected_provenance,
+                domain,
+                commitment,
+                immutable_config_hash,
+                min_epoch,
+            )
+                .encode(),
+        );
+        MOCK_RANDOM_CONTEXTS.with(|contexts| {
+            contexts
+                .borrow_mut()
+                .insert(request_id, (economic_realm, expected_provenance));
+        });
+        MOCK_LAST_RANDOM_REQUEST.with(|request| *request.borrow_mut() = Some(request_id));
+        Ok(request_id)
+    }
+
+    fn output_for(
+        request_id: [u8; 32],
+        expected_realm: eterra_nexus_primitives::EconomicRealm,
+        expected_provenance: pallet_eterra_randomness::RandomnessMode,
+    ) -> Option<pallet_eterra_randomness::RealmBoundRandomnessOutput> {
+        let context =
+            MOCK_RANDOM_CONTEXTS.with(|contexts| contexts.borrow().get(&request_id).copied())?;
+        if context != (expected_realm, expected_provenance) {
+            return None;
+        }
+        Self::output(request_id).map(|(epoch, output, proof_hash)| {
+            pallet_eterra_randomness::RealmBoundRandomnessOutput {
+                epoch,
+                output,
+                proof_hash,
+                economic_realm: expected_realm,
+                provenance: expected_provenance,
+                provider_chain_hash: [0; 32],
+            }
+        })
+    }
+
+    fn production_ready() -> bool {
+        Self::current_mode() == pallet_eterra_randomness::RandomnessMode::DrandQuicknet
+    }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct MockV2BenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_eterra_slots::V2BenchmarkHelper for MockV2BenchmarkHelper {
+    fn prepare_randomness() {
+        set_mock_randomness_mode(pallet_eterra_randomness::RandomnessMode::DrandQuicknet);
+    }
+
+    fn seed_finalized_randomness(request_id: [u8; 32], output: [u8; 32]) {
+        finalize_random_request(request_id, output);
+    }
+
+    fn seed_timed_out_randomness(request_id: [u8; 32]) {
+        timeout_random_request(request_id);
+    }
+
+    fn prepare_conversion_entity_profile(
+        _subject_id: u32,
+        _subject_version: u32,
+        _rarity: eterra_nexus_primitives::CardRarity,
+    ) {
+    }
+}
+
+pub struct MockV2Entities;
+
+impl pallet_eterra_creatures::EntityManager<u64, u64> for MockV2Entities {
+    fn reserve_entity_id() -> Result<u64, DispatchError> {
+        MOCK_NEXT_ENTITY_ID.with(|next| {
+            let entity_id = *next.borrow();
+            *next.borrow_mut() = entity_id.saturating_add(1);
+            Ok(entity_id)
+        })
+    }
+
+    fn ensure_conversion_profile_active(
+        _subject_id: u32,
+        _subject_version: u32,
+        _rarity: eterra_nexus_primitives::CardRarity,
+    ) -> DispatchResult {
+        MOCK_CONVERSION_PROFILE_ACTIVE.with(|active| {
+            if *active.borrow() {
+                Ok(())
+            } else {
+                Err(DispatchError::Other("mock conversion profile inactive"))
+            }
+        })
+    }
+
+    fn create_from_conversion(
+        input: pallet_eterra_creatures::ConversionEntityInput<u64>,
+    ) -> DispatchResult {
+        MOCK_CREATED_ENTITIES.with(|entities| entities.borrow_mut().push(input));
+        Ok(())
+    }
+
+    fn validate_session_entity(
+        _owner: &u64,
+        _economic_realm: eterra_nexus_primitives::EconomicRealm,
+        _entity_id: u64,
+        _revision: u32,
+        _format_id: u32,
+        _format_version: u32,
+        _allowed_roles_mask: u8,
+    ) -> DispatchResult {
+        Ok(())
+    }
+
+    fn lock_entity(
+        _owner: &u64,
+        _entity_id: u64,
+        _lock: eterra_nexus_primitives::AssetLock<u64>,
+    ) -> DispatchResult {
+        Ok(())
+    }
+
+    fn unlock_entity(_session_id: u64, _entity_id: u64) -> DispatchResult {
+        Ok(())
+    }
+
+    fn force_unlock_entity(_session_id: u64, _entity_id: u64) -> DispatchResult {
+        Ok(())
+    }
+
+    fn grant_experience(
+        _owner: &u64,
+        _entity_id: u64,
+        _amount: u64,
+        _result_id: [u8; 32],
+    ) -> DispatchResult {
+        Ok(())
+    }
+}
+
+pub struct MockLegacyEscrowOwnerProvider;
+
+impl pallet_eterra_slots::LegacyEscrowOwnerProvider<u64> for MockLegacyEscrowOwnerProvider {
+    fn beneficial_owner(card_id: u32) -> Option<u64> {
+        MOCK_LEGACY_ESCROW_OWNERS.with(|owners| owners.borrow().get(&card_id).copied())
+    }
+
+    fn custodian_account() -> Option<u64> {
+        Some(MOCK_LEGACY_ESCROW_CUSTODIAN)
     }
 }
 
@@ -277,6 +565,12 @@ impl pallet_eterra_slots::Config for Test {
     type AccessControl = ();
     type HandChecker = MockHandChecker;
     type ProgressionAuthorityProvider = MockProgressionAuthorityProvider;
+    type V2Randomness = MockV2Randomness;
+    type V2ChainDomain = MockV2ChainDomain;
+    #[cfg(feature = "runtime-benchmarks")]
+    type V2BenchmarkHelper = MockV2BenchmarkHelper;
+    type V2Entities = MockV2Entities;
+    type LegacyEscrowOwnerProvider = MockLegacyEscrowOwnerProvider;
     type PackPrice = PackPrice;
     type PackPriceReceiver = PackPriceReceiver;
     type ProPrice = ProPrice;
@@ -314,12 +608,37 @@ impl pallet_eterra_slots::Config for Test {
     type CardXpPerLevel = CardXpPerLevel;
     type MaxCardXpGrantAmount = MaxCardXpGrantAmount;
     type MaxNexusMatchPlayers = MaxNexusMatchPlayers;
+    type MaxV2PoolProfiles = MaxV2PoolProfiles;
+    type MaxV2PoolPoses = MaxV2PoolPoses;
+    type MaxV2PoolBackgrounds = MaxV2PoolBackgrounds;
+    type MaxV2CreditsPerAccountSku = MaxV2CreditsPerAccountSku;
+    type MaxV2ProtectionBytes = MaxV2ProtectionBytes;
+    type MaxV2TeamSize = MaxV2TeamSize;
+    type V2OperationalCardWarningThreshold = V2OperationalCardWarningThreshold;
+    type V2OperationalCardLimit = V2OperationalCardLimit;
+    type V16MigrationBatchSize = V16MigrationBatchSize;
+    type MinimumActiveCardsAfterConversion = MinimumActiveCardsAfterConversion;
+    type MaxPendingConversionsPerAccount = MaxPendingConversionsPerAccount;
+    type MythicalAscensionSeasonDurationBlocks = MythicalAscensionSeasonDurationBlocks;
+    type MythicalAscensionWeekDurationBlocks = MythicalAscensionWeekDurationBlocks;
 
     type WeightInfo = ();
 }
 
 pub fn new_test_ext() -> sp_io::TestExternalities {
     clear_mock_current_hands();
+    MOCK_RANDOM_OUTPUTS.with(|outputs| outputs.borrow_mut().clear());
+    MOCK_RANDOM_TIMEOUTS.with(|timeouts| timeouts.borrow_mut().clear());
+    MOCK_RANDOM_CONTEXTS.with(|contexts| contexts.borrow_mut().clear());
+    MOCK_RANDOM_MODE.with(|mode| {
+        *mode.borrow_mut() = pallet_eterra_randomness::RandomnessMode::DeterministicPrivateAlpha
+    });
+    MOCK_LAST_RANDOM_REQUEST.with(|request| *request.borrow_mut() = None);
+    MOCK_NEXT_ENTITY_ID.with(|next| *next.borrow_mut() = 1);
+    MOCK_CREATED_ENTITIES.with(|entities| entities.borrow_mut().clear());
+    MOCK_CONVERSION_PROFILE_ACTIVE.with(|active| *active.borrow_mut() = true);
+    MOCK_LEGACY_ESCROW_OWNERS.with(|owners| owners.borrow_mut().clear());
+    MOCK_V2_GENESIS_HASH.with(|value| *value.borrow_mut() = [0xA5; 32]);
     let mut storage = system::GenesisConfig::<Test>::default()
         .build_storage()
         .expect("system genesis builds");
@@ -351,6 +670,9 @@ pub fn new_test_ext() -> sp_io::TestExternalities {
     let mut ext = sp_io::TestExternalities::new(storage);
     ext.execute_with(|| {
         System::set_block_number(1);
+        // The production on-empty default seals LegacyV1 creation. Legacy unit
+        // tests explicitly exercise the pre-V16 behavior.
+        pallet_eterra_slots::LegacyCreationSealedV16::<Test>::put(false);
 
         let name: BoundedVec<u8, MaxSeasonNameLen> = b"S1".to_vec().try_into().unwrap();
         let desc: BoundedVec<u8, MaxSeasonDescLen> = b"D1".to_vec().try_into().unwrap();

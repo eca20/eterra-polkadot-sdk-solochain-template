@@ -36,6 +36,7 @@ pallet-eterra-monte-carlo-ai = { path = "../eterra-monte-carlo-ai", default-feat
 pallet-eterra-simple-matchmaker = { workspace = true, default-features = false }
 
 [dev-dependencies]
+eterra-nexus-primitives = { workspace = true, features = ["std"] }
 sp-core = { workspace = true }
 pallet-assets = { workspace = true, default-features = false }
 pallet-eterra-media = { workspace = true, default-features = false, features = ["std"] }

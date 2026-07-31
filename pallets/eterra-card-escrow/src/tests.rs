@@ -52,7 +52,7 @@ fn deposit_and_immediate_withdraw_round_trips_card() {
 }
 
 #[test]
-fn active_game_withdraw_becomes_pending_and_auto_withdraws_on_end() {
+fn active_game_withdraw_becomes_unreserved_and_requires_weighted_direct_exit() {
     ExtBuilder::build().execute_with(|| {
         seed_card(10, ALICE, genome(7));
         seed_game(44, SERVER, vec![ALICE, BOB], true);
@@ -75,10 +75,63 @@ fn active_game_withdraw_becomes_pending_and_auto_withdraws_on_end() {
         );
 
         CardEscrow::handle_game_ended(44);
-        assert_eq!(card_owner(10), Some(ALICE));
-        assert!(CardEscrow::escrow_entry(10).is_none());
+        let entry = CardEscrow::escrow_entry(10).expect("queued exit remains in escrow");
+        assert_eq!(entry.owner, ALICE);
+        assert_eq!(entry.reserved_by, None);
+        assert!(entry.withdraw_requested);
+        assert_eq!(card_owner(10), Some(CardEscrow::account_id()));
+        assert!(CardEscrow::escrowed_by_owner(ALICE).contains(&10));
         assert!(GameEnemyAssignments::<Test>::get(44).is_empty());
         assert_eq!(CardEscrow::available_escrow_count(), 0);
+
+        assert_ok!(CardEscrow::withdraw_cards(
+            RuntimeOrigin::signed(ALICE),
+            card_ids(vec![10]),
+        ));
+        assert_eq!(card_owner(10), Some(ALICE));
+        assert!(CardEscrow::escrow_entry(10).is_none());
+        assert!(!CardEscrow::escrowed_by_owner(ALICE).contains(&10));
+    });
+}
+
+#[test]
+fn failed_direct_exit_after_game_end_preserves_entry_and_owner_index_for_retry() {
+    ExtBuilder::build().execute_with(|| {
+        seed_card(10, ALICE, genome(7));
+        seed_game(44, SERVER, vec![ALICE, BOB], true);
+        assert_ok!(CardEscrow::deposit_cards(
+            RuntimeOrigin::signed(ALICE),
+            card_ids(vec![10]),
+        ));
+        assert_ok!(CardEscrow::handle_game_created(44));
+        assert_ok!(CardEscrow::withdraw_cards(
+            RuntimeOrigin::signed(ALICE),
+            card_ids(vec![10]),
+        ));
+
+        CardEscrow::handle_game_ended(44);
+
+        set_withdraw_failure(true);
+        assert!(
+            CardEscrow::withdraw_cards(RuntimeOrigin::signed(ALICE), card_ids(vec![10]),).is_err()
+        );
+
+        let entry = CardEscrow::escrow_entry(10).expect("failed direct exit remains recoverable");
+        assert_eq!(entry.owner, ALICE);
+        assert_eq!(entry.reserved_by, None);
+        assert!(entry.withdraw_requested);
+        assert!(CardEscrow::escrowed_by_owner(ALICE).contains(&10));
+        assert_eq!(card_owner(10), Some(CardEscrow::account_id()));
+        assert!(GameEnemyAssignments::<Test>::get(44).is_empty());
+
+        set_withdraw_failure(false);
+        assert_ok!(CardEscrow::withdraw_cards(
+            RuntimeOrigin::signed(ALICE),
+            card_ids(vec![10]),
+        ));
+        assert_eq!(card_owner(10), Some(ALICE));
+        assert!(CardEscrow::escrow_entry(10).is_none());
+        assert!(!CardEscrow::escrowed_by_owner(ALICE).contains(&10));
     });
 }
 

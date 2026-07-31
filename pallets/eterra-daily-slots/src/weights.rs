@@ -54,10 +54,14 @@ impl WeightInfo for () {
 		Weight::from_parts(10_000, 0)
 	}
 	fn on_initialize_no_draw() -> Weight {
-		Weight::from_parts(10_000, 0)
+		Weight::from_parts(50_000_000_000, 16_384)
 	}
-	fn on_initialize_with_draw(_max_entries: u32) -> Weight {
-		Weight::from_parts(10_000, 0)
+	fn on_initialize_with_draw(max_entries: u32) -> Weight {
+		Weight::from_parts(50_000_000_000, 16_384)
+			.saturating_add(
+				Weight::from_parts(500_000_000, 2_500)
+					.saturating_mul(max_entries.into()),
+			)
 	}
 }
 
@@ -107,12 +111,19 @@ impl<T: frame_system::Config> crate::WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
 	fn on_initialize_no_draw() -> Weight {
-		// Roughly a single read for the time provider check.
-		T::DbWeight::get().reads(1)
+		// Also covers the first-block three-reel contains/initialization path.
+		Weight::from_parts(50_000_000_000, 16_384)
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(3))
 	}
 	fn on_initialize_with_draw(max_entries: u32) -> Weight {
-		// The weekly draw iterates up to max_entries and clears storage.
+		// The weekly draw iterates and clears up to max_entries.
 		let max = max_entries as u64;
-		T::DbWeight::get().reads_writes(3 + max, 2 + max)
+		Weight::from_parts(50_000_000_000, 16_384)
+			.saturating_add(
+				Weight::from_parts(500_000_000, 2_500)
+					.saturating_mul(max_entries.into()),
+			)
+			.saturating_add(T::DbWeight::get().reads_writes(6 + max, 5 + max))
 	}
 }

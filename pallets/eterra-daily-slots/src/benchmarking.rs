@@ -37,7 +37,7 @@ benchmarks! {
     set_reel_weights {
         let reel: u32 = 0;
         let max_entries = T::MaxWeightEntries::get();
-        let count = max_entries.max(1).min(3);
+        let count = max_entries.clamp(1, 3);
         let mut weights: BoundedVec<(u32, u32), T::MaxWeightEntries> = BoundedVec::default();
         for i in 0..count {
             weights.try_push((i, 1)).expect("within benchmark bounds; qed");
@@ -50,7 +50,7 @@ benchmarks! {
     set_all_reel_weights {
         let slot_len = T::MaxSlotLength::get();
         let max_entries = T::MaxWeightEntries::get();
-        let count = max_entries.max(1).min(3);
+        let count = max_entries.clamp(1, 3);
 
         let mut all_weights: BoundedVec<
             (u32, BoundedVec<(u32, u32), T::MaxWeightEntries>),

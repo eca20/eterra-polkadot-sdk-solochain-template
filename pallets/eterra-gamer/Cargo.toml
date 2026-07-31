@@ -6,6 +6,7 @@ license = "Apache-2.0"
 publish = false
 
 [dependencies]
+eterra-nexus-primitives = { workspace = true }
 scale-info         = { workspace = true, features = ["derive"] }
 parity-scale-codec = { workspace = true, features = ["derive", "max-encoded-len"] }
 
@@ -23,10 +24,12 @@ frame-system-benchmarking = { workspace = true, default-features = false, option
 
 [dev-dependencies]
 sp-io = { workspace = true, default-features = false }
+sp-keystore = { workspace = true, features = ["std"] }
 
 [features]
 default = ["std"]
 std = [
+  "eterra-nexus-primitives/std",
   "scale-info/std",
   "parity-scale-codec/std",
   "sp-std/std",

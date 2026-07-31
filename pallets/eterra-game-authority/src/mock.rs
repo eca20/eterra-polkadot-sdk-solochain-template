@@ -62,6 +62,7 @@ impl pallet_eterra_game_authority::Config for Test {
     // Governance-only management of server whitelist for tests:
     type AdminOrigin = EnsureRoot<AccountId>;
     type MaxExpirationsPerBlock = frame_support::traits::ConstU32<256>;
+    type MaxScheduledExpirationsPerBlock = frame_support::traits::ConstU32<8>;
     type MaxRoundBlocks = frame_support::traits::ConstU64<30>;
     type MaxBatchAdd = frame_support::traits::ConstU32<32>;
     type GameLifecycleHooks = ();
