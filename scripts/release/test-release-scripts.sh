@@ -17,6 +17,9 @@ POST_CUTOVER_COORDINATOR_TEST="${ROOT_DIR}/deploy/alpha/macmini2010/test_nexus_v
 FINAL_FREEZE="${ROOT_DIR}/scripts/nexus-v2-private-alpha/final_freeze.py"
 FINAL_FREEZE_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_final_freeze.py"
 FINAL_FREEZE_CHAIN_DRIVER="${ROOT_DIR}/deploy/alpha/macmini2010/nexus-v2-final-freeze-chain-driver"
+FINAL_FREEZE_CHAIN_DRIVER_TEST="${ROOT_DIR}/deploy/alpha/macmini2010/test_nexus_v2_final_freeze_chain_driver.py"
+FINAL_FREEZE_RUNTIME_BUNDLE="${ROOT_DIR}/scripts/nexus-v2-private-alpha/final_freeze_runtime_bundle.py"
+FINAL_FREEZE_RUNTIME_BUNDLE_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_final_freeze_runtime_bundle.py"
 NODE_CANDIDATE="${ROOT_DIR}/scripts/nexus-v2-private-alpha/node_candidate.py"
 NODE_CANDIDATE_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_node_candidate.py"
 FROZEN_SNAPSHOT_PROOF_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_frozen_snapshot_proof.py"
@@ -35,7 +38,8 @@ bash -n "$BUILD" "$NEXUS_V2_BUNDLE" "$REHEARSE" "$MEDIA_DEPLOY" "$NODE_DEPLOY" "
 python3 -m unittest \
 	"${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_verify_reset_readiness.py"
 python3 -m unittest "${POST_CUTOVER_COORDINATOR_TEST}"
-python3 -m unittest "$FINAL_FREEZE_TEST" "$NODE_CANDIDATE_TEST" "$FROZEN_SNAPSHOT_PROOF_TEST"
+python3 -m unittest "$FINAL_FREEZE_TEST" "$NODE_CANDIDATE_TEST" "$FROZEN_SNAPSHOT_PROOF_TEST" \
+	"$FINAL_FREEZE_CHAIN_DRIVER_TEST" "$FINAL_FREEZE_RUNTIME_BUNDLE_TEST"
 python3 -m unittest "$LINUX_RUNTIME_BUNDLE_TEST"
 "$BUILD" --help >/dev/null
 "$NEXUS_V2_BUNDLE" --help >/dev/null
@@ -153,6 +157,17 @@ rg -q 'targetPlatform' "$NODE_CANDIDATE"
 rg -q 'not x86-64' "$NODE_CANDIDATE"
 rg -q 'create-snapshot' "$FINAL_FREEZE_CHAIN_DRIVER"
 rg -Fq -- '--at "${frozen_block_hash}"' "$FINAL_FREEZE_CHAIN_DRIVER"
+rg -q -- '--component-source-commit' "$FINAL_FREEZE"
+rg -q -- '--component-source-commit' "$FINAL_FREEZE_CHAIN_DRIVER"
+rg -q 'ROLE_SOURCE_COMPONENT' "$FINAL_FREEZE"
+rg -q '79359a961d065bd189f9b585cd57d339b6f58d8855b4d1d156c03b3e0b3feb5c' "$FINAL_FREEZE_RUNTIME_BUNDLE"
+rg -q 'e983dc09310e737c0e9e5cc3ba067a336da877c72db42c335e9b39316be2aace' "$FINAL_FREEZE_RUNTIME_BUNDLE"
+rg -q 'fc9a48dc7f27946221510f5f5ef7b616b121928c8366b4903afcc0ffeaf58b9d' "$FINAL_FREEZE_RUNTIME_BUNDLE"
+runtime_verifier_pin="$(rg -o 'freeze_runtime_verifier_sha256="[0-9a-f]{64}"' "$FINAL_FREEZE_CHAIN_DRIVER" | cut -d\" -f2)"
+[[ "${runtime_verifier_pin}" == "$(shasum -a 256 "$FINAL_FREEZE_RUNTIME_BUNDLE" | awk '{print $1}')" ]] || {
+	echo "final-freeze runtime verifier pin mismatch" >&2
+	exit 1
+}
 if rg -q -- '--try-runtime-snapshot' "$FINAL_FREEZE_CHAIN_DRIVER"; then
 	echo "final freeze may not accept a pre-existing try-runtime snapshot" >&2
 	exit 1

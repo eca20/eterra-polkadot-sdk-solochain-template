@@ -132,6 +132,7 @@ STANDARD_FLAGS = {
     "--action",
     "--artifact",
     "--bundle-root",
+    "--component-source-commit",
     "--dry-run",
     "--frozen-block-hash",
     "--frozen-block-number",
@@ -141,6 +142,13 @@ STANDARD_FLAGS = {
     "--source-commit",
     "--target",
     "--transaction-id",
+}
+ROLE_SOURCE_COMPONENT = {
+    "authority": "sdkgen",
+    "chain": "chain",
+    "media-ipfs": "media",
+    "site-indexer-mongo": "web",
+    "site-ingress": "web",
 }
 PLAN_KEYS = {
     "authorizations",
@@ -284,6 +292,8 @@ def validate_plan(path: Path, expected_sha256: str) -> dict[str, Any]:
     for component, commit in source_commits.items():
         ensure_commit(commit, f"{component} source commit")
     require(source_commits["chain"] == source_commit, "plan chain source commit mismatch")
+    require(set(ROLE_SOURCE_COMPONENT) == set(ROLES), "role-to-source-component map does not cover the closed role set")
+    require(set(ROLE_SOURCE_COMPONENT.values()) == SOURCE_COMPONENTS, "role-to-source-component map leaves a source commit unused")
     pre_v16 = value.get("preV16SourceRuntime")
     require(isinstance(pre_v16, dict) and set(pre_v16) == PRE_V16_SOURCE_KEYS, "pre-V16 source runtime contract mismatch")
     ensure_commit(pre_v16.get("deployedSourceCommit"), "deployed pre-V16 source commit")
@@ -366,6 +376,7 @@ def validate_plan(path: Path, expected_sha256: str) -> dict[str, Any]:
         "value": value,
         "releaseId": release_id,
         "sourceCommit": source_commit,
+        "componentSourceCommits": dict(source_commits),
         "transactionId": transaction_id,
         "stabilityWindowSeconds": window,
         "components": normalized,
@@ -497,6 +508,8 @@ def invoke_driver(
         plan["releaseId"],
         "--source-commit",
         plan["sourceCommit"],
+        "--component-source-commit",
+        plan["componentSourceCommits"][ROLE_SOURCE_COMPONENT[role]],
         "--role",
         role,
         "--target",

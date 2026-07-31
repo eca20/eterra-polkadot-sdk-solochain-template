@@ -51,6 +51,7 @@ class FinalFreezeTests(unittest.TestCase):
                 parser.add_argument("--transaction-id", required=True)
                 parser.add_argument("--release-id", required=True)
                 parser.add_argument("--source-commit", required=True)
+                parser.add_argument("--component-source-commit", required=True)
                 parser.add_argument("--role", required=True)
                 parser.add_argument("--target", required=True)
                 parser.add_argument("--bundle-root", required=True)
@@ -61,6 +62,15 @@ class FinalFreezeTests(unittest.TestCase):
                 parser.add_argument("--dry-run", action="store_true")
                 parser.add_argument("--fail-freeze", action="store_true")
                 args = parser.parse_args()
+                expected_component_commits = {{
+                    "authority": "c" * 40,
+                    "chain": "a" * 40,
+                    "media-ipfs": "b" * 40,
+                    "site-indexer-mongo": "df01ffc08a791a73d60461d25d0a9d8a78456466",
+                    "site-ingress": "df01ffc08a791a73d60461d25d0a9d8a78456466",
+                }}
+                if args.component_source_commit != expected_component_commits[args.role]:
+                    raise SystemExit("protected component source commit mismatch")
                 if args.action == "preflight":
                     checks = preflight_checks
                 elif args.action == "freeze":
@@ -301,6 +311,55 @@ class FinalFreezeTests(unittest.TestCase):
         digest = hashlib.sha256(plan.read_bytes()).hexdigest()
         with self.assertRaisesRegex(tool.FreezeError, "secret material"):
             tool.validate_plan(plan, digest)
+
+    def test_swapped_component_commits_fail_driver_validation(self) -> None:
+        plan, _ = self.make_plan()
+        value = json.loads(plan.read_text())
+        value["componentSourceCommits"]["media"], value["componentSourceCommits"]["sdkgen"] = (
+            value["componentSourceCommits"]["sdkgen"],
+            value["componentSourceCommits"]["media"],
+        )
+        write_json(plan, value)
+        digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+        result = tool.main(
+            [
+                "dry-run",
+                "--plan",
+                str(plan),
+                "--expected-plan-sha256",
+                digest,
+                "--bundle-root",
+                str(self.root / "swapped-bundle"),
+                "--state-root",
+                str(self.root / "swapped-state"),
+                "--evidence",
+                str(self.root / "swapped-evidence.json"),
+            ]
+        )
+        self.assertEqual(result, 2)
+
+    def test_mutated_previously_unused_sdk_commit_fails_authority_driver(self) -> None:
+        plan, _ = self.make_plan()
+        value = json.loads(plan.read_text())
+        value["componentSourceCommits"]["sdkgen"] = "e" * 40
+        write_json(plan, value)
+        digest = hashlib.sha256(plan.read_bytes()).hexdigest()
+        result = tool.main(
+            [
+                "dry-run",
+                "--plan",
+                str(plan),
+                "--expected-plan-sha256",
+                digest,
+                "--bundle-root",
+                str(self.root / "unused-bundle"),
+                "--state-root",
+                str(self.root / "unused-state"),
+                "--evidence",
+                str(self.root / "unused-evidence.json"),
+            ]
+        )
+        self.assertEqual(result, 2)
 
 
 if __name__ == "__main__":

@@ -7,8 +7,8 @@
   "componentSourceCommits": {
     "chain": "REPLACE_WITH_40_HEX_CHAIN_DEPLOY_COMMIT",
     "media": "REPLACE_WITH_40_HEX_MEDIA_COMMIT",
-    "sdkgen": "f4776393c43d020308d3ea87dc1a961684dc775a",
-    "web": "df01ffc08a791a73d60461d25d0a9d8a78456466"
+    "sdkgen": "fa30860eeffae6b2d196d4e294c7c298773974c6",
+    "web": "REPLACE_WITH_40_HEX_FINAL_WEB_COMMIT"
   },
   "preV16SourceRuntime": {
     "deployedSourceCommit": "REPLACE_WITH_40_HEX_CURRENT_ALPHA_COMMIT",
@@ -44,7 +44,9 @@
       "target": "private-alpha-chain",
       "arguments": [
         "--runtime-bundle",
-        "/private/path/to/runtime-release-spec106-retry1",
+        "/private/path/to/runtime-release-spec106-linux-7338beff0c99",
+        "--runtime-bundle-manifest-sha256",
+        "79359a961d065bd189f9b585cd57d339b6f58d8855b4d1d156c03b3e0b3feb5c",
         "--runtime-v14-metadata",
         "/private/path/to/final-stopped-runtime-v14-metadata.scale",
         "--isolated-rpc-port",

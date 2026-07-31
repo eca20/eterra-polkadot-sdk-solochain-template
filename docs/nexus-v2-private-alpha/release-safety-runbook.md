@@ -86,6 +86,17 @@ The command has no live RPC input and refuses a dirty assembly-tool worktree,
 an unpinned image/tool, a non-x86-64 build, a changed runtime source surface,
 the superseded production Wasm, or any metadata difference.
 
+The frozen result is runtime manifest
+`79359a961d065bd189f9b585cd57d339b6f58d8855b4d1d156c03b3e0b3feb5c`
+with closed `SHA256SUMS`
+`e983dc09310e737c0e9e5cc3ba067a336da877c72db42c335e9b39316be2aace`.
+It binds runtime source `7338beff0c99ef72db43a6908f7bee07a181b50b`,
+production Wasm `0b0c7c52b38ea880fa626784846164752aa256b9f30d83ed0b45d25277f38243`,
+Metadata V15 SCALE `26ed50d186a0cb134cb8ef6b9f619cd04195b52cf4d06fb3f2c31050b103ee68`,
+and the Linux probe/spec-builder node. That node is bundle evidence only; it is
+not the final deployment node, which must be rebuilt and attested from the
+eventual final chain commit.
+
 ### Immutable node candidate and target identity
 
 Build the replacement candidate from the Linux-authoritative runtime bundle in
@@ -100,7 +111,7 @@ CHAIN_COMMIT="$(git rev-parse HEAD)"
   --expected-runtime-wasm-sha256 PINNED_PRODUCTION_WASM_SHA256 \
   --output /private/path/to/linux-amd64-node
 python3 scripts/nexus-v2-private-alpha/node_candidate.py build \
-  --runtime-bundle /private/path/to/runtime-release-spec106-RETRY1 \
+  --runtime-bundle /private/path/to/runtime-release-spec106-linux-7338beff0c99 \
   --deployment-node /private/path/to/linux-amd64-node/solochain-eterra-node \
   --deployment-node-attestation /private/path/to/linux-amd64-node/deployment-node-attestation.json \
   --deployment-node-source-commit "${CHAIN_COMMIT}" \
@@ -126,11 +137,13 @@ and candidate hash with paid/public activation false. Deployment rechecks
 ### Atomic final freeze
 
 Populate `final-freeze-plan.example.json` with exact clean component commits and
-SHA-256-pinned drivers. The currently approved site/indexer cutover source is
-`df01ffc08a791a73d60461d25d0a9d8a78456466`; replace that pin only with a later
-reviewed clean commit. The site driver must implement both `site-ingress` and
-`site-indexer-mongo`; the bundled chain driver implements `authority`, `chain`,
-and `media-ipfs`.
+SHA-256-pinned drivers. Its web value remains a deliberate placeholder until
+the final reviewed site-driver commit exists. The site driver must implement
+both `site-ingress` and `site-indexer-mongo`; the bundled chain driver implements
+`authority`, `chain`, and `media-ipfs`. The coordinator passes the global chain
+deployment source plus a separate closed component source: authority uses
+SDKGen, chain uses chain, media/IPFS uses media, and both site roles use web.
+Every driver validates that component pin against its protected environment.
 
 ```bash
 PLAN=/private/path/to/final-freeze-plan.json
@@ -477,6 +490,33 @@ rewritten after use because that would invalidate its pin.
 Direct `reset-node.sh` and `reset-media.sh` remain development-only. After a
 component marker exists, do not reuse `--fresh`; assess the evidence and use a
 non-fresh immutable promotion for a forward repair if appropriate.
+
+### Two closed-access post-reset phases
+
+Keep Alpha access closed throughout both phases. The runtime-bundle spec
+builder (`7338beff...`, node hash `2dd95dcd...`) is not the deployment node.
+Build and attest the deployment node from the final chain commit after all
+freeze hardening; its source, binary hash, attestation, candidate, and target-v2
+identity remain replacement values until that build finishes.
+
+Phase 1 is the recoverable base-stack window. Start only the fresh node, media,
+IPFS, indexer/API, and site required for read-only checks. Do not register the
+game authority and do not create a gameplay session or result. Capture fresh
+post-V16 disabled-economic gates, zero current and lifetime acceptance
+inventory, the all-V2-write barrier, and base-stack health/readback. If this
+base smoke fails while every acceptance count is still zero, the pinned
+post-cutover coordinator may select automatic restoration of the verified
+archive. Complete that decision before any actual-chain FPS proof.
+
+Phase 2 begins only after Phase 1 passes and the automatic-restore decision is
+closed. Register the authority, then run the actual-chain FPS proof/candidate
+and AI seal. The first session or result is the irreversible acceptance
+boundary: record the new inventory immediately and change rollback policy to
+`post-acceptance-pause-and-forward-fix`. From that point, no archive restore is
+permitted even if the later authority, FPS, Legends, or full-loop smoke fails.
+Continue with authority/FPS/full-loop smoke under forward-fix policy, and reopen
+Alpha access only after those checks pass. Never precompute or submit the FPS
+proof during Phase 1.
 
 ### Post-cutover coordinator
 

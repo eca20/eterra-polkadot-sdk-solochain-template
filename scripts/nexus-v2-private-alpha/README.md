@@ -97,6 +97,13 @@ the complete arguments.
   failed V2 roots before restoring either host, and writes restart-safe
   immutable phase markers. See
   `deploy/alpha/macmini2010/nexus-v2-post-cutover-rollback.md`.
+- Post-reset validation is two-phase with access closed. First, perform only
+  base-stack read-only smoke with fresh post-V16 disabled gates and zero
+  current/lifetime acceptance inventory; the automatic-restore decision ends
+  there. Only after it passes may authority registration and the actual-chain
+  FPS proof create a first session/result. That first record permanently moves
+  recovery to pause-and-forward-fix before authority/FPS/full-loop smoke and
+  access reopening.
 
 Required artifact roles:
 

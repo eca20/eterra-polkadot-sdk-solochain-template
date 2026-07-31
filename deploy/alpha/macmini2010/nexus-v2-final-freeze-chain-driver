@@ -10,11 +10,13 @@ action=""
 transaction_id=""
 release_id=""
 source_commit=""
+component_source_commit=""
 role=""
 target=""
 bundle_root=""
 result_path=""
 runtime_bundle=""
+runtime_bundle_manifest_sha256=""
 runtime_v14_metadata=""
 isolated_rpc_port=19948
 isolated_p2p_port=31348
@@ -29,11 +31,13 @@ while [[ $# -gt 0 ]]; do
 		--transaction-id) transaction_id="${2:?missing transaction ID}"; shift ;;
 		--release-id) release_id="${2:?missing release ID}"; shift ;;
 		--source-commit) source_commit="${2:?missing source commit}"; shift ;;
+		--component-source-commit) component_source_commit="${2:?missing component source commit}"; shift ;;
 		--role) role="${2:?missing role}"; shift ;;
 		--target) target="${2:?missing target}"; shift ;;
 		--bundle-root) bundle_root="${2:?missing bundle root}"; shift ;;
 		--result) result_path="${2:?missing result path}"; shift ;;
 		--runtime-bundle) runtime_bundle="${2:?missing runtime bundle}"; shift ;;
+		--runtime-bundle-manifest-sha256) runtime_bundle_manifest_sha256="${2:?missing runtime bundle manifest SHA-256}"; shift ;;
 		--runtime-v14-metadata) runtime_v14_metadata="${2:?missing runtime V14 metadata}"; shift ;;
 		--isolated-rpc-port) isolated_rpc_port="${2:?missing isolated RPC port}"; shift ;;
 		--isolated-p2p-port) isolated_p2p_port="${2:?missing isolated P2P port}"; shift ;;
@@ -45,7 +49,8 @@ while [[ $# -gt 0 ]]; do
 			cat <<'EOF'
 Implements the final_freeze.py component protocol for chain-host roles:
 authority, chain, and media-ipfs. The chain role additionally requires:
-  --runtime-bundle DIR --runtime-v14-metadata FILE
+  --runtime-bundle DIR --runtime-bundle-manifest-sha256 SHA256
+  --runtime-v14-metadata FILE
   [--isolated-rpc-port PORT --isolated-p2p-port PORT]
 
 The chain role creates its try-runtime snapshot after the stop from an isolated
@@ -65,6 +70,7 @@ done
 [[ "${transaction_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "invalid final-freeze transaction ID"
 [[ "${release_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "invalid final-freeze release ID"
 [[ "${source_commit}" =~ ^[0-9a-f]{40}$ ]] || die "invalid final-freeze source commit"
+[[ "${component_source_commit}" =~ ^[0-9a-f]{40}$ ]] || die "invalid final-freeze component source commit"
 [[ "${role}" =~ ^(authority|chain|media-ipfs)$ ]] || die "chain-host driver cannot service role: ${role}"
 [[ "${target}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "invalid final-freeze target"
 [[ -n "${bundle_root}" && -d "${bundle_root}" && ! -L "${bundle_root}" ]] || die "final-freeze bundle root must be an existing regular directory"
@@ -86,6 +92,15 @@ if [[ "${ETERRA_EXPECTED_CHAIN_COMMIT}" != "${source_commit}" ]]; then
 	die "final-freeze source does not match protected Alpha environment"
 fi
 
+case "${role}" in
+	authority) expected_component_source_commit="${ETERRA_EXPECTED_SDKGEN_COMMIT}" ;;
+	chain) expected_component_source_commit="${ETERRA_EXPECTED_CHAIN_COMMIT}" ;;
+	media-ipfs) expected_component_source_commit="${ETERRA_EXPECTED_MEDIA_COMMIT}" ;;
+esac
+[[ -n "${expected_component_source_commit}" ]] || die "protected Alpha component source commit is not configured for ${role}"
+[[ "${component_source_commit}" == "${expected_component_source_commit}" ]] ||
+	die "final-freeze component source does not match protected Alpha environment for ${role}"
+
 expected_roles=""
 case "${role}" in
 	authority)
@@ -94,21 +109,19 @@ case "${role}" in
 	chain)
 		expected_roles=$'config:chain-spec\nconfig:node-env\nnode:node-binary\nnode:node-data\nnode:runtime-v14-metadata\nnode:runtime-v14-wasm\nnode:runtime-v16-production-wasm\nnode:runtime-v16-try-runtime-wasm\nnode:tcg-storage-version-observation\nnode:try-runtime-snapshot\nnode:try-runtime-snapshot-proof\nservice:node-service'
 		[[ -d "${runtime_bundle}" && ! -L "${runtime_bundle}" ]] || die "chain snapshot requires a regular runtime bundle directory"
+		[[ "${runtime_bundle_manifest_sha256}" =~ ^[0-9a-f]{64}$ ]] || die "chain snapshot requires a runtime bundle manifest SHA-256"
 		[[ -f "${runtime_v14_metadata}" && ! -L "${runtime_v14_metadata}" ]] || die "chain snapshot requires regular runtime V14 metadata"
 		[[ "${isolated_rpc_port}" =~ ^[0-9]+$ && "${isolated_p2p_port}" =~ ^[0-9]+$ ]] || die "isolated snapshot ports must be numeric"
 		(( isolated_rpc_port >= 1024 && isolated_rpc_port <= 65535 && isolated_p2p_port >= 1024 && isolated_p2p_port <= 65535 )) || die "isolated snapshot ports must be in 1024..65535"
 		[[ "${isolated_rpc_port}" != "${isolated_p2p_port}" && "${isolated_rpc_port}" != "${CHAIN_RPC_PORT}" && "${isolated_p2p_port}" != "${CHAIN_P2P_PORT}" ]] || die "isolated snapshot ports must be distinct from each other and live Alpha"
-		(
-			cd "${runtime_bundle}"
-			shasum -a 256 -c SHA256SUMS >/dev/null
-		)
-		jq -e '
-			.kind == "nexus-v2-private-alpha-runtime-bundle" and
-			.targetSpecVersion == 106 and
-			.authorizations.publicDeploy == false and
-			.authorizations.paidProduction == false
-		' "${runtime_bundle}/runtime-bundle-manifest.json" >/dev/null ||
-			die "runtime bundle is not the closed spec-106 private-alpha candidate"
+		freeze_runtime_verifier="${REPO_ROOT}/scripts/nexus-v2-private-alpha/final_freeze_runtime_bundle.py"
+		freeze_runtime_verifier_sha256="9ada268fe0ffa13e156f16b9a39ce8861e6a007f070b8f283850ec229157126f"
+		[[ -f "${freeze_runtime_verifier}" && ! -L "${freeze_runtime_verifier}" ]] || die "final-freeze runtime bundle verifier is unavailable"
+		[[ "$(shasum -a 256 "${freeze_runtime_verifier}" | awk '{print $1}')" == "${freeze_runtime_verifier_sha256}" ]] || die "final-freeze runtime bundle verifier hash mismatch"
+		python3 "${freeze_runtime_verifier}" \
+			--runtime-bundle "${runtime_bundle}" \
+			--expected-manifest-sha256 "${runtime_bundle_manifest_sha256}" >/dev/null ||
+			die "runtime bundle is not the exact frozen Linux spec-106 private-alpha candidate"
 		try_runtime_bin="${runtime_bundle}/try-runtime"
 		[[ -x "${try_runtime_bin}" && -f "${try_runtime_bin}" && ! -L "${try_runtime_bin}" ]] || die "runtime bundle try-runtime CLI is unavailable"
 		try_runtime_sha256="$(jq -er '.artifacts.tryRuntimeCliSha256 | select(test("^[0-9a-f]{64}$"))' "${runtime_bundle}/runtime-bundle-manifest.json")" || die "runtime bundle try-runtime hash is invalid"
@@ -246,6 +259,7 @@ EOF
 	[[ "$(jq -r '.transactionId' <<<"${remote_marker_json}")" == "${transaction_id}" ]] || die "${role} freeze marker transaction mismatch"
 	[[ "$(jq -r '.releaseId' <<<"${remote_marker_json}")" == "${release_id}" ]] || die "${role} freeze marker release mismatch"
 	[[ "$(jq -r '.sourceCommit' <<<"${remote_marker_json}")" == "${source_commit}" ]] || die "${role} freeze marker source mismatch"
+	[[ "$(jq -r '.componentSourceCommit' <<<"${remote_marker_json}")" == "${component_source_commit}" ]] || die "${role} freeze marker component source mismatch"
 	[[ "$(jq -r '.role' <<<"${remote_marker_json}")" == "${role}" ]] || die "${role} freeze marker role mismatch"
 }
 
@@ -348,8 +362,8 @@ if [[ ! -e "${remote_marker}" ]]; then
 	! ss -ltnH 'sport = :${AUTHORITY_PORT}' | grep -q .
 	frozen_at="\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	jq -n --arg transactionId "${transaction_id}" --arg releaseId "${release_id}" \
-		--arg sourceCommit "${source_commit}" --arg role "${role}" --arg frozenAtUtc "\${frozen_at}" \
-		'{schemaVersion:1,transactionId:\$transactionId,releaseId:\$releaseId,sourceCommit:\$sourceCommit,role:\$role,frozenAtUtc:\$frozenAtUtc,frozenFinalizedBlock:null}' \
+		--arg sourceCommit "${source_commit}" --arg componentSourceCommit "${component_source_commit}" --arg role "${role}" --arg frozenAtUtc "\${frozen_at}" \
+		'{schemaVersion:1,transactionId:\$transactionId,releaseId:\$releaseId,sourceCommit:\$sourceCommit,componentSourceCommit:\$componentSourceCommit,role:\$role,frozenAtUtc:\$frozenAtUtc,frozenFinalizedBlock:null}' \
 		>"${remote_marker}"
 	chmod 0440 "${remote_marker}"
 fi
@@ -375,9 +389,9 @@ if [[ ! -e "${remote_marker}" ]]; then
 	! ss -ltnH 'sport = :${CHAIN_P2P_PORT}' | grep -q .
 	frozen_at="\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	jq -n --arg transactionId "${transaction_id}" --arg releaseId "${release_id}" \
-		--arg sourceCommit "${source_commit}" --arg role "${role}" --arg frozenAtUtc "\${frozen_at}" \
+		--arg sourceCommit "${source_commit}" --arg componentSourceCommit "${component_source_commit}" --arg role "${role}" --arg frozenAtUtc "\${frozen_at}" \
 		--arg hash "\${finalized_hash}" --argjson number "\${number_dec}" \
-		'{schemaVersion:1,transactionId:\$transactionId,releaseId:\$releaseId,sourceCommit:\$sourceCommit,role:\$role,frozenAtUtc:\$frozenAtUtc,frozenFinalizedBlock:{number:\$number,hash:\$hash}}' \
+		'{schemaVersion:1,transactionId:\$transactionId,releaseId:\$releaseId,sourceCommit:\$sourceCommit,componentSourceCommit:\$componentSourceCommit,role:\$role,frozenAtUtc:\$frozenAtUtc,frozenFinalizedBlock:{number:\$number,hash:\$hash}}' \
 		>"${remote_marker}"
 	chmod 0440 "${remote_marker}"
 fi
@@ -393,8 +407,8 @@ if [[ ! -e "${remote_marker}" ]]; then
 	test -z "\$(${REMOTE_DOCKER_COMPOSE_CMD} ps -q --status running ipfs)"
 	frozen_at="\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	jq -n --arg transactionId "${transaction_id}" --arg releaseId "${release_id}" \
-		--arg sourceCommit "${source_commit}" --arg role "${role}" --arg frozenAtUtc "\${frozen_at}" \
-		'{schemaVersion:1,transactionId:\$transactionId,releaseId:\$releaseId,sourceCommit:\$sourceCommit,role:\$role,frozenAtUtc:\$frozenAtUtc,frozenFinalizedBlock:null}' \
+		--arg sourceCommit "${source_commit}" --arg componentSourceCommit "${component_source_commit}" --arg role "${role}" --arg frozenAtUtc "\${frozen_at}" \
+		'{schemaVersion:1,transactionId:\$transactionId,releaseId:\$releaseId,sourceCommit:\$sourceCommit,componentSourceCommit:\$componentSourceCommit,role:\$role,frozenAtUtc:\$frozenAtUtc,frozenFinalizedBlock:null}' \
 		>"${remote_marker}"
 	chmod 0440 "${remote_marker}"
 fi

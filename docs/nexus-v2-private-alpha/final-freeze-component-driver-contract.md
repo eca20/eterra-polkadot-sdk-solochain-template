@@ -6,11 +6,10 @@ names an absolute regular executable, its SHA-256, a non-secret target ID, and
 optional fixed arguments. The coordinator re-hashes the executable before every
 action and invokes it directly without a shell.
 
-The currently pinned web/site cutover source is
-`df01ffc08a791a73d60461d25d0a9d8a78456466`. That commit does not yet expose
-this component interface. A later clean web commit must add the two site roles
-below and replace the plan pin before final-freeze execution. Reusing a generic
-deploy script or an unpinned shell command is not accepted.
+The example deliberately retains a replacement placeholder for the final clean
+web/site commit. The final web commit must expose both site roles below and
+parse the component-source binding before final-freeze execution. Reusing a
+generic deploy script or an unpinned shell command is not accepted.
 
 ## Invocation
 
@@ -20,7 +19,8 @@ Every driver accepts:
 --action preflight|freeze|verify-frozen|snapshot|verify-snapshot
 --transaction-id ID
 --release-id ID
---source-commit 40_HEX
+--source-commit 40_HEX                    # global chain deployment identity
+--component-source-commit 40_HEX          # role-mapped repository identity
 --role ROLE
 --target TARGET_ID
 --bundle-root ABSOLUTE_PRIVATE_DIRECTORY
@@ -43,8 +43,15 @@ artifacts
 Dry-run reports `planned: true`, `liveMutationPerformed: false`, null freeze
 time/block, no artifacts, and still validates every requested action. A live
 preflight is read-only. A role freeze records an immutable remote transaction
-marker and is idempotent only for the same transaction/release/source identity.
+marker and is idempotent only for the same transaction/release/global-source
+and protected component-source identity.
 No action may restart or unpause a service.
+
+The coordinator owns the closed mapping: `authority -> sdkgen`, `chain ->
+chain`, `media-ipfs -> media`, and both site roles `-> web`. It passes both
+source flags and forbids plan arguments from overriding either. Each pinned
+driver validates the component commit against its protected deployment
+environment; the global source remains the target-v2 chain deployment commit.
 
 Snapshot/verify receipts list exact regular files below `bundle-root` with keys
 `group`, `name`, `path`, `bytes`, and `sha256`. Verify-snapshot must return the
@@ -94,7 +101,13 @@ site:site-image-lock site:site-state
 
 `authority`, `chain`, and `media-ipfs` are implemented by the pinned
 `deploy/alpha/macmini2010/nexus-v2-final-freeze-chain-driver`. The chain plan
-entry also supplies the exact `retry1` runtime bundle and live V14 metadata. It
+entry also supplies the exact Linux runtime bundle manifest
+`79359a961d065bd189f9b585cd57d339b6f58d8855b4d1d156c03b3e0b3feb5c`
+and live V14 metadata. The driver additionally pins the bundle's closed
+`SHA256SUMS`, Linux source/tree, ELF64/x86-64 host contract, runners,
+attestations, exact metadata compatibility proof, production Wasm
+`0b0c7c52b38ea880fa626784846164752aa256b9f30d83ed0b45d25277f38243`,
+and superseded-macOS-not-copied proof. It
 never accepts a pre-existing try-runtime snapshot. After the node stops, the
 driver archives its exact base path, extracts that archive into a disposable
 isolated base path, and proves the copy's finalized head/number/hash equal the
