@@ -8,20 +8,23 @@ SHA-256-pinned pre-V16 frozen/fresh-genesis packet.
 
 ## Relationship to current Alpha scripts
 
-Start a future capture with
-`deploy/alpha/macmini2010/backup-alpha-state.sh`. That existing helper supplies
-the node database, IPFS data/staging, and node/media environment files. It is
-not a complete V2 backup on its own.
+The final capture is coordinated by `final_freeze.py`; the older
+`backup-alpha-state.sh` remains a preliminary chain/media helper and is not a
+complete or frozen V2 backup on its own. The coordinator hash-pins five drivers
+and stops Caddy/public write ingress, site/indexer/Mongo, authority, node/block
+production, and media/IPFS in that order. A partial failure never restarts a
+service.
 
 Copy its output into a private bundle and supplement it with:
 
-- node binary, live V14/V16 runtime Wasm, the finalized TCG storage-version
-  observation, and copied try-runtime snapshot;
+- node binary, live V14 Wasm/metadata, V16 runtime Wasm, the finalized TCG
+  storage-version observation, and copied try-runtime snapshot;
 - media state and immutable image lock/digest;
-- indexer state and finalized checkpoint;
-- node, media, and indexer configs;
-- chain spec and the finalized economic-gate observation;
-- node, media, and indexer service definitions.
+- site/indexer/Mongo state and finalized checkpoint;
+- authority state and Caddy state/configuration;
+- all node, media, authority, site, and indexer configs and service definitions;
+- chain spec, write-barrier evidence, exact release identifiers, the generated
+  same-block pre-V16 economic gates, and zero V2 acceptance inventory.
 
 The manifest records the SHA-256 of the current backup, restore, reset, and
 runtime-rehearsal scripts. This is coordination by identity only: the tool
@@ -63,6 +66,15 @@ the complete arguments.
   `NEXUS_V2_RESET_READINESS_SHA256`; release media reset also requires
   immutable candidate promotion. `--dry-run` validates this local plan and
   exits before SSH.
+- `node_candidate.py build` consumes the already-built runtime bundle and
+  address-only Alpha overrides. It repeats spec generation byte-for-byte,
+  starts only a temporary local node to observe genesis, and emits both a
+  closed candidate and `eterra-spec106-target-identity.v1`. Release deployment
+  verifies and promotes those exact bytes without remote Cargo or spec work.
+- `final_freeze.py validate|dry-run|execute` owns the cross-host stop/snapshot
+  order. Every component driver and plan is SHA-256 pinned. Execute creates the
+  same-block pre-V16 gates and zero inventory only after the stable write
+  barrier, then emits the complete backup manifest.
 - `automatic-rollback` invokes a separately reviewed, approval-hash-pinned
   driver only while a fresh finalized inventory still contains no V2
   acceptance asset. Monotonic lifetime event counters keep this gate closed
@@ -85,6 +97,7 @@ Required artifact roles:
 node:node-data
 node:node-binary
 node:runtime-v14-wasm
+node:runtime-v14-metadata
 node:runtime-v16-production-wasm
 node:runtime-v16-try-runtime-wasm
 node:tcg-storage-version-observation
@@ -96,13 +109,28 @@ ipfs:ipfs-staging
 config:node-env
 config:media-env
 config:indexer-env
+config:site-env
+config:authority-env
 config:chain-spec
 config:economic-gates
+config:acceptance-inventory
+config:deployment-fingerprints
+config:release-identifiers
+config:write-barrier-evidence
 service:node-service
 service:media-service
 service:indexer-service
+service:site-service
+service:authority-service
+service:caddy-service
 indexer:indexer-state
 indexer:indexer-checkpoint
+indexer:mongo-state
+site:site-state
+site:site-image-lock
+authority:authority-state
+ingress:caddy-state
+ingress:caddy-config
 ```
 
 Each `backup-manifest --artifact` value is
@@ -110,8 +138,8 @@ Each `backup-manifest --artifact` value is
 
 ## Driver boundaries
 
-No restore, migration-completion, or rollback driver is bundled. A future
-driver:
+No restore, migration-completion, or rollback driver is bundled. Final-freeze
+drivers are a separate, explicit exception. A restore/migration/rollback driver:
 
 - must be a regular executable outside the existing `deploy/` tree;
 - is invoked without a shell;

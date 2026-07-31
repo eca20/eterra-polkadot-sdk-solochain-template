@@ -1,6 +1,8 @@
 # Alpha Backup And Restore
 
-Use the alpha deploy helpers from this directory to snapshot and restore the current chain + IPFS + media runtime state on the 2010 mini.
+Use the alpha deploy helpers from this directory to take preliminary chain +
+IPFS + media snapshots. Nexus V2 final-reset evidence must instead use the
+cross-host `scripts/nexus-v2-private-alpha/final_freeze.py` coordinator.
 
 ## Backup
 
@@ -24,6 +26,15 @@ The script:
 - copies the current `node.env` and `media.env`
 - restarts the services
 - downloads the backup into `deploy/alpha/macmini2010/.artifacts/backups/<name>/`
+
+This helper does not stop Caddy, the site/indexer/Mongo host, or the arcade
+authority and it restarts the chain/media stack. It therefore cannot be used as
+the final frozen backup. The final-freeze coordinator keeps all stopped roles
+stopped, invokes only SHA-256-pinned component drivers, captures the complete
+closed artifact set, and emits same-block gate/inventory evidence. Its chain
+host protocol implementation is
+`nexus-v2-final-freeze-chain-driver`; the pinned web commit must supply the
+matching `site-ingress` and `site-indexer-mongo` roles.
 
 ## Restore
 

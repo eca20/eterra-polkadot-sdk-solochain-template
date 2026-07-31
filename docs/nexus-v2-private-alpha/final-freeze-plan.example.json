@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "kind": "nexus-v2-private-alpha-final-freeze-plan",
+  "transactionId": "nexus-v2-final-freeze-YYYYMMDDTHHMMSSZ",
+  "releaseId": "nexus-v2-private-alpha-REPLACE",
+  "sourceCommit": "REPLACE_WITH_40_HEX_CHAIN_DEPLOY_COMMIT",
+  "componentSourceCommits": {
+    "chain": "REPLACE_WITH_40_HEX_CHAIN_DEPLOY_COMMIT",
+    "media": "REPLACE_WITH_40_HEX_MEDIA_COMMIT",
+    "sdkgen": "f4776393c43d020308d3ea87dc1a961684dc775a",
+    "web": "df01ffc08a791a73d60461d25d0a9d8a78456466"
+  },
+  "preV16SourceRuntime": {
+    "deployedSourceCommit": "REPLACE_WITH_40_HEX_CURRENT_ALPHA_COMMIT",
+    "specVersion": 1,
+    "metadataVersion": 14,
+    "tcgPalletIndex": 9,
+    "tcgStorageVersion": 14,
+    "flowPalletIndex": 29
+  },
+  "stabilityWindowSeconds": 30,
+  "components": {
+    "site-ingress": {
+      "driver": "/absolute/path/to/pinned/site-final-freeze-driver",
+      "driverSha256": "REPLACE_WITH_64_HEX_SHA256",
+      "target": "private-alpha-site-caddy",
+      "arguments": []
+    },
+    "site-indexer-mongo": {
+      "driver": "/absolute/path/to/pinned/site-final-freeze-driver",
+      "driverSha256": "REPLACE_WITH_64_HEX_SHA256",
+      "target": "private-alpha-site-indexer-mongo",
+      "arguments": []
+    },
+    "authority": {
+      "driver": "/absolute/path/to/pinned/chain-final-freeze-driver",
+      "driverSha256": "REPLACE_WITH_64_HEX_SHA256",
+      "target": "private-alpha-arcade-authority",
+      "arguments": []
+    },
+    "chain": {
+      "driver": "/absolute/path/to/pinned/chain-final-freeze-driver",
+      "driverSha256": "REPLACE_WITH_64_HEX_SHA256",
+      "target": "private-alpha-chain",
+      "arguments": [
+        "--runtime-bundle",
+        "/private/path/to/runtime-release-spec106-retry1",
+        "--try-runtime-snapshot",
+        "/private/path/to/final-stopped-state.snap",
+        "--runtime-v14-metadata",
+        "/private/path/to/final-stopped-runtime-v14-metadata.scale"
+      ]
+    },
+    "media-ipfs": {
+      "driver": "/absolute/path/to/pinned/chain-final-freeze-driver",
+      "driverSha256": "REPLACE_WITH_64_HEX_SHA256",
+      "target": "private-alpha-media-ipfs",
+      "arguments": []
+    }
+  },
+  "authorizations": {
+    "automaticResumeOnFailure": false,
+    "finalFreezeAndBackup": true,
+    "freshReset": false,
+    "paidOrPublicActivation": false,
+    "privateAlphaOnly": true
+  }
+}

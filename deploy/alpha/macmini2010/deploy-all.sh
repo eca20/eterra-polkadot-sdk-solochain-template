@@ -45,6 +45,21 @@ while [[ $# -gt 0 ]]; do
 			media_args+=("--build-candidate" "$2")
 			shift
 			;;
+		--promote-node-candidate)
+			[[ $# -ge 2 ]] || { echo "--promote-node-candidate requires node-candidate.json" >&2; exit 2; }
+			node_args+=("--promote-candidate" "$2")
+			shift
+			;;
+		--node-evidence)
+			[[ $# -ge 2 ]] || { echo "--node-evidence requires an output path" >&2; exit 2; }
+			node_args+=("--evidence" "$2")
+			shift
+			;;
+		--node-target-identity)
+			[[ $# -ge 2 ]] || { echo "--node-target-identity requires a target identity JSON" >&2; exit 2; }
+			node_args+=("--target-identity" "$2")
+			shift
+			;;
 		--promote-media-candidate)
 			[[ $# -ge 2 ]] || { echo "--promote-media-candidate requires a manifest" >&2; exit 2; }
 			media_args+=("--promote-candidate" "$2")
@@ -59,6 +74,7 @@ while [[ $# -gt 0 ]]; do
 			cat <<'EOF'
 Usage: deploy-all.sh [--purge-state] [--fresh] [--with-arcade-authority] [--authorize-arcade-authority] [--seed-nova-rail-config]
                      [--fresh-reset-readiness READINESS.json] [--dry-run]
+                     [--promote-node-candidate NODE-CANDIDATE.json --node-target-identity TARGET.json --node-evidence OUTPUT.json]
                      [--build-media-candidate OUTPUT.json]
                      [--promote-media-candidate CANDIDATE.json --media-evidence OUTPUT.json]
 
@@ -66,7 +82,9 @@ Normal deploys preserve alpha chain state.
 Pass --purge-state to wipe the remote alpha node base path before restart.
 Alpha spec/genesis changes are only applied when --purge-state is set.
 Release --fresh is accepted only with --fresh-reset-readiness and immutable
-media candidate promotion. --dry-run validates that guarded plan before SSH.
+node and media candidate promotion. The node path installs the exact locally
+finalized binary/spec/genesis without a remote build. --dry-run validates that
+guarded plan before SSH.
 Pass --with-arcade-authority to deploy the Nova Rail authority relay API/operator.
 Pass --authorize-arcade-authority to deploy and run the one-shot relay authorization operator.
 Pass --seed-nova-rail-config to run the explicit idempotent ArcadeCore seed after deploy.

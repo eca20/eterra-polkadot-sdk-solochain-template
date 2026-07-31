@@ -1,0 +1,533 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lib.sh
+source "${SCRIPT_DIR}/lib.sh"
+
+action=""
+transaction_id=""
+release_id=""
+source_commit=""
+role=""
+target=""
+bundle_root=""
+result_path=""
+runtime_bundle=""
+try_runtime_snapshot=""
+runtime_v14_metadata=""
+frozen_block_number=""
+frozen_block_hash=""
+dry_run=0
+artifacts=()
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--action) action="${2:?missing action}"; shift ;;
+		--transaction-id) transaction_id="${2:?missing transaction ID}"; shift ;;
+		--release-id) release_id="${2:?missing release ID}"; shift ;;
+		--source-commit) source_commit="${2:?missing source commit}"; shift ;;
+		--role) role="${2:?missing role}"; shift ;;
+		--target) target="${2:?missing target}"; shift ;;
+		--bundle-root) bundle_root="${2:?missing bundle root}"; shift ;;
+		--result) result_path="${2:?missing result path}"; shift ;;
+		--runtime-bundle) runtime_bundle="${2:?missing runtime bundle}"; shift ;;
+		--try-runtime-snapshot) try_runtime_snapshot="${2:?missing try-runtime snapshot}"; shift ;;
+		--runtime-v14-metadata) runtime_v14_metadata="${2:?missing runtime V14 metadata}"; shift ;;
+		--frozen-block-number) frozen_block_number="${2:?missing frozen block number}"; shift ;;
+		--frozen-block-hash) frozen_block_hash="${2:?missing frozen block hash}"; shift ;;
+		--artifact) artifacts+=("${2:?missing artifact role}"); shift ;;
+		--dry-run) dry_run=1 ;;
+		--help|-h)
+			cat <<'EOF'
+Implements the final_freeze.py component protocol for chain-host roles:
+authority, chain, and media-ipfs. The chain role additionally requires:
+  --runtime-bundle DIR --try-runtime-snapshot FILE --runtime-v14-metadata FILE
+
+The driver never restarts a service. A freeze or snapshot failure leaves every
+already-stopped component stopped. Dry-run validates local configuration and
+the complete action contract without SSH or live mutation.
+EOF
+			exit 0
+			;;
+		*) die "unknown final-freeze driver argument: $1" ;;
+	esac
+	shift
+done
+
+[[ "${action}" =~ ^(preflight|freeze|verify-frozen|snapshot|verify-snapshot)$ ]] || die "invalid final-freeze action"
+[[ "${transaction_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "invalid final-freeze transaction ID"
+[[ "${release_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "invalid final-freeze release ID"
+[[ "${source_commit}" =~ ^[0-9a-f]{40}$ ]] || die "invalid final-freeze source commit"
+[[ "${role}" =~ ^(authority|chain|media-ipfs)$ ]] || die "chain-host driver cannot service role: ${role}"
+[[ "${target}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "invalid final-freeze target"
+[[ -n "${bundle_root}" && -d "${bundle_root}" && ! -L "${bundle_root}" ]] || die "final-freeze bundle root must be an existing regular directory"
+[[ -n "${result_path}" && ! -e "${result_path}" ]] || die "refusing to overwrite final-freeze result"
+
+load_env
+require_cmd jq
+require_cmd python3
+require_cmd rsync
+require_cmd shasum
+require_cmd ssh
+require_cmd tar
+
+if [[ "${ETERRA_RELEASE_VERSION}" != "${release_id}" ]]; then
+	die "final-freeze release does not match protected Alpha environment"
+fi
+if [[ "${ETERRA_EXPECTED_CHAIN_COMMIT}" != "${source_commit}" ]]; then
+	die "final-freeze source does not match protected Alpha environment"
+fi
+
+expected_roles=""
+case "${role}" in
+	authority)
+		expected_roles=$'authority:authority-state\nconfig:authority-env\nservice:authority-service'
+		;;
+	chain)
+		expected_roles=$'config:chain-spec\nconfig:node-env\nnode:node-binary\nnode:node-data\nnode:runtime-v14-metadata\nnode:runtime-v14-wasm\nnode:runtime-v16-production-wasm\nnode:runtime-v16-try-runtime-wasm\nnode:tcg-storage-version-observation\nnode:try-runtime-snapshot\nservice:node-service'
+		[[ -d "${runtime_bundle}" && ! -L "${runtime_bundle}" ]] || die "chain snapshot requires a regular runtime bundle directory"
+		[[ -f "${try_runtime_snapshot}" && ! -L "${try_runtime_snapshot}" ]] || die "chain snapshot requires a regular try-runtime snapshot"
+		[[ -f "${runtime_v14_metadata}" && ! -L "${runtime_v14_metadata}" ]] || die "chain snapshot requires regular runtime V14 metadata"
+		(
+			cd "${runtime_bundle}"
+			shasum -a 256 -c SHA256SUMS >/dev/null
+		)
+		jq -e '
+			.kind == "nexus-v2-private-alpha-runtime-bundle" and
+			.targetSpecVersion == 106 and
+			.authorizations.publicDeploy == false and
+			.authorizations.paidProduction == false
+		' "${runtime_bundle}/runtime-bundle-manifest.json" >/dev/null ||
+			die "runtime bundle is not the closed spec-106 private-alpha candidate"
+		;;
+	media-ipfs)
+		expected_roles=$'config:media-env\nipfs:ipfs-data\nipfs:ipfs-staging\nmedia:media-image-lock\nmedia:media-state\nservice:media-service'
+		;;
+esac
+
+actual_roles="$(printf '%s\n' "${artifacts[@]}" | LC_ALL=C sort)"
+[[ "${actual_roles}" == "$(LC_ALL=C sort <<<"${expected_roles}")" ]] || die "${role} artifact roles do not match the closed set"
+
+remote_transaction_root="${DEPLOY_ROOT}/archive/nexus-v2-final-freeze/${transaction_id}"
+remote_marker="${remote_transaction_root}/freeze-${role}.json"
+local_capture_root="${bundle_root}/artifacts"
+mkdir -p "${local_capture_root}" "$(dirname -- "${result_path}")"
+
+checks_for_action() {
+	case "$1:$2" in
+		*:preflight) printf '%s\n' credentialsAvailable driverPinned restoreInputsIdentified snapshotDestinationWritable targetResolved ;;
+		authority:freeze) printf '%s\n' authorityStopped resultSubmissionStopped ;;
+		chain:freeze) printf '%s\n' blockProductionStopped finalizedHeadCaptured nodeP2pStopped nodeRpcStopped nodeStopped ;;
+		media-ipfs:freeze) printf '%s\n' ipfsStopped mediaStopped uploadIngressStopped ;;
+		authority:verify-frozen) printf '%s\n' authorityStopped remainsStopped resultSubmissionStopped ;;
+		chain:verify-frozen) printf '%s\n' blockProductionStopped finalizedHeadCaptured nodeP2pStopped nodeRpcStopped nodeStopped remainsStopped ;;
+		media-ipfs:verify-frozen) printf '%s\n' ipfsStopped mediaStopped remainsStopped uploadIngressStopped ;;
+		*:snapshot) printf '%s\n' artifactHashesComputed artifactRolesComplete consistentSnapshotCaptured privateBundlePermissionsRestricted ;;
+		*:verify-snapshot) printf '%s\n' archivesReadable artifactHashesVerified noServiceResumed restoreContractReady ;;
+		*) die "unsupported check set: $1:$2" ;;
+	esac
+}
+
+artifact_specs=()
+record_artifact() {
+	local group="$1"
+	local name="$2"
+	local relative="$3"
+	local path="${bundle_root}/${relative}"
+	[[ -f "${path}" && ! -L "${path}" ]] || die "snapshot artifact unavailable: ${group}:${name}"
+	artifact_specs+=("${group}:${name}:${relative}")
+}
+
+write_result() {
+	local frozen_at="$1"
+	local block_number="$2"
+	local block_hash="$3"
+	local check_names
+	check_names="$(checks_for_action "${role}" "${action}" | paste -sd, -)"
+	python3 - \
+		"${result_path}" "${action}" "${transaction_id}" "${release_id}" "${source_commit}" \
+		"${role}" "${target}" "${dry_run}" "${frozen_at}" "${block_number}" "${block_hash}" \
+		"${check_names}" "${bundle_root}" "${artifact_specs[@]}" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import sys
+
+(
+    output,
+    action,
+    transaction_id,
+    release_id,
+    source_commit,
+    role,
+    target,
+    dry_run_raw,
+    frozen_at,
+    block_number,
+    block_hash,
+    checks_raw,
+    bundle_root,
+    *artifact_specs,
+) = sys.argv[1:]
+dry_run = dry_run_raw == "1"
+artifacts = []
+for spec in artifact_specs:
+    group, name, relative = spec.split(":", 2)
+    path = pathlib.Path(bundle_root) / relative
+    payload = path.read_bytes()
+    artifacts.append(
+        {
+            "group": group,
+            "name": name,
+            "path": relative,
+            "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        }
+    )
+frozen_block = None
+if block_number and block_hash:
+    frozen_block = {"number": int(block_number), "hash": block_hash}
+value = {
+    "schemaVersion": 1,
+    "kind": "nexus-v2-private-alpha-final-freeze-component-result",
+    "transactionId": transaction_id,
+    "releaseId": release_id,
+    "sourceCommit": source_commit,
+    "role": role,
+    "action": action,
+    "target": target,
+    "dryRun": dry_run,
+    "liveMutationPerformed": False if dry_run or action not in ("freeze", "snapshot") else True,
+    "planned": dry_run,
+    "frozenAtUtc": frozen_at or None,
+    "frozenFinalizedBlock": frozen_block,
+    "checks": {name: True for name in checks_raw.split(",") if name},
+    "artifacts": artifacts,
+}
+payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "wb") as handle:
+    handle.write(payload)
+PY
+}
+
+if [[ "${dry_run}" -eq 1 ]]; then
+	write_result "" "" ""
+	exit 0
+fi
+
+remote_marker_json=""
+read_remote_marker() {
+	remote_marker_json="$(remote_root_bash <<EOF
+set -euo pipefail
+cat "${remote_marker}"
+EOF
+)" ||
+		die "${role} freeze marker is unavailable"
+	[[ "$(jq -r '.schemaVersion' <<<"${remote_marker_json}")" == "1" ]] || die "${role} freeze marker schema mismatch"
+	[[ "$(jq -r '.transactionId' <<<"${remote_marker_json}")" == "${transaction_id}" ]] || die "${role} freeze marker transaction mismatch"
+	[[ "$(jq -r '.releaseId' <<<"${remote_marker_json}")" == "${release_id}" ]] || die "${role} freeze marker release mismatch"
+	[[ "$(jq -r '.sourceCommit' <<<"${remote_marker_json}")" == "${source_commit}" ]] || die "${role} freeze marker source mismatch"
+	[[ "$(jq -r '.role' <<<"${remote_marker_json}")" == "${role}" ]] || die "${role} freeze marker role mismatch"
+}
+
+verify_stopped() {
+	case "${role}" in
+		authority)
+			remote_root_bash <<EOF
+set -euo pipefail
+! systemctl is-active --quiet "${AUTHORITY_SERVICE_NAME}.service"
+! ss -ltnH 'sport = :${AUTHORITY_PORT}' | grep -q .
+EOF
+			;;
+	chain)
+			remote_root_bash <<EOF
+set -euo pipefail
+! systemctl is-active --quiet "${REMOTE_NODE_SERVICE_NAME}.service"
+! ss -ltnH 'sport = :${CHAIN_RPC_PORT}' | grep -q .
+! ss -ltnH 'sport = :${CHAIN_P2P_PORT}' | grep -q .
+EOF
+			;;
+	media-ipfs)
+			remote_root_bash <<EOF
+set -euo pipefail
+test -z "\$(${REMOTE_DOCKER_COMPOSE_CMD} ps -q --status running media-service)"
+test -z "\$(${REMOTE_DOCKER_COMPOSE_CMD} ps -q --status running ipfs)"
+! ss -ltnH 'sport = :${MEDIA_PORT}' | grep -q .
+! ss -ltnH 'sport = :${IPFS_API_PORT}' | grep -q .
+! ss -ltnH 'sport = :${IPFS_GATEWAY_PORT}' | grep -q .
+EOF
+			;;
+	esac
+}
+
+if [[ "${action}" == "preflight" ]]; then
+	case "${role}" in
+		authority)
+			remote_root_bash <<EOF
+set -euo pipefail
+systemctl cat "${AUTHORITY_SERVICE_NAME}.service" >/dev/null
+test -d "${REMOTE_AUTHORITY_DIR}"
+test -r "${REMOTE_AUTHORITY_ENV_FILE}"
+test -r "${REMOTE_AUTHORITY_SERVICE_UNIT_FILE}"
+test -d "${DEPLOY_ROOT}"
+EOF
+			;;
+	chain)
+			remote_root_bash <<EOF
+set -euo pipefail
+systemctl cat "${REMOTE_NODE_SERVICE_NAME}.service" >/dev/null
+test -d "${REMOTE_NODE_DATA_DIR}"
+test -x "${REMOTE_NODE_BIN}"
+test -r "${REMOTE_NODE_SPEC}"
+test -r "${REMOTE_NODE_ENV_FILE}"
+test -d "${DEPLOY_ROOT}"
+EOF
+			;;
+	media-ipfs)
+			remote_root_bash <<EOF
+set -euo pipefail
+${REMOTE_DOCKER_COMPOSE_CMD} config >/dev/null
+docker volume inspect "${REMOTE_IPFS_DATA_VOLUME}" >/dev/null
+docker volume inspect "${REMOTE_IPFS_STAGING_VOLUME}" >/dev/null
+test -r "${REMOTE_MEDIA_ENV_FILE}"
+test -d "${DEPLOY_ROOT}"
+EOF
+			;;
+	esac
+	write_result "" "" ""
+	exit 0
+fi
+
+if [[ "${action}" == "freeze" ]]; then
+	case "${role}" in
+		authority)
+			remote_root_bash <<EOF
+set -euo pipefail
+mkdir -p "${remote_transaction_root}"
+if [[ ! -e "${remote_marker}" ]]; then
+	systemctl stop "${AUTHORITY_SERVICE_NAME}.service"
+	! systemctl is-active --quiet "${AUTHORITY_SERVICE_NAME}.service"
+	! ss -ltnH 'sport = :${AUTHORITY_PORT}' | grep -q .
+	frozen_at="\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	jq -n --arg transactionId "${transaction_id}" --arg releaseId "${release_id}" \
+		--arg sourceCommit "${source_commit}" --arg role "${role}" --arg frozenAtUtc "\${frozen_at}" \
+		'{schemaVersion:1,transactionId:\$transactionId,releaseId:\$releaseId,sourceCommit:\$sourceCommit,role:\$role,frozenAtUtc:\$frozenAtUtc,frozenFinalizedBlock:null}' \
+		>"${remote_marker}"
+	chmod 0440 "${remote_marker}"
+fi
+EOF
+			;;
+	chain)
+			remote_root_bash <<EOF
+set -euo pipefail
+mkdir -p "${remote_transaction_root}"
+if [[ ! -e "${remote_marker}" ]]; then
+	finalized_response="\$(curl -fsS --max-time 10 -H 'Content-Type: application/json' \
+		-d '{"id":1,"jsonrpc":"2.0","method":"chain_getFinalizedHead","params":[]}' \
+		'http://127.0.0.1:${CHAIN_RPC_PORT}')"
+	finalized_hash="\$(jq -er '.result | select(test("^0x[0-9a-fA-F]{64}$"))' <<<"\${finalized_response}")"
+	header_response="\$(curl -fsS --max-time 10 -H 'Content-Type: application/json' \
+		-d "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"chain_getHeader\",\"params\":[\"\${finalized_hash}\"]}" \
+		'http://127.0.0.1:${CHAIN_RPC_PORT}')"
+	number_hex="\$(jq -er '.result.number | select(test("^0x[0-9a-fA-F]+$"))' <<<"\${header_response}")"
+	number_dec="\$(python3 -c 'import sys; print(int(sys.argv[1], 16))' "\${number_hex}")"
+	systemctl stop "${REMOTE_NODE_SERVICE_NAME}.service"
+	! systemctl is-active --quiet "${REMOTE_NODE_SERVICE_NAME}.service"
+	! ss -ltnH 'sport = :${CHAIN_RPC_PORT}' | grep -q .
+	! ss -ltnH 'sport = :${CHAIN_P2P_PORT}' | grep -q .
+	frozen_at="\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	jq -n --arg transactionId "${transaction_id}" --arg releaseId "${release_id}" \
+		--arg sourceCommit "${source_commit}" --arg role "${role}" --arg frozenAtUtc "\${frozen_at}" \
+		--arg hash "\${finalized_hash}" --argjson number "\${number_dec}" \
+		'{schemaVersion:1,transactionId:\$transactionId,releaseId:\$releaseId,sourceCommit:\$sourceCommit,role:\$role,frozenAtUtc:\$frozenAtUtc,frozenFinalizedBlock:{number:\$number,hash:\$hash}}' \
+		>"${remote_marker}"
+	chmod 0440 "${remote_marker}"
+fi
+EOF
+			;;
+	media-ipfs)
+			remote_root_bash <<EOF
+set -euo pipefail
+mkdir -p "${remote_transaction_root}"
+if [[ ! -e "${remote_marker}" ]]; then
+	${REMOTE_DOCKER_COMPOSE_CMD} stop media-service ipfs
+	test -z "\$(${REMOTE_DOCKER_COMPOSE_CMD} ps -q --status running media-service)"
+	test -z "\$(${REMOTE_DOCKER_COMPOSE_CMD} ps -q --status running ipfs)"
+	frozen_at="\$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	jq -n --arg transactionId "${transaction_id}" --arg releaseId "${release_id}" \
+		--arg sourceCommit "${source_commit}" --arg role "${role}" --arg frozenAtUtc "\${frozen_at}" \
+		'{schemaVersion:1,transactionId:\$transactionId,releaseId:\$releaseId,sourceCommit:\$sourceCommit,role:\$role,frozenAtUtc:\$frozenAtUtc,frozenFinalizedBlock:null}' \
+		>"${remote_marker}"
+	chmod 0440 "${remote_marker}"
+fi
+EOF
+			;;
+	esac
+	verify_stopped
+	read_remote_marker
+	frozen_at="$(jq -er '.frozenAtUtc' <<<"${remote_marker_json}")"
+	if [[ "${role}" == "chain" ]]; then
+		marker_block_number="$(jq -er '.frozenFinalizedBlock.number' <<<"${remote_marker_json}")"
+		marker_block_hash="$(jq -er '.frozenFinalizedBlock.hash' <<<"${remote_marker_json}")"
+		write_result "${frozen_at}" "${marker_block_number}" "${marker_block_hash}"
+	else
+		write_result "${frozen_at}" "" ""
+	fi
+	exit 0
+fi
+
+[[ "${frozen_block_number}" =~ ^[0-9]+$ ]] || die "${action} requires the coordinator's frozen block number"
+[[ "${frozen_block_hash}" =~ ^0x[0-9a-fA-F]{64}$ ]] || die "${action} requires the coordinator's frozen block hash"
+verify_stopped
+read_remote_marker
+frozen_at="$(jq -er '.frozenAtUtc' <<<"${remote_marker_json}")"
+if [[ "${role}" == "chain" ]]; then
+	[[ "$(jq -r '.frozenFinalizedBlock.number' <<<"${remote_marker_json}")" == "${frozen_block_number}" ]] || die "chain freeze marker block number mismatch"
+	[[ "$(jq -r '.frozenFinalizedBlock.hash' <<<"${remote_marker_json}")" == "${frozen_block_hash}" ]] || die "chain freeze marker block hash mismatch"
+fi
+
+if [[ "${action}" == "verify-frozen" ]]; then
+	write_result "${frozen_at}" "${frozen_block_number}" "${frozen_block_hash}"
+	exit 0
+fi
+
+if [[ "${action}" == "snapshot" ]]; then
+	remote_capture="${remote_transaction_root}/capture-${role}"
+	case "${role}" in
+		authority)
+			remote_root_bash <<EOF
+set -euo pipefail
+test ! -e "${remote_capture}"
+mkdir -p "${remote_capture}"
+tar czf "${remote_capture}/authority-state.tar.gz" -C "${REMOTE_AUTHORITY_DIR}" .
+cp "${REMOTE_AUTHORITY_ENV_FILE}" "${remote_capture}/authority.env"
+cp "${REMOTE_AUTHORITY_SERVICE_UNIT_FILE}" "${remote_capture}/authority.service"
+chmod -R a-w "${remote_capture}"
+EOF
+			mkdir -p "${local_capture_root}/authority" "${local_capture_root}/config" "${local_capture_root}/service"
+			rsync_from_remote_no_delete "${remote_capture}/authority-state.tar.gz" "${local_capture_root}/authority/authority-state.tar.gz"
+			rsync_from_remote_no_delete "${remote_capture}/authority.env" "${local_capture_root}/config/authority.env"
+			rsync_from_remote_no_delete "${remote_capture}/authority.service" "${local_capture_root}/service/authority.service"
+			record_artifact authority authority-state artifacts/authority/authority-state.tar.gz
+			record_artifact config authority-env artifacts/config/authority.env
+			record_artifact service authority-service artifacts/service/authority.service
+			;;
+		chain)
+			remote_root_bash <<EOF
+set -euo pipefail
+test ! -e "${remote_capture}"
+mkdir -p "${remote_capture}"
+tar czf "${remote_capture}/node-data.tar.gz" -C "${REMOTE_NODE_DATA_DIR}" .
+cp "${REMOTE_NODE_BIN}" "${remote_capture}/node-binary"
+cp "${REMOTE_NODE_SPEC}" "${remote_capture}/chain-spec.json"
+cp "${REMOTE_NODE_ENV_FILE}" "${remote_capture}/node.env"
+cp "${REMOTE_NODE_SERVICE_UNIT_FILE}" "${remote_capture}/node.service"
+chmod -R a-w "${remote_capture}"
+EOF
+			mkdir -p "${local_capture_root}/node" "${local_capture_root}/config" "${local_capture_root}/service"
+			rsync_from_remote_no_delete "${remote_capture}/node-data.tar.gz" "${local_capture_root}/node/node-data.tar.gz"
+			rsync_from_remote_no_delete "${remote_capture}/node-binary" "${local_capture_root}/node/node-binary"
+			rsync_from_remote_no_delete "${remote_capture}/chain-spec.json" "${local_capture_root}/config/chain-spec.json"
+			rsync_from_remote_no_delete "${remote_capture}/node.env" "${local_capture_root}/config/node.env"
+			rsync_from_remote_no_delete "${remote_capture}/node.service" "${local_capture_root}/service/node.service"
+			install -m 0600 "${runtime_bundle}/runtime-spec-live-v14.recovery.wasm" "${local_capture_root}/node/runtime-v14.wasm"
+			install -m 0600 "${runtime_v14_metadata}" "${local_capture_root}/node/runtime-v14-metadata.scale"
+			install -m 0600 "${runtime_bundle}/runtime-spec-106.compact.compressed.wasm" "${local_capture_root}/node/runtime-v16-production.wasm"
+			install -m 0600 "${runtime_bundle}/runtime-spec-106.try-runtime.wasm" "${local_capture_root}/node/runtime-v16-try-runtime.wasm"
+			install -m 0600 "${runtime_bundle}/tcg-storage-version-observation.json" "${local_capture_root}/node/tcg-storage-version-observation.json"
+			install -m 0600 "${try_runtime_snapshot}" "${local_capture_root}/node/try-runtime-snapshot"
+			record_artifact node node-data artifacts/node/node-data.tar.gz
+			record_artifact node node-binary artifacts/node/node-binary
+			record_artifact node runtime-v14-wasm artifacts/node/runtime-v14.wasm
+			record_artifact node runtime-v14-metadata artifacts/node/runtime-v14-metadata.scale
+			record_artifact node runtime-v16-production-wasm artifacts/node/runtime-v16-production.wasm
+			record_artifact node runtime-v16-try-runtime-wasm artifacts/node/runtime-v16-try-runtime.wasm
+			record_artifact node tcg-storage-version-observation artifacts/node/tcg-storage-version-observation.json
+			record_artifact node try-runtime-snapshot artifacts/node/try-runtime-snapshot
+			record_artifact config node-env artifacts/config/node.env
+			record_artifact config chain-spec artifacts/config/chain-spec.json
+			record_artifact service node-service artifacts/service/node.service
+			;;
+		media-ipfs)
+			remote_root_bash <<EOF
+set -euo pipefail
+test ! -e "${remote_capture}"
+mkdir -p "${remote_capture}"
+ipfs_data_mount="\$(docker volume inspect -f '{{ .Mountpoint }}' "${REMOTE_IPFS_DATA_VOLUME}")"
+ipfs_staging_mount="\$(docker volume inspect -f '{{ .Mountpoint }}' "${REMOTE_IPFS_STAGING_VOLUME}")"
+tar czf "${remote_capture}/media-state.tar.gz" -C "${REMOTE_MEDIA_DIR}" .
+tar czf "${remote_capture}/ipfs-data.tar.gz" -C "\${ipfs_data_mount}" .
+tar czf "${remote_capture}/ipfs-staging.tar.gz" -C "\${ipfs_staging_mount}" .
+cp "${REMOTE_MEDIA_ENV_FILE}" "${remote_capture}/media.env"
+${REMOTE_DOCKER_COMPOSE_CMD} config --format json >"${remote_capture}/media-service.json"
+media_id="\$(docker inspect --format '{{.Image}}' "\$(${REMOTE_DOCKER_COMPOSE_CMD} ps -aq media-service)")"
+media_ref="\$(docker inspect --format '{{.Config.Image}}' "\$(${REMOTE_DOCKER_COMPOSE_CMD} ps -aq media-service)")"
+ipfs_id="\$(docker inspect --format '{{.Image}}' "\$(${REMOTE_DOCKER_COMPOSE_CMD} ps -aq ipfs)")"
+ipfs_ref="\$(docker inspect --format '{{.Config.Image}}' "\$(${REMOTE_DOCKER_COMPOSE_CMD} ps -aq ipfs)")"
+jq -n --arg projectName "${REMOTE_MEDIA_PROJECT_NAME}" --arg mediaId "\${media_id}" \
+	--arg mediaRef "\${media_ref}" --arg ipfsId "\${ipfs_id}" --arg ipfsRef "\${ipfs_ref}" \
+	'{schemaVersion:1,kind:"nexus-v2-private-alpha-media-image-lock",projectName:\$projectName,images:[{service:"media-service",reference:\$mediaRef,imageId:\$mediaId},{service:"ipfs",reference:\$ipfsRef,imageId:\$ipfsId}]}' \
+	>"${remote_capture}/media-image-lock.json"
+chmod -R a-w "${remote_capture}"
+EOF
+			mkdir -p "${local_capture_root}/media" "${local_capture_root}/ipfs" "${local_capture_root}/config" "${local_capture_root}/service"
+			for file in media-state.tar.gz media-image-lock.json; do
+				rsync_from_remote_no_delete "${remote_capture}/${file}" "${local_capture_root}/media/${file}"
+			done
+			for file in ipfs-data.tar.gz ipfs-staging.tar.gz; do
+				rsync_from_remote_no_delete "${remote_capture}/${file}" "${local_capture_root}/ipfs/${file}"
+			done
+			rsync_from_remote_no_delete "${remote_capture}/media.env" "${local_capture_root}/config/media.env"
+			rsync_from_remote_no_delete "${remote_capture}/media-service.json" "${local_capture_root}/service/media-service.json"
+			record_artifact media media-state artifacts/media/media-state.tar.gz
+			record_artifact media media-image-lock artifacts/media/media-image-lock.json
+			record_artifact ipfs ipfs-data artifacts/ipfs/ipfs-data.tar.gz
+			record_artifact ipfs ipfs-staging artifacts/ipfs/ipfs-staging.tar.gz
+			record_artifact config media-env artifacts/config/media.env
+			record_artifact service media-service artifacts/service/media-service.json
+			;;
+	esac
+	write_result "${frozen_at}" "${frozen_block_number}" "${frozen_block_hash}"
+	exit 0
+fi
+
+# verify-snapshot re-hashes the exact immutable local artifacts emitted by the
+# snapshot phase; it never reaches the stopped host or changes a service.
+case "${role}" in
+	authority)
+		record_artifact authority authority-state artifacts/authority/authority-state.tar.gz
+		record_artifact config authority-env artifacts/config/authority.env
+		record_artifact service authority-service artifacts/service/authority.service
+		tar tzf "${bundle_root}/artifacts/authority/authority-state.tar.gz" >/dev/null
+		;;
+	chain)
+		record_artifact node node-data artifacts/node/node-data.tar.gz
+		record_artifact node node-binary artifacts/node/node-binary
+		record_artifact node runtime-v14-wasm artifacts/node/runtime-v14.wasm
+		record_artifact node runtime-v14-metadata artifacts/node/runtime-v14-metadata.scale
+		record_artifact node runtime-v16-production-wasm artifacts/node/runtime-v16-production.wasm
+		record_artifact node runtime-v16-try-runtime-wasm artifacts/node/runtime-v16-try-runtime.wasm
+		record_artifact node tcg-storage-version-observation artifacts/node/tcg-storage-version-observation.json
+		record_artifact node try-runtime-snapshot artifacts/node/try-runtime-snapshot
+		record_artifact config node-env artifacts/config/node.env
+		record_artifact config chain-spec artifacts/config/chain-spec.json
+		record_artifact service node-service artifacts/service/node.service
+		tar tzf "${bundle_root}/artifacts/node/node-data.tar.gz" >/dev/null
+		;;
+	media-ipfs)
+		record_artifact media media-state artifacts/media/media-state.tar.gz
+		record_artifact media media-image-lock artifacts/media/media-image-lock.json
+		record_artifact ipfs ipfs-data artifacts/ipfs/ipfs-data.tar.gz
+		record_artifact ipfs ipfs-staging artifacts/ipfs/ipfs-staging.tar.gz
+		record_artifact config media-env artifacts/config/media.env
+		record_artifact service media-service artifacts/service/media-service.json
+		tar tzf "${bundle_root}/artifacts/media/media-state.tar.gz" >/dev/null
+		tar tzf "${bundle_root}/artifacts/ipfs/ipfs-data.tar.gz" >/dev/null
+		tar tzf "${bundle_root}/artifacts/ipfs/ipfs-staging.tar.gz" >/dev/null
+		;;
+esac
+write_result "${frozen_at}" "${frozen_block_number}" "${frozen_block_hash}"

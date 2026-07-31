@@ -14,15 +14,21 @@ RESET_MEDIA="${ROOT_DIR}/deploy/alpha/macmini2010/reset-media.sh"
 READINESS_VERIFIER="${ROOT_DIR}/scripts/nexus-v2-private-alpha/verify_reset_readiness.py"
 POST_CUTOVER_COORDINATOR="${ROOT_DIR}/deploy/alpha/macmini2010/nexus-v2-post-cutover-coordinator.py"
 POST_CUTOVER_COORDINATOR_TEST="${ROOT_DIR}/deploy/alpha/macmini2010/test_nexus_v2_post_cutover_coordinator.py"
+FINAL_FREEZE="${ROOT_DIR}/scripts/nexus-v2-private-alpha/final_freeze.py"
+FINAL_FREEZE_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_final_freeze.py"
+FINAL_FREEZE_CHAIN_DRIVER="${ROOT_DIR}/deploy/alpha/macmini2010/nexus-v2-final-freeze-chain-driver"
+NODE_CANDIDATE="${ROOT_DIR}/scripts/nexus-v2-private-alpha/node_candidate.py"
+NODE_CANDIDATE_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_node_candidate.py"
 CLEAN_BUILD="${ROOT_DIR}/scripts/clean-build-artifacts.sh"
 DEPLOY="${ROOT_DIR}/scripts/deploy.sh"
 
 bash -n "$BUILD" "$NEXUS_V2_BUNDLE" "$REHEARSE" "$MEDIA_DEPLOY" "$NODE_DEPLOY" "$DEPLOY_ALL" \
 	"$DEPLOY_LIB" "$RESET_NODE" "$RESET_MEDIA" "$CLEAN_BUILD" "$DEPLOY" \
-	"${ROOT_DIR}/deploy/macmini2010/deploy-node.sh"
+	"${ROOT_DIR}/deploy/macmini2010/deploy-node.sh" "$FINAL_FREEZE_CHAIN_DRIVER"
 python3 -m unittest \
 	"${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_verify_reset_readiness.py"
 python3 -m unittest "${POST_CUTOVER_COORDINATOR_TEST}"
+python3 -m unittest "$FINAL_FREEZE_TEST" "$NODE_CANDIDATE_TEST"
 "$BUILD" --help >/dev/null
 "$NEXUS_V2_BUNDLE" --help >/dev/null
 "$REHEARSE" --help >/dev/null
@@ -92,7 +98,10 @@ rg -q 'scripts/clean-build-artifacts.sh' "$DEPLOY"
 rg -q -- '--fresh-reset-readiness' "$NODE_DEPLOY"
 rg -q 'release deploys preserve live state unless --purge-state is paired with --fresh-reset-readiness' "$NODE_DEPLOY"
 rg -q 'readiness packet was already consumed for the node reset' "$NODE_DEPLOY"
-rg -q 'dry-run: guarded node purge validated' "$NODE_DEPLOY"
+rg -q 'dry-run: guarded node purge and immutable candidate promotion validated' "$NODE_DEPLOY"
+rg -q 'release node deploys require --promote-candidate; remote builds are forbidden' "$NODE_DEPLOY"
+rg -q -- '--target-identity' "$NODE_DEPLOY"
+rg -q 'state_getStorageHash' "$NODE_DEPLOY"
 rg -q 'REMOTE_CARGO_CLEAN_AFTER_DEPLOY' "$NODE_DEPLOY"
 rg -q 'refusing unsafe Cargo cleanup path' "$NODE_DEPLOY"
 rg -q 'direct release reset is forbidden' "$RESET_NODE"
@@ -109,5 +118,14 @@ if rg -q "['\"](ssh|scp|rsync|docker|curl)['\"]" "$POST_CUTOVER_COORDINATOR"; th
 fi
 rg -q 'v2AcceptanceAssetsExist' "$READINESS_VERIFIER"
 rg -q 'resetExecuted' "$READINESS_VERIFIER"
+rg -q 'eterra-spec106-target-identity.v1' "$NODE_CANDIDATE"
+rg -q 'deterministicRepeatMatched' "$NODE_CANDIDATE"
+rg -q 'automaticResumeAttempted' "$FINAL_FREEZE"
+rg -q 'site-ingress' "$FINAL_FREEZE"
+rg -q 'site-indexer-mongo' "$FINAL_FREEZE"
+if rg -q "['\"](ssh|docker|systemctl|curl)['\"]" "$FINAL_FREEZE"; then
+	echo "final-freeze coordinator must delegate host operations to pinned drivers" >&2
+	exit 1
+fi
 
 echo "release script safety checks passed"

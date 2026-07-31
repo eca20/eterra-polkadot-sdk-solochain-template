@@ -1180,17 +1180,24 @@ class ReleaseSafetyTests(unittest.TestCase):
         )
         self.assertFalse(evidence.exists())
 
-    def test_no_live_operation_driver_is_bundled(self) -> None:
+    def test_only_evidence_and_command_free_coordinators_are_bundled(self) -> None:
         directory = Path(__file__).resolve().parent
         executables = {
             path.name
             for path in directory.iterdir()
             if path.is_file() and os.access(path, os.X_OK)
         }
-        self.assertEqual(executables, {"alpha_v2_release.py"})
+        self.assertEqual(
+            executables,
+            {"alpha_v2_release.py", "final_freeze.py", "node_candidate.py"},
+        )
         source = (directory / "alpha_v2_release.py").read_text(encoding="utf-8")
         self.assertNotIn("subprocess.run([\"./deploy/", source)
         self.assertNotIn("shell=True", source)
+        coordinator = (directory / "final_freeze.py").read_text(encoding="utf-8")
+        self.assertNotIn("shell=True", coordinator)
+        for command in ('"ssh"', '"docker"', '"systemctl"', '"curl"'):
+            self.assertNotIn(command, coordinator)
 
     def test_documented_operator_inputs_match_the_validators(self) -> None:
         docs = tool.REPO_ROOT / "docs/nexus-v2-private-alpha"

@@ -36,15 +36,73 @@ and separately reviewed live procedure remain required.
 
 ## Capture packet
 
-First use the existing current-Alpha helper with a unique name:
+The old helper remains useful only for a preliminary, recoverable capture:
 
 ```bash
 ./deploy/alpha/macmini2010/backup-alpha-state.sh \
   nexus-v2-pre-reset-YYYYMMDDTHHMMSSZ
 ```
 
-Do not use `restore-alpha-state.sh`, `reset-node.sh`, `reset-media.sh`,
+Do not represent that preliminary capture as the final frozen state. The final
+capture uses the SHA-256-pinned `final_freeze.py` plan described below. Do not
+use `restore-alpha-state.sh`, `reset-node.sh`, `reset-media.sh`,
 `deploy-all.sh --fresh`, or any purge option at this stage.
+
+### Immutable node candidate and target identity
+
+Build the replacement candidate from the already-built `retry1` runtime bundle
+in a clean exact deployment worktree. The private override file is a closed,
+address-only JSON document; seed phrases and secret URIs are rejected and are
+never copied into either output:
+
+```bash
+CHAIN_COMMIT="$(git rev-parse HEAD)"
+python3 scripts/nexus-v2-private-alpha/node_candidate.py build \
+  --runtime-bundle /private/path/to/runtime-release-spec106-RETRY1 \
+  --public-overrides /private/path/to/alpha-overrides.json \
+  --release-id nexus-v2-private-alpha-RELEASE \
+  --deployment-source-commit "${CHAIN_COMMIT}" \
+  --output /private/path/to/node-candidate-spec106 \
+  --target-identity-output /private/path/to/eterra-spec106-target-identity.v1.json
+```
+
+The builder verifies every runtime-bundle checksum, repeats plain/raw spec
+generation byte-for-byte, proves raw `:code` equals the pinned production Wasm,
+and observes the exact genesis through a temporary loopback-only node. The
+separate `eterra-spec106-target-identity.v1` binds release, genesis, runtime code
+hash, runtime/deployment source commits, metadata V15 hash, spec `106`, TCG
+storage `16`, and the node-candidate manifest hash with paid/public activation
+false. Pin both output SHA-256 values in the protected Alpha environment.
+
+### Atomic final freeze
+
+Populate `final-freeze-plan.example.json` with exact clean component commits and
+SHA-256-pinned drivers. The currently approved site/indexer cutover source is
+`df01ffc08a791a73d60461d25d0a9d8a78456466`; replace that pin only with a later
+reviewed clean commit. The site driver must implement both `site-ingress` and
+`site-indexer-mongo`; the bundled chain driver implements `authority`, `chain`,
+and `media-ipfs`.
+
+```bash
+PLAN=/private/path/to/final-freeze-plan.json
+PLAN_SHA256="$(shasum -a 256 "${PLAN}" | awk '{print $1}')"
+
+python3 scripts/nexus-v2-private-alpha/final_freeze.py validate \
+  --plan "${PLAN}" --expected-plan-sha256 "${PLAN_SHA256}"
+python3 scripts/nexus-v2-private-alpha/final_freeze.py dry-run \
+  --plan "${PLAN}" --expected-plan-sha256 "${PLAN_SHA256}" \
+  --bundle-root /private/path/to/final-freeze-dry-bundle \
+  --state-root /private/path/to/final-freeze-dry-state \
+  --evidence /private/path/to/final-freeze-dry-run.json
+```
+
+Only after reviewing the dry-run, use `execute` with new empty bundle/state
+paths. It stops Caddy/public ingress, site/indexer/Mongo, authority, node/RPC/P2P
+and block production, then media/IPFS. After a stable 30-second minimum barrier,
+it snapshots every role, creates same-block pre-V16 gates and zero inventory,
+and writes the complete backup manifest. It never resumes a component on
+failure. The stopped state is then used for isolated restore and copied-state
+migration rehearsal before any reset.
 
 Copy the current backup into an access-controlled bundle and add the required
 supplemental artifacts listed in
@@ -309,6 +367,8 @@ cd /absolute/path/to/clean/exact-commit/chain
 ./deploy/alpha/macmini2010/deploy-node.sh \
   --purge-state \
   --fresh-reset-readiness "${READINESS}" \
+  --promote-candidate /private/path/to/node-candidate-spec106/node-candidate.json \
+  --target-identity /private/path/to/eterra-spec106-target-identity.v1.json \
   --dry-run
 ./deploy/alpha/macmini2010/deploy-media.sh \
   --fresh \
@@ -332,7 +392,10 @@ order:
 cd /absolute/path/to/clean/exact-commit/chain
 ./deploy/alpha/macmini2010/deploy-node.sh \
   --purge-state \
-  --fresh-reset-readiness "${READINESS}"
+  --fresh-reset-readiness "${READINESS}" \
+  --promote-candidate /private/path/to/node-candidate-spec106/node-candidate.json \
+  --target-identity /private/path/to/eterra-spec106-target-identity.v1.json \
+  --evidence /private/path/to/evidence/node-promotion.json
 ./deploy/alpha/macmini2010/deploy-media.sh \
   --fresh \
   --fresh-reset-readiness "${READINESS}" \
