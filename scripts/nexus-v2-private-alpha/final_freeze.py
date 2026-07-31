@@ -24,6 +24,7 @@ from typing import Any, Mapping, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import alpha_v2_release as release  # noqa: E402
+import frozen_snapshot_proof as snapshot_proof  # noqa: E402
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -72,6 +73,7 @@ COMPONENT_ARTIFACTS: dict[str, set[tuple[str, str]]] = {
         ("node", "runtime-v16-try-runtime-wasm"),
         ("node", "tcg-storage-version-observation"),
         ("node", "try-runtime-snapshot"),
+        ("node", "try-runtime-snapshot-proof"),
         ("service", "node-service"),
     },
     "media-ipfs": {
@@ -594,6 +596,34 @@ def coordinator_artifacts(
         (entry["group"], entry["name"]): entry
         for entry in receipts["chain"]["verify-snapshot"]["artifacts"]
     }
+    def chain_artifact_path(name: str) -> Path:
+        entry = chain_artifacts[("node", name)]
+        return release.resolve_bundle_file(bundle_root, entry["path"], f"chain node:{name}")
+
+    snapshot_verification = snapshot_proof.verify(
+        chain_artifact_path("try-runtime-snapshot-proof"),
+        chain_artifact_path("try-runtime-snapshot"),
+        chain_artifact_path("node-data"),
+        chain_artifact_path("node-binary"),
+        release.resolve_bundle_file(
+            bundle_root,
+            chain_artifacts[("config", "chain-spec")]["path"],
+            "chain config:chain-spec",
+        ),
+        frozen["number"],
+        frozen["hash"],
+    )
+    require(snapshot_verification["transactionId"] == plan["transactionId"], "frozen snapshot proof transaction mismatch")
+    require(snapshot_verification["releaseId"] == plan["releaseId"], "frozen snapshot proof release mismatch")
+    require(snapshot_verification["sourceCommit"] == plan["sourceCommit"], "frozen snapshot proof source mismatch")
+    require(
+        snapshot_verification["runtimeSpecVersion"] == plan["preV16SourceRuntime"]["specVersion"],
+        "frozen snapshot proof runtime spec mismatch",
+    )
+    require(
+        snapshot_verification["frozenAtUtc"] == receipts["chain"]["freeze"]["frozenAtUtc"],
+        "frozen snapshot proof freeze time mismatch",
+    )
     runtime_v14_hash = chain_artifacts[("node", "runtime-v14-wasm")]["sha256"]
     metadata_v14_hash = chain_artifacts[("node", "runtime-v14-metadata")]["sha256"]
     tcg_observation_hash = chain_artifacts[("node", "tcg-storage-version-observation")]["sha256"]

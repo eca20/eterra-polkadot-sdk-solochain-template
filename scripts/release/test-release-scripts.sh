@@ -19,19 +19,30 @@ FINAL_FREEZE_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_final_freeze.
 FINAL_FREEZE_CHAIN_DRIVER="${ROOT_DIR}/deploy/alpha/macmini2010/nexus-v2-final-freeze-chain-driver"
 NODE_CANDIDATE="${ROOT_DIR}/scripts/nexus-v2-private-alpha/node_candidate.py"
 NODE_CANDIDATE_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_node_candidate.py"
+FROZEN_SNAPSHOT_PROOF_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_frozen_snapshot_proof.py"
+LINUX_AMD64_NODE_BUILD="${ROOT_DIR}/scripts/release/build-linux-amd64-node.sh"
+LINUX_AMD64_NODE_RUNNER="${ROOT_DIR}/scripts/release/linux-amd64-node-runner.sh"
 CLEAN_BUILD="${ROOT_DIR}/scripts/clean-build-artifacts.sh"
 DEPLOY="${ROOT_DIR}/scripts/deploy.sh"
 
 bash -n "$BUILD" "$NEXUS_V2_BUNDLE" "$REHEARSE" "$MEDIA_DEPLOY" "$NODE_DEPLOY" "$DEPLOY_ALL" \
 	"$DEPLOY_LIB" "$RESET_NODE" "$RESET_MEDIA" "$CLEAN_BUILD" "$DEPLOY" \
-	"${ROOT_DIR}/deploy/macmini2010/deploy-node.sh" "$FINAL_FREEZE_CHAIN_DRIVER"
+	"${ROOT_DIR}/deploy/macmini2010/deploy-node.sh" "$FINAL_FREEZE_CHAIN_DRIVER" \
+	"$LINUX_AMD64_NODE_BUILD" "$LINUX_AMD64_NODE_RUNNER"
 python3 -m unittest \
 	"${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_verify_reset_readiness.py"
 python3 -m unittest "${POST_CUTOVER_COORDINATOR_TEST}"
-python3 -m unittest "$FINAL_FREEZE_TEST" "$NODE_CANDIDATE_TEST"
+python3 -m unittest "$FINAL_FREEZE_TEST" "$NODE_CANDIDATE_TEST" "$FROZEN_SNAPSHOT_PROOF_TEST"
 "$BUILD" --help >/dev/null
 "$NEXUS_V2_BUNDLE" --help >/dev/null
 "$REHEARSE" --help >/dev/null
+"$LINUX_AMD64_NODE_BUILD" --help >/dev/null
+rg -q '948f9b08a66e7fe01b03a98ef1c7568292e07ec2e4fe90d88c07bb14563c84ff' \
+	"${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
+rg -q 'nexus-v2-amd64-cargo-registry' "${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
+rg -q 'nexus-v2-amd64-cargo-git' "${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
+rg -q 'nexus-v2-amd64-target' "${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
+rg -q -- '--platform linux/amd64' "$LINUX_AMD64_NODE_BUILD"
 
 rg -q -- '--expected-source-commit' "$BUILD"
 rg -q 'status --porcelain --untracked-files=all' "$BUILD"
@@ -102,6 +113,9 @@ rg -q 'dry-run: guarded node purge and immutable candidate promotion validated' 
 rg -q 'release node deploys require --promote-candidate; remote builds are forbidden' "$NODE_DEPLOY"
 rg -q -- '--target-identity' "$NODE_DEPLOY"
 rg -q 'state_getStorageHash' "$NODE_DEPLOY"
+rg -q 'uname -srm' "$NODE_DEPLOY"
+rg -q 'VERSION_ID.*24.04' "$NODE_DEPLOY"
+rg -q 'solochain-eterra-node.*--version' "$NODE_DEPLOY"
 rg -q 'REMOTE_CARGO_CLEAN_AFTER_DEPLOY' "$NODE_DEPLOY"
 rg -q 'refusing unsafe Cargo cleanup path' "$NODE_DEPLOY"
 rg -q 'direct release reset is forbidden' "$RESET_NODE"
@@ -118,8 +132,16 @@ if rg -q "['\"](ssh|scp|rsync|docker|curl)['\"]" "$POST_CUTOVER_COORDINATOR"; th
 fi
 rg -q 'v2AcceptanceAssetsExist' "$READINESS_VERIFIER"
 rg -q 'resetExecuted' "$READINESS_VERIFIER"
-rg -q 'eterra-spec106-target-identity.v1' "$NODE_CANDIDATE"
+rg -q 'eterra-spec106-target-identity.v2' "$NODE_CANDIDATE"
 rg -q 'deterministicRepeatMatched' "$NODE_CANDIDATE"
+rg -q 'targetPlatform' "$NODE_CANDIDATE"
+rg -q 'not x86-64' "$NODE_CANDIDATE"
+rg -q 'create-snapshot' "$FINAL_FREEZE_CHAIN_DRIVER"
+rg -Fq -- '--at "${frozen_block_hash}"' "$FINAL_FREEZE_CHAIN_DRIVER"
+if rg -q -- '--try-runtime-snapshot' "$FINAL_FREEZE_CHAIN_DRIVER"; then
+	echo "final freeze may not accept a pre-existing try-runtime snapshot" >&2
+	exit 1
+fi
 rg -q 'automaticResumeAttempted' "$FINAL_FREEZE"
 rg -q 'site-ingress' "$FINAL_FREEZE"
 rg -q 'site-indexer-mongo' "$FINAL_FREEZE"

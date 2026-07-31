@@ -320,7 +320,7 @@ load_env() {
 	REMOTE_RUNTIME_SOURCE_COMMIT_FILE="${REMOTE_STATE_DIR}/runtime-source-commit.txt"
 	REMOTE_NODE_CANDIDATE_SHA256_FILE="${REMOTE_STATE_DIR}/node-candidate.sha256"
 	REMOTE_ALPHA_GENESIS_HASH_FILE="${REMOTE_STATE_DIR}/alpha-genesis-hash.txt"
-	REMOTE_TARGET_IDENTITY_FILE="${REMOTE_STATE_DIR}/eterra-spec106-target-identity.v1.json"
+	REMOTE_TARGET_IDENTITY_FILE="${REMOTE_STATE_DIR}/eterra-spec106-target-identity.v2.json"
 	REMOTE_MEDIA_SOURCE_COMMIT_FILE="${REMOTE_STATE_DIR}/media-source-commit.txt"
 	REMOTE_AUTHORITY_SOURCE_COMMIT_FILE="${REMOTE_STATE_DIR}/authority-source-commit.txt"
 	REMOTE_NODE_SERVICE_UNIT_FILE="/etc/systemd/system/${REMOTE_NODE_SERVICE_NAME}.service"

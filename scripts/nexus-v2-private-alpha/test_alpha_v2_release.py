@@ -1191,7 +1191,12 @@ class ReleaseSafetyTests(unittest.TestCase):
         }
         self.assertEqual(
             executables,
-            {"alpha_v2_release.py", "final_freeze.py", "node_candidate.py"},
+            {
+                "alpha_v2_release.py",
+                "final_freeze.py",
+                "frozen_snapshot_proof.py",
+                "node_candidate.py",
+            },
         )
         source = (directory / "alpha_v2_release.py").read_text(encoding="utf-8")
         self.assertNotIn("subprocess.run([\"./deploy/", source)

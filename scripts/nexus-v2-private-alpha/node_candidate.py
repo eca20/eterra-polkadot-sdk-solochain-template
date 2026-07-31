@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -30,8 +31,20 @@ from typing import Any, Mapping, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FINALIZE_ALPHA = REPO_ROOT / "scripts/finalize-alpha-spec.py"
 VERIFY_ALPHA = REPO_ROOT / "scripts/verify-alpha-spec.py"
+LINUX_AMD64_RUNNER = REPO_ROOT / "scripts/release/linux-amd64-node-runner.sh"
+LINUX_AMD64_DOCKERFILE = REPO_ROOT / "scripts/release/Dockerfile.node-linux-amd64"
 CODE_STORAGE_KEY = "0x3a636f6465"
 TARGET_SPEC_VERSION = 106
+PINNED_LINUX_AMD64_BUILD_IMAGE = "docker.io/library/rust:1.89-bookworm@sha256:948f9b08a66e7fe01b03a98ef1c7568292e07ec2e4fe90d88c07bb14563c84ff"
+TARGET_PLATFORM = {
+    "architecture": "x86_64",
+    "binaryFormat": "elf64",
+    "deploymentHostContract": "ubuntu-24.04-x86_64",
+    "elfMachine": 62,
+    "endianness": "little",
+    "libc": "glibc",
+    "os": "linux",
+}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 HASH256_RE = re.compile(r"^0x[0-9a-f]{64}$")
@@ -59,8 +72,16 @@ CANDIDATE_FILES = {
     "solochain-eterra-node",
     "start-alpha-node.sh",
 }
+DEPLOYMENT_BUILD_FILES = {
+    "SHA256SUMS",
+    "buildkit-metadata.json",
+    "deployment-node-attestation.json",
+    "runtime-spec-106.compact.compressed.wasm",
+    "solochain-eterra-node",
+}
 TARGET_IDENTITY_KEYS = {
     "authorizations",
+    "deploymentNode",
     "deploymentSourceCommit",
     "genesisHash",
     "kind",
@@ -73,6 +94,7 @@ TARGET_IDENTITY_KEYS = {
     "schemaVersion",
     "specVersion",
     "tcgStorageVersion",
+    "targetPlatform",
 }
 
 
@@ -135,6 +157,135 @@ def ensure_release(value: Any) -> str:
 def ensure_port(value: int, label: str) -> int:
     require(isinstance(value, int) and 1024 <= value <= 65535, f"invalid {label}")
     return value
+
+
+def inspect_linux_x86_64_elf(path: Path, label: str = "deployment node") -> dict[str, Any]:
+    path = regular_file(path, label, executable=True)
+    with path.open("rb") as handle:
+        header = handle.read(64)
+    require(len(header) >= 64, f"{label} ELF header is truncated")
+    require(header[:4] == b"\x7fELF", f"{label} is not an ELF binary")
+    require(header[4] == 2, f"{label} is not ELF64")
+    require(header[5] == 1, f"{label} is not little-endian")
+    require(header[6] == 1, f"{label} ELF version is unsupported")
+    require(struct.unpack_from("<H", header, 18)[0] == 62, f"{label} is not x86-64")
+    require(struct.unpack_from("<H", header, 16)[0] in {2, 3}, f"{label} ELF type is not executable")
+    return dict(TARGET_PLATFORM)
+
+
+def verify_deployment_node_attestation(
+    path: Path,
+    node: Path,
+    production_wasm_sha256: str,
+    expected_source_commit: str,
+) -> dict[str, Any]:
+    path = regular_file(path, "Linux/amd64 deployment-node build attestation")
+    node = regular_file(node, "Linux/amd64 deployment node", executable=True)
+    build_root = path.parent
+    require(path.name == "deployment-node-attestation.json", "deployment-node attestation filename mismatch")
+    require(node.parent == build_root and node.name == "solochain-eterra-node", "deployment node must come from the attested build root")
+    require({item.name for item in build_root.iterdir()} == DEPLOYMENT_BUILD_FILES, "deployment-node build root does not match the closed file set")
+    sums = regular_file(build_root / "SHA256SUMS", "deployment-node SHA256SUMS")
+    listed: dict[str, str] = {}
+    for raw_line in sums.read_text(encoding="utf-8").splitlines():
+        parts = raw_line.strip().split(None, 1)
+        require(len(parts) == 2, "invalid deployment-node SHA256SUMS line")
+        digest, name = parts
+        name = name.lstrip("*")
+        ensure_sha(digest, "deployment-node checksum")
+        require(name not in listed and name in DEPLOYMENT_BUILD_FILES - {"SHA256SUMS"}, "invalid deployment-node checksum path")
+        artifact = regular_file(build_root / name, f"deployment-node build artifact {name}")
+        require(sha256_file(artifact) == digest, f"deployment-node build artifact hash mismatch: {name}")
+        listed[name] = digest
+    require(set(listed) == DEPLOYMENT_BUILD_FILES - {"SHA256SUMS"}, "deployment-node checksum set is incomplete")
+    production_wasm = regular_file(
+        build_root / "runtime-spec-106.compact.compressed.wasm",
+        "deployment-node production Wasm",
+    )
+    require(sha256_file(production_wasm) == production_wasm_sha256, "deployment-node build-root runtime Wasm mismatch")
+    value = read_json(path, "Linux/amd64 deployment-node build attestation")
+    require(
+        set(value)
+        == {
+            "artifacts",
+            "authorizations",
+            "buildEnvironment",
+            "kind",
+            "schemaVersion",
+            "sourceCommit",
+            "sourceDateEpoch",
+            "targetPlatform",
+        },
+        "deployment-node attestation does not match the closed schema",
+    )
+    require(value.get("schemaVersion") == 1, "deployment-node attestation schema mismatch")
+    require(value.get("kind") == "nexus-v2-linux-amd64-deployment-node-build", "deployment-node attestation kind mismatch")
+    require(value.get("sourceCommit") == expected_source_commit, "deployment-node build source mismatch")
+    source_epoch = value.get("sourceDateEpoch")
+    require(isinstance(source_epoch, int) and not isinstance(source_epoch, bool) and source_epoch > 0, "deployment-node source epoch is invalid")
+    try:
+        expected_epoch = int(
+            subprocess.check_output(
+                ["git", "-C", str(REPO_ROOT), "show", "-s", "--format=%ct", expected_source_commit],
+                text=True,
+            ).strip()
+        )
+    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+        raise CandidateError("deployment-node source commit epoch is unavailable") from exc
+    require(source_epoch == expected_epoch, "deployment-node source epoch mismatch")
+    require(value.get("targetPlatform") == TARGET_PLATFORM, "deployment-node target platform mismatch")
+    environment = value.get("buildEnvironment")
+    require(
+        isinstance(environment, dict)
+        and set(environment)
+        == {
+            "buildkitPlatform",
+            "cargoLocked",
+            "containerImage",
+            "dockerfileSha256",
+            "incremental",
+            "runtimeProductionFeature",
+            "rustc",
+        },
+        "deployment-node build environment does not match the closed schema",
+    )
+    require(environment.get("buildkitPlatform") == "linux/amd64", "deployment-node BuildKit platform mismatch")
+    require(environment.get("containerImage") == PINNED_LINUX_AMD64_BUILD_IMAGE, "deployment-node build image mismatch")
+    require(environment.get("rustc") == "rustc 1.89.0 (29483883e 2025-08-04)", "deployment-node Rust version mismatch")
+    require(environment.get("cargoLocked") is True, "deployment-node dependencies were not locked")
+    require(environment.get("incremental") is False, "deployment-node incremental build is forbidden")
+    require(environment.get("runtimeProductionFeature") is True, "deployment-node runtime-production feature is missing")
+    dockerfile_sha256 = ensure_sha(environment.get("dockerfileSha256"), "deployment-node Dockerfile SHA-256")
+    require(
+        dockerfile_sha256 == sha256_file(regular_file(LINUX_AMD64_DOCKERFILE, "Linux/amd64 deployment Dockerfile")),
+        "deployment-node Dockerfile identity mismatch",
+    )
+    artifacts = value.get("artifacts")
+    require(
+        isinstance(artifacts, dict)
+        and set(artifacts) == {"buildkitMetadataSha256", "nativeNodeSha256", "productionWasmSha256"},
+        "deployment-node artifact pins do not match the closed schema",
+    )
+    buildkit_metadata_sha256 = ensure_sha(artifacts.get("buildkitMetadataSha256"), "BuildKit metadata SHA-256")
+    require(
+        sha256_file(regular_file(build_root / "buildkit-metadata.json", "BuildKit metadata")) == buildkit_metadata_sha256,
+        "BuildKit metadata hash mismatch",
+    )
+    require(artifacts.get("nativeNodeSha256") == sha256_file(node), "deployment-node attestation binary hash mismatch")
+    require(artifacts.get("productionWasmSha256") == production_wasm_sha256, "deployment-node attestation runtime Wasm mismatch")
+    require(
+        value.get("authorizations")
+        == {"paidProduction": False, "publicDeploy": False, "publicRelease": False},
+        "deployment-node attestation activation flags are unsafe",
+    )
+    return {
+        "sha256": sha256_file(path),
+        "sourceCommit": expected_source_commit,
+        "sourceDateEpoch": source_epoch,
+        "dockerfileSha256": environment["dockerfileSha256"],
+        "buildkitMetadataSha256": artifacts["buildkitMetadataSha256"],
+        "containerImage": environment["containerImage"],
+    }
 
 
 def path_within(path: Path, root: Path) -> bool:
@@ -293,6 +444,73 @@ def finalize_specs(node: Path, overrides: Path, output: Path) -> None:
     regular_file(output / "alpha-raw.json", "finalized Alpha raw spec")
 
 
+def prove_deployment_node(
+    node: Path,
+    plain_spec: Path,
+    expected_raw_spec: Path,
+    production_wasm_sha256: str,
+) -> dict[str, Any]:
+    runner = regular_file(LINUX_AMD64_RUNNER, "Linux/amd64 node runner", executable=True)
+    with tempfile.TemporaryDirectory(prefix="nexus-v2-linux-amd64-node-probe.") as temporary:
+        workspace = Path(temporary)
+        probe_node = workspace / "solochain-eterra-node"
+        probe_plain = workspace / "alpha-plain.json"
+        probe_raw = workspace / "alpha-raw.json"
+        shutil.copy2(node, probe_node)
+        os.chmod(probe_node, 0o755)
+        shutil.copyfile(plain_spec, probe_plain)
+        version = subprocess.run(
+            [
+                str(runner),
+                "--workspace",
+                str(workspace),
+                "--node",
+                probe_node.name,
+                "--",
+                "--version",
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        require(version.returncode == 0, "Linux/amd64 deployment node --version probe failed")
+        version_text = version.stdout.strip()
+        require(version_text and len(version_text) <= 512 and "\x00" not in version_text, "deployment node version output is invalid")
+        run_checked(
+            [
+                str(runner),
+                "--workspace",
+                str(workspace),
+                "--node",
+                probe_node.name,
+                "--",
+                "build-spec",
+                "--chain",
+                f"/work/{probe_plain.name}",
+                "--disable-default-bootnode",
+                "--raw",
+            ],
+            "Linux/amd64 deployment-node raw-spec proof",
+            stdout_path=probe_raw,
+        )
+        expected = read_json(expected_raw_spec, "native-builder Alpha raw spec")
+        actual = read_json(probe_raw, "Linux/amd64 deployment-node Alpha raw spec")
+        require(actual == expected, "Linux/amd64 deployment node generated different Alpha raw state")
+        runtime_code = raw_runtime_code(actual)
+        require(hashlib.sha256(runtime_code).hexdigest() == production_wasm_sha256, "Linux/amd64 deployment node embeds different production Wasm")
+        return {
+            "buildSpecExecuted": True,
+            "embeddedRuntimeCodeSha256": production_wasm_sha256,
+            "generatedRawSpecSha256": sha256_file(probe_raw),
+            "rawStateMatchesNativeBuilder": True,
+            "runnerSha256": sha256_file(runner),
+            "runnerNetworkDisabled": True,
+            "version": version_text,
+            "versionExecuted": True,
+        }
+
+
 def rpc_request(port: int, method: str, params: list[Any]) -> Any:
     body = json.dumps({"id": 1, "jsonrpc": "2.0", "method": method, "params": params}).encode()
     request = urllib.request.Request(
@@ -387,6 +605,19 @@ def command_build(args: argparse.Namespace) -> None:
     deployment_commit = ensure_commit(args.deployment_source_commit, "deployment source commit")
     current_clean_commit(deployment_commit)
     runtime = verify_runtime_bundle(Path(args.runtime_bundle))
+    deployment_node = regular_file(Path(args.deployment_node), "Linux/amd64 deployment node", executable=True)
+    inspect_linux_x86_64_elf(deployment_node)
+    deployment_node_source_commit = ensure_commit(args.deployment_node_source_commit, "deployment-node source commit")
+    deployment_attestation_path = regular_file(
+        Path(args.deployment_node_attestation),
+        "Linux/amd64 deployment-node build attestation",
+    )
+    deployment_attestation = verify_deployment_node_attestation(
+        deployment_attestation_path,
+        deployment_node,
+        runtime["wasmSha256"],
+        deployment_node_source_commit,
+    )
     overrides_path = regular_file(Path(args.public_overrides), "Alpha public overrides")
     overrides = validate_public_overrides(overrides_path)
     rpc_port = ensure_port(args.rpc_port, "RPC port")
@@ -403,9 +634,9 @@ def command_build(args: argparse.Namespace) -> None:
         temporary_root = Path(temporary)
         first = temporary_root / "first"
         second = temporary_root / "second"
-        node = Path(runtime["root"]) / "solochain-eterra-node"
-        finalize_specs(node, overrides_path, first)
-        finalize_specs(node, overrides_path, second)
+        spec_builder_node = Path(runtime["root"]) / "solochain-eterra-node"
+        finalize_specs(spec_builder_node, overrides_path, first)
+        finalize_specs(spec_builder_node, overrides_path, second)
         for name in ("alpha-plain.json", "alpha-raw.json"):
             require((first / name).read_bytes() == (second / name).read_bytes(), f"Alpha {name} finalization is not deterministic")
 
@@ -415,10 +646,16 @@ def command_build(args: argparse.Namespace) -> None:
         production_wasm = Path(runtime["root"]) / "runtime-spec-106.compact.compressed.wasm"
         require(hashlib.sha256(code).hexdigest() == runtime["wasmSha256"], "Alpha raw spec :code differs from the pinned production Wasm")
         code_hash = "0x" + hashlib.blake2b(code, digest_size=32).hexdigest()
-        genesis = inspect_genesis(node, first / "alpha-raw.json", rpc_port, p2p_port)
+        deployment_proof = prove_deployment_node(
+            deployment_node,
+            first / "alpha-plain.json",
+            first / "alpha-raw.json",
+            runtime["wasmSha256"],
+        )
+        genesis = inspect_genesis(spec_builder_node, first / "alpha-raw.json", rpc_port, p2p_port)
 
         output.mkdir(mode=0o700)
-        shutil.copy2(node, output / "solochain-eterra-node")
+        shutil.copy2(deployment_node, output / "solochain-eterra-node")
         os.chmod(output / "solochain-eterra-node", 0o755)
         shutil.copyfile(first / "alpha-plain.json", output / "alpha-plain.json")
         shutil.copyfile(first / "alpha-raw.json", output / "alpha-raw.json")
@@ -438,7 +675,7 @@ def command_build(args: argparse.Namespace) -> None:
     require(isinstance(source_epoch, int) and source_epoch > 0, "runtime bundle source date epoch is invalid")
     created_at = dt.datetime.fromtimestamp(source_epoch, tz=dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     manifest = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "kind": "nexus-v2-private-alpha-node-candidate",
         "releaseId": release_id,
         "deploymentSourceCommit": deployment_commit,
@@ -448,10 +685,24 @@ def command_build(args: argparse.Namespace) -> None:
         "createdAtUtc": created_at,
         "runtimeBundle": {
             "manifestSha256": runtime["manifestSha256"],
+            "nativeSpecBuilderSha256": runtime["nodeSha256"],
             "sha256SumsSha256": runtime["sumsSha256"],
             "productionWasmSha256": runtime["wasmSha256"],
             "metadataScaleSha256": runtime["metadataSha256"],
             "metadataVersion": runtime["metadataVersion"],
+        },
+        "deploymentNode": {
+            "buildAttestationSha256": deployment_attestation["sha256"],
+            "buildEnvironment": {
+                "buildkitMetadataSha256": deployment_attestation["buildkitMetadataSha256"],
+                "containerImage": deployment_attestation["containerImage"],
+                "dockerfileSha256": deployment_attestation["dockerfileSha256"],
+                "sourceDateEpoch": deployment_attestation["sourceDateEpoch"],
+            },
+            "proof": deployment_proof,
+            "sha256": sha256_file(deployment_node),
+            "sourceCommit": deployment_node_source_commit,
+            "targetPlatform": dict(TARGET_PLATFORM),
         },
         "alpha": {
             "id": plain.get("id"),
@@ -468,6 +719,7 @@ def command_build(args: argparse.Namespace) -> None:
             "nodeCandidateToolSha256": sha256_file(Path(__file__).resolve()),
             "finalizeAlphaToolSha256": sha256_file(FINALIZE_ALPHA),
             "verifyAlphaToolSha256": sha256_file(VERIFY_ALPHA),
+            "linuxAmd64RunnerSha256": sha256_file(LINUX_AMD64_RUNNER),
         },
         "containsSecrets": False,
         "remoteBuildAllowed": False,
@@ -477,20 +729,27 @@ def command_build(args: argparse.Namespace) -> None:
     write_new_json(output / "node-candidate.json", manifest, mode=0o600)
     summary = verify_candidate(output / "node-candidate.json")
     target_identity = {
-        "schemaVersion": 1,
-        "kind": "eterra-spec106-target-identity.v1",
+        "schemaVersion": 2,
+        "kind": "eterra-spec106-target-identity.v2",
         "releaseId": release_id,
         "network": "private-alpha",
         "genesisHash": summary["genesisHash"],
         "runtimeCodeHash": summary["runtimeCodeHash"],
         "runtimeSourceCommit": runtime["sourceCommit"],
         "deploymentSourceCommit": deployment_commit,
+        "deploymentNode": {
+            "buildAttestationSha256": deployment_attestation["sha256"],
+            "runnerSha256": deployment_proof["runnerSha256"],
+            "sha256": sha256_file(deployment_node),
+            "sourceCommit": deployment_node_source_commit,
+        },
         "runtimeMetadata": {
             "scaleSha256": runtime["metadataSha256"],
             "version": runtime["metadataVersion"],
         },
         "specVersion": TARGET_SPEC_VERSION,
         "tcgStorageVersion": 16,
+        "targetPlatform": dict(TARGET_PLATFORM),
         "nodeCandidateManifestSha256": summary["manifestSha256"],
         "authorizations": {
             "privateAlphaOnly": True,
@@ -513,7 +772,30 @@ def verify_candidate(manifest_path: Path) -> dict[str, Any]:
     present = {path.name for path in root.iterdir()}
     require(present == CANDIDATE_FILES | {"node-candidate.json"}, "node candidate directory does not match the closed file set")
     manifest = read_json(manifest_path, "node candidate manifest")
-    require(manifest.get("schemaVersion") == 1, "unsupported node candidate schema")
+    require(
+        set(manifest)
+        == {
+            "alpha",
+            "artifacts",
+            "builder",
+            "containsSecrets",
+            "createdAtUtc",
+            "deploymentNode",
+            "deploymentSourceCommit",
+            "kind",
+            "paidProductionAllowed",
+            "publicDeployAllowed",
+            "releaseId",
+            "remoteBuildAllowed",
+            "runtimeBundle",
+            "runtimeSourceCommit",
+            "schemaVersion",
+            "sourceDateEpoch",
+            "targetSpecVersion",
+        },
+        "node candidate manifest does not match the closed schema",
+    )
+    require(manifest.get("schemaVersion") == 2, "unsupported node candidate schema")
     require(manifest.get("kind") == "nexus-v2-private-alpha-node-candidate", "node candidate kind mismatch")
     release_id = ensure_release(manifest.get("releaseId"))
     deployment_commit = ensure_commit(manifest.get("deploymentSourceCommit"), "deployment source commit")
@@ -523,6 +805,77 @@ def verify_candidate(manifest_path: Path) -> dict[str, Any]:
     require(manifest.get("remoteBuildAllowed") is False, "node candidate permits remote build")
     require(manifest.get("publicDeployAllowed") is False, "node candidate permits public deploy")
     require(manifest.get("paidProductionAllowed") is False, "node candidate permits paid production")
+    deployment_node = manifest.get("deploymentNode")
+    require(
+        isinstance(deployment_node, dict)
+        and set(deployment_node)
+        == {"buildAttestationSha256", "buildEnvironment", "proof", "sha256", "sourceCommit", "targetPlatform"},
+        "candidate deployment-node identity does not match the closed schema",
+    )
+    deployment_node_source_commit = ensure_commit(deployment_node.get("sourceCommit"), "deployment-node source commit")
+    deployment_node_sha256 = ensure_sha(deployment_node.get("sha256"), "deployment-node SHA-256")
+    deployment_attestation_sha256 = ensure_sha(
+        deployment_node.get("buildAttestationSha256"),
+        "deployment-node build-attestation SHA-256",
+    )
+    require(deployment_node.get("targetPlatform") == TARGET_PLATFORM, "candidate target platform mismatch")
+    build_environment = deployment_node.get("buildEnvironment")
+    require(
+        isinstance(build_environment, dict)
+        and set(build_environment)
+        == {"buildkitMetadataSha256", "containerImage", "dockerfileSha256", "sourceDateEpoch"},
+        "candidate deployment-node build environment does not match the closed schema",
+    )
+    ensure_sha(build_environment.get("buildkitMetadataSha256"), "candidate BuildKit metadata SHA-256")
+    candidate_dockerfile_sha256 = ensure_sha(build_environment.get("dockerfileSha256"), "candidate Dockerfile SHA-256")
+    require(
+        candidate_dockerfile_sha256 == sha256_file(regular_file(LINUX_AMD64_DOCKERFILE, "Linux/amd64 deployment Dockerfile")),
+        "candidate Dockerfile identity mismatch",
+    )
+    require(build_environment.get("containerImage") == PINNED_LINUX_AMD64_BUILD_IMAGE, "candidate build image mismatch")
+    require(
+        isinstance(build_environment.get("sourceDateEpoch"), int)
+        and not isinstance(build_environment["sourceDateEpoch"], bool)
+        and build_environment["sourceDateEpoch"] > 0,
+        "candidate deployment-node source epoch is invalid",
+    )
+    try:
+        deployment_node_source_epoch = int(
+            subprocess.check_output(
+                ["git", "-C", str(REPO_ROOT), "show", "-s", "--format=%ct", deployment_node_source_commit],
+                text=True,
+            ).strip()
+        )
+    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+        raise CandidateError("candidate deployment-node source epoch is unavailable") from exc
+    require(
+        build_environment["sourceDateEpoch"] == deployment_node_source_epoch,
+        "candidate deployment-node source epoch mismatch",
+    )
+    proof = deployment_node.get("proof")
+    require(
+        isinstance(proof, dict)
+        and set(proof)
+        == {
+            "buildSpecExecuted",
+            "embeddedRuntimeCodeSha256",
+            "generatedRawSpecSha256",
+            "rawStateMatchesNativeBuilder",
+            "runnerNetworkDisabled",
+            "runnerSha256",
+            "version",
+            "versionExecuted",
+        },
+        "candidate deployment-node execution proof does not match the closed schema",
+    )
+    require(proof.get("buildSpecExecuted") is True, "candidate deployment node was not executed for build-spec")
+    require(proof.get("versionExecuted") is True, "candidate deployment node --version was not executed")
+    require(proof.get("rawStateMatchesNativeBuilder") is True, "candidate deployment-node raw state differs")
+    require(proof.get("runnerNetworkDisabled") is True, "candidate deployment-node proof runner had network access")
+    ensure_sha(proof.get("embeddedRuntimeCodeSha256"), "candidate embedded runtime code SHA-256")
+    ensure_sha(proof.get("generatedRawSpecSha256"), "candidate deployment-node raw-spec SHA-256")
+    ensure_sha(proof.get("runnerSha256"), "candidate deployment-node runner SHA-256")
+    require(isinstance(proof.get("version"), str) and 0 < len(proof["version"]) <= 512, "candidate deployment-node version is invalid")
     artifacts = manifest.get("artifacts")
     require(isinstance(artifacts, dict) and set(artifacts) == CANDIDATE_FILES, "node candidate artifacts do not match the closed set")
     for name, expected in artifacts.items():
@@ -534,6 +887,8 @@ def verify_candidate(manifest_path: Path) -> dict[str, Any]:
         )
         require(path_within(path, root), f"candidate artifact escapes root: {name}")
         require(sha256_file(path) == expected, f"candidate artifact hash mismatch: {name}")
+    require(artifacts["solochain-eterra-node"] == deployment_node_sha256, "candidate deployment-node artifact pin mismatch")
+    inspect_linux_x86_64_elf(root / "solochain-eterra-node", "candidate deployment node")
     validate_public_overrides(root / "alpha-public-overrides.json")
     service_text = (root / "eterra-alpha-node.service").read_text(encoding="utf-8")
     require("[Service]" in service_text and "ExecStart=" in service_text, "candidate node service unit is invalid")
@@ -553,14 +908,43 @@ def verify_candidate(manifest_path: Path) -> dict[str, Any]:
     require(runtime_sha == ensure_sha(alpha.get("runtimeCodeSha256"), "candidate runtime code SHA-256"), "candidate raw runtime code SHA-256 mismatch")
     require("0x" + hashlib.blake2b(runtime_code, digest_size=32).hexdigest() == alpha["runtimeCodeHash"], "candidate raw runtime code hash mismatch")
     runtime_bundle = manifest.get("runtimeBundle")
-    require(isinstance(runtime_bundle, dict), "candidate runtime bundle pins are missing")
+    require(
+        isinstance(runtime_bundle, dict)
+        and set(runtime_bundle)
+        == {
+            "manifestSha256",
+            "metadataScaleSha256",
+            "metadataVersion",
+            "nativeSpecBuilderSha256",
+            "productionWasmSha256",
+            "sha256SumsSha256",
+        },
+        "candidate runtime bundle pins do not match the closed schema",
+    )
     ensure_sha(runtime_bundle.get("manifestSha256"), "runtime bundle manifest SHA-256")
+    ensure_sha(runtime_bundle.get("nativeSpecBuilderSha256"), "runtime bundle native spec-builder SHA-256")
     ensure_sha(runtime_bundle.get("sha256SumsSha256"), "runtime bundle checksum file SHA-256")
     require(runtime_bundle.get("productionWasmSha256") == runtime_sha, "candidate runtime code differs from bundle pin")
+    require(proof.get("embeddedRuntimeCodeSha256") == runtime_sha, "candidate deployment node embeds a different runtime")
     ensure_sha(runtime_bundle.get("metadataScaleSha256"), "runtime bundle metadata SHA-256")
     require(runtime_bundle.get("metadataVersion") == 15, "candidate runtime metadata version mismatch")
+    builder = manifest.get("builder")
+    require(
+        isinstance(builder, dict)
+        and set(builder)
+        == {
+            "finalizeAlphaToolSha256",
+            "linuxAmd64RunnerSha256",
+            "nodeCandidateToolSha256",
+            "verifyAlphaToolSha256",
+        },
+        "candidate builder identity does not match the closed schema",
+    )
+    for name, digest in builder.items():
+        ensure_sha(digest, f"candidate builder SHA-256 for {name}")
+    require(builder["linuxAmd64RunnerSha256"] == proof["runnerSha256"], "candidate runner pins disagree")
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "kind": "nexus-v2-private-alpha-node-candidate-verification",
         "releaseId": release_id,
         "deploymentSourceCommit": deployment_commit,
@@ -569,6 +953,10 @@ def verify_candidate(manifest_path: Path) -> dict[str, Any]:
         "genesisHash": alpha["genesisHash"],
         "runtimeCodeHash": alpha["runtimeCodeHash"],
         "nativeNodeSha256": artifacts["solochain-eterra-node"],
+        "deploymentNodeSourceCommit": deployment_node_source_commit,
+        "deploymentNodeBuildAttestationSha256": deployment_attestation_sha256,
+        "deploymentNodeRunnerSha256": proof["runnerSha256"],
+        "targetPlatform": dict(TARGET_PLATFORM),
         "plainSpecSha256": artifacts["alpha-plain.json"],
         "rawSpecSha256": artifacts["alpha-raw.json"],
         "serviceUnitSha256": artifacts["eterra-alpha-node.service"],
@@ -599,8 +987,8 @@ def verify_target_identity(path: Path, candidate_manifest: Path | None = None) -
     path = regular_file(path, "spec-106 target identity")
     value = read_json(path, "spec-106 target identity")
     require(set(value) == TARGET_IDENTITY_KEYS, "target identity does not match the closed schema")
-    require(value.get("schemaVersion") == 1, "target identity schema mismatch")
-    require(value.get("kind") == "eterra-spec106-target-identity.v1", "target identity kind mismatch")
+    require(value.get("schemaVersion") == 2, "target identity schema mismatch")
+    require(value.get("kind") == "eterra-spec106-target-identity.v2", "target identity kind mismatch")
     require(value.get("network") == "private-alpha", "target identity is not private-alpha-only")
     ensure_release(value.get("releaseId"))
     ensure_commit(value.get("runtimeSourceCommit"), "target runtime source commit")
@@ -610,6 +998,17 @@ def verify_target_identity(path: Path, candidate_manifest: Path | None = None) -
     ensure_sha(value.get("nodeCandidateManifestSha256"), "target candidate manifest SHA-256")
     require(value.get("specVersion") == TARGET_SPEC_VERSION, "target identity spec version mismatch")
     require(value.get("tcgStorageVersion") == 16, "target identity TCG storage version mismatch")
+    require(value.get("targetPlatform") == TARGET_PLATFORM, "target identity platform mismatch")
+    deployment_node = value.get("deploymentNode")
+    require(
+        isinstance(deployment_node, dict)
+        and set(deployment_node) == {"buildAttestationSha256", "runnerSha256", "sha256", "sourceCommit"},
+        "target deployment-node identity does not match the closed schema",
+    )
+    ensure_commit(deployment_node.get("sourceCommit"), "target deployment-node source commit")
+    ensure_sha(deployment_node.get("sha256"), "target deployment-node SHA-256")
+    ensure_sha(deployment_node.get("buildAttestationSha256"), "target deployment-node build-attestation SHA-256")
+    ensure_sha(deployment_node.get("runnerSha256"), "target deployment-node runner SHA-256")
     metadata = value.get("runtimeMetadata")
     require(isinstance(metadata, dict) and set(metadata) == {"scaleSha256", "version"}, "target runtime metadata identity mismatch")
     ensure_sha(metadata.get("scaleSha256"), "target runtime metadata SHA-256")
@@ -634,9 +1033,17 @@ def verify_target_identity(path: Path, candidate_manifest: Path | None = None) -
         require(value["nodeCandidateManifestSha256"] == candidate["manifestSha256"], "target candidate manifest mismatch")
         require(metadata["scaleSha256"] == candidate_value["runtimeBundle"]["metadataScaleSha256"], "target runtime metadata hash mismatch")
         require(metadata["version"] == candidate_value["runtimeBundle"]["metadataVersion"], "target runtime metadata version mismatch")
+        require(value["targetPlatform"] == candidate["targetPlatform"], "target candidate platform mismatch")
+        require(deployment_node["sourceCommit"] == candidate["deploymentNodeSourceCommit"], "target deployment-node source mismatch")
+        require(deployment_node["sha256"] == candidate["nativeNodeSha256"], "target deployment-node hash mismatch")
+        require(
+            deployment_node["buildAttestationSha256"] == candidate["deploymentNodeBuildAttestationSha256"],
+            "target deployment-node attestation mismatch",
+        )
+        require(deployment_node["runnerSha256"] == candidate["deploymentNodeRunnerSha256"], "target deployment-node runner mismatch")
     return {
-        "schemaVersion": 1,
-        "kind": "eterra-spec106-target-identity-verification.v1",
+        "schemaVersion": 2,
+        "kind": "eterra-spec106-target-identity-verification.v2",
         "releaseId": value["releaseId"],
         "genesisHash": value["genesisHash"],
         "runtimeCodeHash": value["runtimeCodeHash"],
@@ -645,6 +1052,9 @@ def verify_target_identity(path: Path, candidate_manifest: Path | None = None) -
         "metadataScaleSha256": metadata["scaleSha256"],
         "metadataVersion": metadata["version"],
         "nodeCandidateManifestSha256": value["nodeCandidateManifestSha256"],
+        "nativeNodeSha256": deployment_node["sha256"],
+        "deploymentNodeSourceCommit": deployment_node["sourceCommit"],
+        "targetPlatform": dict(TARGET_PLATFORM),
         "sha256": sha256_file(path),
         "publicProduction": False,
         "paidProduction": False,
@@ -664,6 +1074,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     build = subparsers.add_parser("build")
     build.add_argument("--runtime-bundle", required=True)
+    build.add_argument("--deployment-node", required=True)
+    build.add_argument("--deployment-node-attestation", required=True)
+    build.add_argument("--deployment-node-source-commit", required=True)
     build.add_argument("--public-overrides", required=True)
     build.add_argument("--release-id", required=True)
     build.add_argument("--deployment-source-commit", required=True)

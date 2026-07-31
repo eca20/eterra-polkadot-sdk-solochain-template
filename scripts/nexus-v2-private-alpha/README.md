@@ -17,8 +17,9 @@ service.
 
 Copy its output into a private bundle and supplement it with:
 
-- node binary, live V14 Wasm/metadata, V16 runtime Wasm, the finalized TCG
-  storage-version observation, and copied try-runtime snapshot;
+- node binary, exact stopped node-data archive, live V14 Wasm/metadata, V16
+  runtime Wasm, finalized TCG storage-version observation, and the newly
+  created exact-block try-runtime snapshot plus its provenance proof;
 - media state and immutable image lock/digest;
 - site/indexer/Mongo state and finalized checkpoint;
 - authority state and Caddy state/configuration;
@@ -66,11 +67,17 @@ the complete arguments.
   `NEXUS_V2_RESET_READINESS_SHA256`; release media reset also requires
   immutable candidate promotion. `--dry-run` validates this local plan and
   exits before SSH.
-- `node_candidate.py build` consumes the already-built runtime bundle and
-  address-only Alpha overrides. It repeats spec generation byte-for-byte,
-  starts only a temporary local node to observe genesis, and emits both a
-  closed candidate and `eterra-spec106-target-identity.v1`. Release deployment
-  verifies and promotes those exact bytes without remote Cargo or spec work.
+- `build-linux-amd64-node.sh` builds the deployment ELF with Rust 1.89, locked
+  dependencies, a digest-pinned bookworm image, BuildKit `linux/amd64`, and the
+  source commit's `SOURCE_DATE_EPOCH`; it emits a closed build attestation and
+  never publishes an image or package.
+- `node_candidate.py build` consumes the runtime bundle, address-only Alpha
+  overrides, and attested Linux/x86-64 node. It repeats spec generation, then
+  executes that ELF under the network-disabled digest-pinned runner to prove
+  identical raw state and embedded runtime. It emits a closed candidate and
+  `eterra-spec106-target-identity.v2` with an Ubuntu 24.04 x86-64 contract.
+- `frozen_snapshot_proof.py` creates/verifies the exact stopped-block provenance
+  required beside every final-freeze try-runtime snapshot.
 - `final_freeze.py validate|dry-run|execute` owns the cross-host stop/snapshot
   order. Every component driver and plan is SHA-256 pinned. Execute creates the
   same-block pre-V16 gates and zero inventory only after the stable write
@@ -102,6 +109,7 @@ node:runtime-v16-production-wasm
 node:runtime-v16-try-runtime-wasm
 node:tcg-storage-version-observation
 node:try-runtime-snapshot
+node:try-runtime-snapshot-proof
 media:media-state
 media:media-image-lock
 ipfs:ipfs-data

@@ -15,8 +15,9 @@ target=""
 bundle_root=""
 result_path=""
 runtime_bundle=""
-try_runtime_snapshot=""
 runtime_v14_metadata=""
+isolated_rpc_port=19948
+isolated_p2p_port=31348
 frozen_block_number=""
 frozen_block_hash=""
 dry_run=0
@@ -33,8 +34,9 @@ while [[ $# -gt 0 ]]; do
 		--bundle-root) bundle_root="${2:?missing bundle root}"; shift ;;
 		--result) result_path="${2:?missing result path}"; shift ;;
 		--runtime-bundle) runtime_bundle="${2:?missing runtime bundle}"; shift ;;
-		--try-runtime-snapshot) try_runtime_snapshot="${2:?missing try-runtime snapshot}"; shift ;;
 		--runtime-v14-metadata) runtime_v14_metadata="${2:?missing runtime V14 metadata}"; shift ;;
+		--isolated-rpc-port) isolated_rpc_port="${2:?missing isolated RPC port}"; shift ;;
+		--isolated-p2p-port) isolated_p2p_port="${2:?missing isolated P2P port}"; shift ;;
 		--frozen-block-number) frozen_block_number="${2:?missing frozen block number}"; shift ;;
 		--frozen-block-hash) frozen_block_hash="${2:?missing frozen block hash}"; shift ;;
 		--artifact) artifacts+=("${2:?missing artifact role}"); shift ;;
@@ -43,10 +45,13 @@ while [[ $# -gt 0 ]]; do
 			cat <<'EOF'
 Implements the final_freeze.py component protocol for chain-host roles:
 authority, chain, and media-ipfs. The chain role additionally requires:
-  --runtime-bundle DIR --try-runtime-snapshot FILE --runtime-v14-metadata FILE
+  --runtime-bundle DIR --runtime-v14-metadata FILE
+  [--isolated-rpc-port PORT --isolated-p2p-port PORT]
 
-The driver never restarts a service. A freeze or snapshot failure leaves every
-already-stopped component stopped. Dry-run validates local configuration and
+The chain role creates its try-runtime snapshot after the stop from an isolated
+extraction of the exact captured node-data archive; pre-existing snapshots are
+not accepted. The driver never restarts a service. A freeze or snapshot failure
+leaves every already-stopped component stopped. Dry-run validates local configuration and
 the complete action contract without SSH or live mutation.
 EOF
 			exit 0
@@ -72,6 +77,7 @@ require_cmd rsync
 require_cmd shasum
 require_cmd ssh
 require_cmd tar
+require_cmd curl
 
 if [[ "${ETERRA_RELEASE_VERSION}" != "${release_id}" ]]; then
 	die "final-freeze release does not match protected Alpha environment"
@@ -86,10 +92,12 @@ case "${role}" in
 		expected_roles=$'authority:authority-state\nconfig:authority-env\nservice:authority-service'
 		;;
 	chain)
-		expected_roles=$'config:chain-spec\nconfig:node-env\nnode:node-binary\nnode:node-data\nnode:runtime-v14-metadata\nnode:runtime-v14-wasm\nnode:runtime-v16-production-wasm\nnode:runtime-v16-try-runtime-wasm\nnode:tcg-storage-version-observation\nnode:try-runtime-snapshot\nservice:node-service'
+		expected_roles=$'config:chain-spec\nconfig:node-env\nnode:node-binary\nnode:node-data\nnode:runtime-v14-metadata\nnode:runtime-v14-wasm\nnode:runtime-v16-production-wasm\nnode:runtime-v16-try-runtime-wasm\nnode:tcg-storage-version-observation\nnode:try-runtime-snapshot\nnode:try-runtime-snapshot-proof\nservice:node-service'
 		[[ -d "${runtime_bundle}" && ! -L "${runtime_bundle}" ]] || die "chain snapshot requires a regular runtime bundle directory"
-		[[ -f "${try_runtime_snapshot}" && ! -L "${try_runtime_snapshot}" ]] || die "chain snapshot requires a regular try-runtime snapshot"
 		[[ -f "${runtime_v14_metadata}" && ! -L "${runtime_v14_metadata}" ]] || die "chain snapshot requires regular runtime V14 metadata"
+		[[ "${isolated_rpc_port}" =~ ^[0-9]+$ && "${isolated_p2p_port}" =~ ^[0-9]+$ ]] || die "isolated snapshot ports must be numeric"
+		(( isolated_rpc_port >= 1024 && isolated_rpc_port <= 65535 && isolated_p2p_port >= 1024 && isolated_p2p_port <= 65535 )) || die "isolated snapshot ports must be in 1024..65535"
+		[[ "${isolated_rpc_port}" != "${isolated_p2p_port}" && "${isolated_rpc_port}" != "${CHAIN_RPC_PORT}" && "${isolated_p2p_port}" != "${CHAIN_P2P_PORT}" ]] || die "isolated snapshot ports must be distinct from each other and live Alpha"
 		(
 			cd "${runtime_bundle}"
 			shasum -a 256 -c SHA256SUMS >/dev/null
@@ -101,6 +109,13 @@ case "${role}" in
 			.authorizations.paidProduction == false
 		' "${runtime_bundle}/runtime-bundle-manifest.json" >/dev/null ||
 			die "runtime bundle is not the closed spec-106 private-alpha candidate"
+		try_runtime_bin="${runtime_bundle}/try-runtime"
+		[[ -x "${try_runtime_bin}" && -f "${try_runtime_bin}" && ! -L "${try_runtime_bin}" ]] || die "runtime bundle try-runtime CLI is unavailable"
+		try_runtime_sha256="$(jq -er '.artifacts.tryRuntimeCliSha256 | select(test("^[0-9a-f]{64}$"))' "${runtime_bundle}/runtime-bundle-manifest.json")" || die "runtime bundle try-runtime hash is invalid"
+		[[ "$(shasum -a 256 "${try_runtime_bin}" | awk '{print $1}')" == "${try_runtime_sha256}" ]] || die "runtime bundle try-runtime CLI hash mismatch"
+		try_runtime_revision="$(jq -er '.tools.tryRuntimeRevision | select(test("^[0-9a-f]{40}$"))' "${runtime_bundle}/runtime-bundle-manifest.json")" || die "runtime bundle try-runtime revision is invalid"
+		try_runtime_version="$("${try_runtime_bin}" --version)" || die "runtime bundle try-runtime CLI cannot execute on the coordinator host"
+		[[ -n "${try_runtime_version}" ]] || die "runtime bundle try-runtime CLI returned an empty version"
 		;;
 	media-ipfs)
 		expected_roles=$'config:media-env\nipfs:ipfs-data\nipfs:ipfs-staging\nmedia:media-image-lock\nmedia:media-state\nservice:media-service'
@@ -285,6 +300,25 @@ test -x "${REMOTE_NODE_BIN}"
 test -r "${REMOTE_NODE_SPEC}"
 test -r "${REMOTE_NODE_ENV_FILE}"
 test -d "${DEPLOY_ROOT}"
+test "\$(uname -s)" = "Linux"
+test "\$(uname -m)" = "x86_64"
+test "\$(uname -r)" != ""
+uname -srm >/dev/null
+. /etc/os-release
+test "\${ID}" = "ubuntu"
+test "\${VERSION_ID}" = "24.04"
+! ss -ltnH 'sport = :${isolated_rpc_port}' | grep -q .
+! ss -ltnH 'sport = :${isolated_p2p_port}' | grep -q .
+python3 - "${REMOTE_NODE_BIN}" <<'PY'
+import pathlib
+import struct
+import sys
+with pathlib.Path(sys.argv[1]).open("rb") as handle:
+    header = handle.read(64)
+assert len(header) >= 64 and header[:7] == b"\x7fELF\x02\x01\x01"
+assert struct.unpack_from("<H", header, 18)[0] == 62
+PY
+"${REMOTE_NODE_BIN}" --version >/dev/null
 EOF
 			;;
 	media-ipfs)
@@ -417,18 +451,176 @@ EOF
 			record_artifact service authority-service artifacts/service/authority.service
 			;;
 		chain)
+			remote_isolated_root="${remote_transaction_root}/isolated-chain-snapshot"
+			remote_isolated_pid="${remote_isolated_root}/node.pid"
+			snapshot_tunnel_pid=""
+			isolated_probe_started=0
+			cleanup_isolated_probe() {
+				local prior_status=$?
+				local cleanup_status=0
+				set +e
+				if [[ -n "${snapshot_tunnel_pid}" ]] && kill -0 "${snapshot_tunnel_pid}" 2>/dev/null; then
+					kill "${snapshot_tunnel_pid}" 2>/dev/null
+					wait "${snapshot_tunnel_pid}" 2>/dev/null
+				fi
+				if [[ "${isolated_probe_started}" -eq 1 ]]; then
+					remote_root_bash <<EOF
+set -euo pipefail
+test "${remote_isolated_root}" = "${remote_transaction_root}/isolated-chain-snapshot"
+if [[ -r "${remote_isolated_pid}" ]]; then
+	probe_pid="\$(cat "${remote_isolated_pid}")"
+	if [[ "\${probe_pid}" =~ ^[0-9]+$ ]] && kill -0 "\${probe_pid}" 2>/dev/null; then
+		tr '\0' ' ' <"/proc/\${probe_pid}/cmdline" | grep -F -- "${remote_isolated_root}/base" >/dev/null
+		kill "\${probe_pid}"
+		for _ in \$(seq 1 100); do
+			kill -0 "\${probe_pid}" 2>/dev/null || break
+			sleep 0.1
+		done
+		! kill -0 "\${probe_pid}" 2>/dev/null
+	fi
+fi
+rm -rf -- "${remote_isolated_root}"
+! systemctl is-active --quiet "${REMOTE_NODE_SERVICE_NAME}.service"
+! ss -ltnH 'sport = :${CHAIN_RPC_PORT}' | grep -q .
+! ss -ltnH 'sport = :${CHAIN_P2P_PORT}' | grep -q .
+EOF
+					cleanup_status=$?
+				fi
+				set -e
+				if [[ "${prior_status}" -eq 0 && "${cleanup_status}" -ne 0 ]]; then
+					return "${cleanup_status}"
+				fi
+				return "${prior_status}"
+			}
+			trap cleanup_isolated_probe EXIT INT TERM
+			isolated_probe_started=1
 			remote_root_bash <<EOF
 set -euo pipefail
 test ! -e "${remote_capture}"
+test ! -e "${remote_isolated_root}"
 mkdir -p "${remote_capture}"
 tar czf "${remote_capture}/node-data.tar.gz" -C "${REMOTE_NODE_DATA_DIR}" .
 cp "${REMOTE_NODE_BIN}" "${remote_capture}/node-binary"
 cp "${REMOTE_NODE_SPEC}" "${remote_capture}/chain-spec.json"
 cp "${REMOTE_NODE_ENV_FILE}" "${remote_capture}/node.env"
 cp "${REMOTE_NODE_SERVICE_UNIT_FILE}" "${remote_capture}/node.service"
+mkdir -p "${remote_isolated_root}/base"
+tar xzf "${remote_capture}/node-data.tar.gz" -C "${remote_isolated_root}/base"
+jq '.bootNodes = [] | .telemetryEndpoints = null' \
+	"${remote_capture}/chain-spec.json" >"${remote_isolated_root}/chain-spec.json"
+nohup "${remote_capture}/node-binary" \
+	--base-path "${remote_isolated_root}/base" \
+	--chain "${remote_isolated_root}/chain-spec.json" \
+	--rpc-port "${isolated_rpc_port}" \
+	--listen-addr '/ip4/127.0.0.1/tcp/${isolated_p2p_port}' \
+	--rpc-methods Safe \
+	--reserved-only \
+	--offchain-worker never \
+	--no-mdns \
+	--no-telemetry \
+	--no-prometheus \
+	>"${remote_isolated_root}/node.log" 2>&1 &
+echo "\$!" >"${remote_isolated_pid}"
+probe_pid="\$(cat "${remote_isolated_pid}")"
+ready=0
+for _ in \$(seq 1 300); do
+	kill -0 "\${probe_pid}" 2>/dev/null || {
+		cat "${remote_isolated_root}/node.log" >&2
+		exit 1
+	}
+	if curl -fsS --max-time 2 -H 'Content-Type: application/json' \
+		-d '{"id":1,"jsonrpc":"2.0","method":"chain_getFinalizedHead","params":[]}' \
+		'http://127.0.0.1:${isolated_rpc_port}' >/dev/null 2>&1; then
+		ready=1
+		break
+	fi
+	sleep 0.1
+done
+test "\${ready}" = "1"
+EOF
+			verify_stopped
+			rpc_capture_path="$(dirname -- "${result_path}")/chain-frozen-isolated-rpc.json"
+			[[ ! -e "${rpc_capture_path}" ]] || die "refusing to overwrite isolated RPC capture"
+			remote_root_bash <<EOF >"${rpc_capture_path}"
+set -euo pipefail
+rpc_uri='http://127.0.0.1:${isolated_rpc_port}'
+rpc() {
+	curl -fsS --max-time 10 -H 'Content-Type: application/json' -d "\$1" "\${rpc_uri}"
+}
+finalized="\$(rpc '{"id":1,"jsonrpc":"2.0","method":"chain_getFinalizedHead","params":[]}')"
+at_number="\$(rpc '{"id":2,"jsonrpc":"2.0","method":"chain_getBlockHash","params":[${frozen_block_number}]}')"
+header="\$(rpc '{"id":3,"jsonrpc":"2.0","method":"chain_getHeader","params":["${frozen_block_hash}"]}')"
+genesis="\$(rpc '{"id":4,"jsonrpc":"2.0","method":"chain_getBlockHash","params":[0]}')"
+code_hash="\$(rpc '{"id":5,"jsonrpc":"2.0","method":"state_getStorageHash","params":["0x3a636f6465","${frozen_block_hash}"]}')"
+runtime="\$(rpc '{"id":6,"jsonrpc":"2.0","method":"state_getRuntimeVersion","params":["${frozen_block_hash}"]}')"
+jq -n --argjson finalizedHead "\${finalized}" --argjson blockHashAtNumber "\${at_number}" \
+	--argjson header "\${header}" --argjson genesisHash "\${genesis}" \
+	--argjson runtimeCodeHash "\${code_hash}" --argjson runtimeVersion "\${runtime}" \
+	'{finalizedHead:\$finalizedHead,blockHashAtNumber:\$blockHashAtNumber,header:\$header,genesisHash:\$genesisHash,runtimeCodeHash:\$runtimeCodeHash,runtimeVersion:\$runtimeVersion}'
+EOF
+			jq -e . "${rpc_capture_path}" >/dev/null || die "isolated frozen-state RPC capture is invalid"
+			python3 - "${rpc_capture_path}" "${frozen_block_number}" "${frozen_block_hash}" <<'PY'
+import json
+import pathlib
+import sys
+capture = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+number = int(sys.argv[2])
+block_hash = sys.argv[3].lower()
+assert capture["finalizedHead"]["result"].lower() == block_hash
+assert capture["blockHashAtNumber"]["result"].lower() == block_hash
+assert int(capture["header"]["result"]["number"], 16) == number
+PY
+
+			local_snapshot_rpc_port="$(python3 - <<'PY'
+import socket
+with socket.socket() as handle:
+    handle.bind(("127.0.0.1", 0))
+    print(handle.getsockname()[1])
+PY
+)"
+			ssh_prefix_count=$((${#SSH_CMD[@]} - 1))
+			ssh_target="${SSH_CMD[$ssh_prefix_count]}"
+			tunnel_command=("${SSH_CMD[@]:0:${ssh_prefix_count}}" -N -o ExitOnForwardFailure=yes \
+				-L "127.0.0.1:${local_snapshot_rpc_port}:127.0.0.1:${isolated_rpc_port}" "${ssh_target}")
+			tunnel_log="$(dirname -- "${result_path}")/chain-frozen-snapshot-tunnel.log"
+			"${tunnel_command[@]}" >"${tunnel_log}" 2>&1 &
+			snapshot_tunnel_pid=$!
+			tunnel_ready=0
+			for _ in $(seq 1 300); do
+				kill -0 "${snapshot_tunnel_pid}" 2>/dev/null || {
+					cat "${tunnel_log}" >&2
+					die "isolated snapshot SSH tunnel exited"
+				}
+				if curl -fsS --max-time 2 -H 'Content-Type: application/json' \
+					-d '{"id":7,"jsonrpc":"2.0","method":"chain_getFinalizedHead","params":[]}' \
+					"http://127.0.0.1:${local_snapshot_rpc_port}" >/dev/null 2>&1; then
+					tunnel_ready=1
+					break
+				fi
+				sleep 0.1
+			done
+			[[ "${tunnel_ready}" -eq 1 ]] || die "isolated snapshot SSH tunnel did not become ready"
+
+			mkdir -p "${local_capture_root}/node" "${local_capture_root}/config" "${local_capture_root}/service"
+			snapshot_path="${local_capture_root}/node/try-runtime-snapshot"
+			snapshot_log="$(dirname -- "${result_path}")/chain-frozen-try-runtime-snapshot.log"
+			[[ ! -e "${snapshot_path}" && ! -e "${snapshot_log}" ]] || die "refusing to overwrite frozen-state snapshot evidence"
+			"${try_runtime_bin}" --runtime existing create-snapshot \
+				--uri "ws://127.0.0.1:${local_snapshot_rpc_port}" \
+				--at "${frozen_block_hash}" \
+				"${snapshot_path}" >"${snapshot_log}" 2>&1 || {
+					cat "${snapshot_log}" >&2
+					die "exact frozen-block try-runtime snapshot creation failed"
+			}
+			[[ -s "${snapshot_path}" ]] || die "exact frozen-block try-runtime snapshot is empty"
+			cleanup_isolated_probe
+			isolated_probe_started=0
+			snapshot_tunnel_pid=""
+			trap - EXIT INT TERM
+			remote_root_bash <<EOF
+set -euo pipefail
 chmod -R a-w "${remote_capture}"
 EOF
-			mkdir -p "${local_capture_root}/node" "${local_capture_root}/config" "${local_capture_root}/service"
 			rsync_from_remote_no_delete "${remote_capture}/node-data.tar.gz" "${local_capture_root}/node/node-data.tar.gz"
 			rsync_from_remote_no_delete "${remote_capture}/node-binary" "${local_capture_root}/node/node-binary"
 			rsync_from_remote_no_delete "${remote_capture}/chain-spec.json" "${local_capture_root}/config/chain-spec.json"
@@ -439,7 +631,25 @@ EOF
 			install -m 0600 "${runtime_bundle}/runtime-spec-106.compact.compressed.wasm" "${local_capture_root}/node/runtime-v16-production.wasm"
 			install -m 0600 "${runtime_bundle}/runtime-spec-106.try-runtime.wasm" "${local_capture_root}/node/runtime-v16-try-runtime.wasm"
 			install -m 0600 "${runtime_bundle}/tcg-storage-version-observation.json" "${local_capture_root}/node/tcg-storage-version-observation.json"
-			install -m 0600 "${try_runtime_snapshot}" "${local_capture_root}/node/try-runtime-snapshot"
+			created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+			"${REPO_ROOT}/scripts/nexus-v2-private-alpha/frozen_snapshot_proof.py" create \
+				--transaction-id "${transaction_id}" \
+				--release-id "${release_id}" \
+				--source-commit "${source_commit}" \
+				--frozen-at-utc "${frozen_at}" \
+				--created-at-utc "${created_at}" \
+				--block-number "${frozen_block_number}" \
+				--block-hash "${frozen_block_hash}" \
+				--snapshot "${snapshot_path}" \
+				--node-data-archive "${local_capture_root}/node/node-data.tar.gz" \
+				--node-binary "${local_capture_root}/node/node-binary" \
+				--chain-spec "${local_capture_root}/config/chain-spec.json" \
+				--try-runtime "${try_runtime_bin}" \
+				--try-runtime-revision "${try_runtime_revision}" \
+				--try-runtime-version "${try_runtime_version}" \
+				--try-runtime-log "${snapshot_log}" \
+				--rpc-capture "${rpc_capture_path}" \
+				--output "${local_capture_root}/node/try-runtime-snapshot-proof.json" >/dev/null
 			record_artifact node node-data artifacts/node/node-data.tar.gz
 			record_artifact node node-binary artifacts/node/node-binary
 			record_artifact node runtime-v14-wasm artifacts/node/runtime-v14.wasm
@@ -448,6 +658,7 @@ EOF
 			record_artifact node runtime-v16-try-runtime-wasm artifacts/node/runtime-v16-try-runtime.wasm
 			record_artifact node tcg-storage-version-observation artifacts/node/tcg-storage-version-observation.json
 			record_artifact node try-runtime-snapshot artifacts/node/try-runtime-snapshot
+			record_artifact node try-runtime-snapshot-proof artifacts/node/try-runtime-snapshot-proof.json
 			record_artifact config node-env artifacts/config/node.env
 			record_artifact config chain-spec artifacts/config/chain-spec.json
 			record_artifact service node-service artifacts/service/node.service
@@ -513,10 +724,19 @@ case "${role}" in
 		record_artifact node runtime-v16-try-runtime-wasm artifacts/node/runtime-v16-try-runtime.wasm
 		record_artifact node tcg-storage-version-observation artifacts/node/tcg-storage-version-observation.json
 		record_artifact node try-runtime-snapshot artifacts/node/try-runtime-snapshot
+		record_artifact node try-runtime-snapshot-proof artifacts/node/try-runtime-snapshot-proof.json
 		record_artifact config node-env artifacts/config/node.env
 		record_artifact config chain-spec artifacts/config/chain-spec.json
 		record_artifact service node-service artifacts/service/node.service
 		tar tzf "${bundle_root}/artifacts/node/node-data.tar.gz" >/dev/null
+		"${REPO_ROOT}/scripts/nexus-v2-private-alpha/frozen_snapshot_proof.py" verify \
+			--proof "${bundle_root}/artifacts/node/try-runtime-snapshot-proof.json" \
+			--snapshot "${bundle_root}/artifacts/node/try-runtime-snapshot" \
+			--node-data-archive "${bundle_root}/artifacts/node/node-data.tar.gz" \
+			--node-binary "${bundle_root}/artifacts/node/node-binary" \
+			--chain-spec "${bundle_root}/artifacts/config/chain-spec.json" \
+			--block-number "${frozen_block_number}" \
+			--block-hash "${frozen_block_hash}" >/dev/null
 		;;
 	media-ipfs)
 		record_artifact media media-state artifacts/media/media-state.tar.gz

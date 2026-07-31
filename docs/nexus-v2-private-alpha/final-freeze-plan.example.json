@@ -45,10 +45,12 @@
       "arguments": [
         "--runtime-bundle",
         "/private/path/to/runtime-release-spec106-retry1",
-        "--try-runtime-snapshot",
-        "/private/path/to/final-stopped-state.snap",
         "--runtime-v14-metadata",
-        "/private/path/to/final-stopped-runtime-v14-metadata.scale"
+        "/private/path/to/final-stopped-runtime-v14-metadata.scale",
+        "--isolated-rpc-port",
+        "19948",
+        "--isolated-p2p-port",
+        "31348"
       ]
     },
     "media-ipfs": {

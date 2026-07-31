@@ -94,9 +94,15 @@ site:site-image-lock site:site-state
 
 `authority`, `chain`, and `media-ipfs` are implemented by the pinned
 `deploy/alpha/macmini2010/nexus-v2-final-freeze-chain-driver`. The chain plan
-entry also supplies the exact `retry1` runtime bundle, final stopped-state
-try-runtime snapshot, and live V14 metadata. The coordinator itself derives and
-validates the write-barrier evidence, pre-V16 gate, zero acceptance inventory,
+entry also supplies the exact `retry1` runtime bundle and live V14 metadata. It
+never accepts a pre-existing try-runtime snapshot. After the node stops, the
+driver archives its exact base path, extracts that archive into a disposable
+isolated base path, and proves the copy's finalized head/number/hash equal the
+frozen marker. It invokes the pinned CLI with explicit `--at` and emits
+`node:try-runtime-snapshot-proof`, binding the snapshot to the stopped archive,
+node, chain spec, frozen marker, RPC observations, CLI, and creation log. The
+coordinator independently verifies that proof before producing the backup
+manifest. The coordinator itself derives and validates the write-barrier evidence, pre-V16 gate, zero acceptance inventory,
 release identifiers, and deployment fingerprints; component drivers may not
 invent those values.
 

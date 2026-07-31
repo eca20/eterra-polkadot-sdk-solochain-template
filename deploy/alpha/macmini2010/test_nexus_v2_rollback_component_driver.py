@@ -32,6 +32,7 @@ ARTIFACTS = {
         "runtime-v16-try-runtime-wasm",
         "tcg-storage-version-observation",
         "try-runtime-snapshot",
+        "try-runtime-snapshot-proof",
     },
     "media": {"media-state", "media-image-lock"},
     "ipfs": {"ipfs-data", "ipfs-staging"},

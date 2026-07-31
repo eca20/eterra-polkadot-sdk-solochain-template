@@ -57,22 +57,33 @@ never copied into either output:
 
 ```bash
 CHAIN_COMMIT="$(git rev-parse HEAD)"
+./scripts/release/build-linux-amd64-node.sh \
+  --source-commit "${CHAIN_COMMIT}" \
+  --expected-runtime-wasm-sha256 PINNED_PRODUCTION_WASM_SHA256 \
+  --output /private/path/to/linux-amd64-node
 python3 scripts/nexus-v2-private-alpha/node_candidate.py build \
   --runtime-bundle /private/path/to/runtime-release-spec106-RETRY1 \
+  --deployment-node /private/path/to/linux-amd64-node/solochain-eterra-node \
+  --deployment-node-attestation /private/path/to/linux-amd64-node/deployment-node-attestation.json \
+  --deployment-node-source-commit "${CHAIN_COMMIT}" \
   --public-overrides /private/path/to/alpha-overrides.json \
   --release-id nexus-v2-private-alpha-RELEASE \
   --deployment-source-commit "${CHAIN_COMMIT}" \
   --output /private/path/to/node-candidate-spec106 \
-  --target-identity-output /private/path/to/eterra-spec106-target-identity.v1.json
+  --target-identity-output /private/path/to/eterra-spec106-target-identity.v2.json
 ```
 
-The builder verifies every runtime-bundle checksum, repeats plain/raw spec
-generation byte-for-byte, proves raw `:code` equals the pinned production Wasm,
-and observes the exact genesis through a temporary loopback-only node. The
-separate `eterra-spec106-target-identity.v1` binds release, genesis, runtime code
-hash, runtime/deployment source commits, metadata V15 hash, spec `106`, TCG
-storage `16`, and the node-candidate manifest hash with paid/public activation
-false. Pin both output SHA-256 values in the protected Alpha environment.
+The deployment build uses the digest-pinned Rust 1.89 bookworm image, BuildKit
+`linux/amd64`, locked dependencies, and the source commit's epoch. The candidate
+builder verifies every runtime-bundle checksum and the ELF64/x86-64 header,
+then executes the ELF under the pinned network-disabled runner to regenerate
+the raw Alpha spec. Its full raw state and embedded `:code` must equal the
+native builder output and pinned production Wasm. The separate
+`eterra-spec106-target-identity.v2` binds that build attestation, runner,
+Ubuntu 24.04 x86-64 host contract, release, genesis, runtime code,
+runtime/deployment source commits, metadata V15, spec `106`, TCG storage `16`,
+and candidate hash with paid/public activation false. Deployment rechecks
+`uname`, Ubuntu version, ELF machine, and candidate `--version` before install.
 
 ### Atomic final freeze
 
@@ -180,8 +191,10 @@ spec-103-to-104 current release procedure. It is hash-pinned in the packet but
 does not replace V2 migration evidence.
 
 The V2 command never accepts a live RPC URI. It uses the
-`node:try-runtime-snapshot` and `node:runtime-v16-try-runtime-wasm` files
-already pinned in the backup manifest. The separate
+`node:try-runtime-snapshot`, `node:try-runtime-snapshot-proof`, and
+`node:runtime-v16-try-runtime-wasm` files already pinned in the backup
+manifest. The proof must bind the snapshot to the exact frozen block and
+stopped node-data archive. The separate
 `node:runtime-v16-production-wasm` role pins the deployable Wasm and must not
 be substituted for the migration-test build:
 
@@ -368,7 +381,7 @@ cd /absolute/path/to/clean/exact-commit/chain
   --purge-state \
   --fresh-reset-readiness "${READINESS}" \
   --promote-candidate /private/path/to/node-candidate-spec106/node-candidate.json \
-  --target-identity /private/path/to/eterra-spec106-target-identity.v1.json \
+  --target-identity /private/path/to/eterra-spec106-target-identity.v2.json \
   --dry-run
 ./deploy/alpha/macmini2010/deploy-media.sh \
   --fresh \
@@ -394,7 +407,7 @@ cd /absolute/path/to/clean/exact-commit/chain
   --purge-state \
   --fresh-reset-readiness "${READINESS}" \
   --promote-candidate /private/path/to/node-candidate-spec106/node-candidate.json \
-  --target-identity /private/path/to/eterra-spec106-target-identity.v1.json \
+  --target-identity /private/path/to/eterra-spec106-target-identity.v2.json \
   --evidence /private/path/to/evidence/node-promotion.json
 ./deploy/alpha/macmini2010/deploy-media.sh \
   --fresh \

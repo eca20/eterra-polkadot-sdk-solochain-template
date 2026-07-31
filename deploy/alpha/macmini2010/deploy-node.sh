@@ -41,7 +41,7 @@ while [[ $# -gt 0 ]]; do
 			shift
 			;;
 		--target-identity)
-			[[ $# -ge 2 ]] || die "--target-identity requires eterra-spec106-target-identity.v1.json"
+			[[ $# -ge 2 ]] || die "--target-identity requires eterra-spec106-target-identity.v2.json"
 			target_identity="$2"
 			shift
 			;;
@@ -50,7 +50,7 @@ while [[ $# -gt 0 ]]; do
 Usage: deploy-node.sh [--purge-state]
        deploy-node.sh --purge-state --fresh-reset-readiness READINESS.json \
          --promote-candidate /path/to/node-candidate.json \
-         --target-identity /path/to/eterra-spec106-target-identity.v1.json \
+         --target-identity /path/to/eterra-spec106-target-identity.v2.json \
          [--evidence OUTPUT.json] [--dry-run]
        deploy-node.sh --verify-restored-final-backup STAGING_DIR
 
@@ -202,6 +202,11 @@ candidate_start_sha256=""
 candidate_runtime_source_commit=""
 candidate_genesis_hash=""
 candidate_runtime_code_hash=""
+candidate_deployment_node_source_commit=""
+candidate_deployment_node_attestation_sha256=""
+candidate_deployment_node_runner_sha256=""
+candidate_target_platform=""
+candidate_host_uname=""
 target_identity_sha256=""
 if [[ -n "${promotion_manifest}" ]]; then
 	promote_candidate=1
@@ -230,6 +235,13 @@ if [[ -n "${promotion_manifest}" ]]; then
 	candidate_runtime_source_commit="$(jq -er '.runtimeSourceCommit' <<<"${candidate_summary}")"
 	candidate_genesis_hash="$(jq -er '.genesisHash' <<<"${candidate_summary}")"
 	candidate_runtime_code_hash="$(jq -er '.runtimeCodeHash' <<<"${candidate_summary}")"
+	candidate_deployment_node_source_commit="$(jq -er '.deploymentNodeSourceCommit' <<<"${candidate_summary}")"
+	candidate_deployment_node_attestation_sha256="$(jq -er '.deploymentNodeBuildAttestationSha256' <<<"${candidate_summary}")"
+	candidate_deployment_node_runner_sha256="$(jq -er '.deploymentNodeRunnerSha256' <<<"${candidate_summary}")"
+	candidate_target_platform="$(jq -cer '.targetPlatform' <<<"${candidate_summary}")"
+	[[ "$(jq -r '.os' <<<"${candidate_target_platform}")" == "linux" ]] || die "candidate target OS is not Linux"
+	[[ "$(jq -r '.architecture' <<<"${candidate_target_platform}")" == "x86_64" ]] || die "candidate target architecture is not x86_64"
+	[[ "$(jq -r '.deploymentHostContract' <<<"${candidate_target_platform}")" == "ubuntu-24.04-x86_64" ]] || die "candidate deployment host contract mismatch"
 	[[ "${NEXUS_V2_TARGET_IDENTITY_SHA256}" =~ ^[0-9a-f]{64}$ ]] ||
 		die "immutable promotion requires NEXUS_V2_TARGET_IDENTITY_SHA256"
 	target_summary="$(${NODE_CANDIDATE_TOOL} verify-target-identity \
@@ -241,6 +253,21 @@ if [[ -n "${promotion_manifest}" ]]; then
 	NODE_RUNTIME_SOURCE_COMMIT="${candidate_runtime_source_commit}"
 	NODE_ALPHA_GENESIS_HASH="${candidate_genesis_hash}"
 	export NODE_RUNTIME_SOURCE_COMMIT NODE_ALPHA_GENESIS_HASH
+fi
+
+if [[ "${promote_candidate}" -eq 1 && "${dry_run}" -eq 0 ]]; then
+	candidate_host_uname="$(remote_root_bash <<'EOF'
+set -euo pipefail
+test "$(uname -s)" = "Linux"
+test "$(uname -m)" = "x86_64"
+test -n "$(uname -r)"
+. /etc/os-release
+test "${ID}" = "ubuntu"
+test "${VERSION_ID}" = "24.04"
+uname -srm
+EOF
+)"
+	[[ -n "${candidate_host_uname}" ]] || die "deployment host uname preflight returned empty output"
 fi
 
 bundle_dir="$(make_temp_dir)"
@@ -426,6 +453,22 @@ if [[ "${promote_candidate}" -eq 1 ]]; then
 	test "\$(shasum -a 256 "\${candidate_dir}/start-alpha-node.sh" | awk '{print \$1}')" = "${candidate_start_sha256}"
 	test "\$(shasum -a 256 "\${candidate_dir}/eterra-alpha-node.service" | awk '{print \$1}')" = "${candidate_service_sha256}"
 	test "\$(shasum -a 256 "${remote_tmp_dir}/target-identity.json" | awk '{print \$1}')" = "${target_identity_sha256}"
+	test "\$(uname -s)" = "Linux"
+	test "\$(uname -m)" = "x86_64"
+	uname -srm >/dev/null
+	. /etc/os-release
+	test "\${ID}" = "ubuntu"
+	test "\${VERSION_ID}" = "24.04"
+	python3 - "\${candidate_dir}/solochain-eterra-node" <<'PY'
+import pathlib
+import struct
+import sys
+with pathlib.Path(sys.argv[1]).open("rb") as handle:
+    header = handle.read(64)
+assert len(header) >= 64 and header[:7] == b"\x7fELF\x02\x01\x01"
+assert struct.unpack_from("<H", header, 18)[0] == 62
+PY
+	"\${candidate_dir}/solochain-eterra-node" --version >/dev/null
 	install -m 0755 "\${candidate_dir}/solochain-eterra-node" "${REMOTE_NODE_BIN}"
 	install -m 0644 "\${candidate_dir}/alpha-plain.json" "${REMOTE_NODE_PLAIN_SPEC}"
 	install -m 0644 "\${candidate_dir}/alpha-raw.json" "${REMOTE_NODE_SPEC}"
@@ -581,14 +624,16 @@ if [[ -n "${evidence_output}" ]]; then
 		"${CHAIN_SOURCE_COMMIT}" \
 		"${node_runtime_hash}" \
 		"${FRESH_RESET_READINESS_SHA256:-}" \
-		"${target_identity_sha256}" <<'PY'
+		"${target_identity_sha256}" \
+		"${candidate_host_uname}" <<'PY'
 import datetime
 import json
 import os
 import pathlib
 import sys
 
-output, summary_raw, deployment_commit, runtime_env_sha256, readiness_sha256, target_identity_sha256 = sys.argv[1:]
+(output, summary_raw, deployment_commit, runtime_env_sha256, readiness_sha256,
+ target_identity_sha256, deployment_host_uname) = sys.argv[1:]
 summary = json.loads(summary_raw)
 value = {
     "schemaVersion": 1,
@@ -599,6 +644,11 @@ value = {
     "nodeCandidateManifestSha256": summary["manifestSha256"],
     "targetIdentitySha256": target_identity_sha256,
     "nativeNodeSha256": summary["nativeNodeSha256"],
+    "deploymentNodeSourceCommit": summary["deploymentNodeSourceCommit"],
+    "deploymentNodeBuildAttestationSha256": summary["deploymentNodeBuildAttestationSha256"],
+    "deploymentNodeRunnerSha256": summary["deploymentNodeRunnerSha256"],
+    "targetPlatform": summary["targetPlatform"],
+    "deploymentHostUname": deployment_host_uname,
     "plainSpecSha256": summary["plainSpecSha256"],
     "rawSpecSha256": summary["rawSpecSha256"],
     "alphaGenesisHash": summary["genesisHash"],

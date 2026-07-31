@@ -82,7 +82,53 @@ class FinalFreezeTests(unittest.TestCase):
                         path = Path(args.bundle_root) / relative
                         path.parent.mkdir(parents=True, exist_ok=True)
                         if not path.exists():
-                            path.write_bytes(f"{{args.role}}:{{group}}:{{name}}\\n".encode())
+                            if args.role == "chain" and name == "try-runtime-snapshot-proof":
+                                artifact_root = Path(args.bundle_root) / "artifacts" / "chain"
+                                source_path = lambda item_group, item_name: artifact_root / f"{{item_group}}-{{item_name}}.bin"
+                                source_sha = lambda item_group, item_name: hashlib.sha256(source_path(item_group, item_name).read_bytes()).hexdigest()
+                                snapshot = source_path("node", "try-runtime-snapshot")
+                                proof = {{
+                                    "schemaVersion": 1,
+                                    "kind": "nexus-v2-private-alpha-frozen-try-runtime-snapshot-proof",
+                                    "transactionId": args.transaction_id,
+                                    "releaseId": args.release_id,
+                                    "sourceCommit": args.source_commit,
+                                    "frozenAtUtc": "2026-07-31T00:00:00Z",
+                                    "createdAtUtc": "2026-07-31T00:01:00Z",
+                                    "frozenFinalizedBlock": {{"number": args.frozen_block_number, "hash": args.frozen_block_hash}},
+                                    "source": {{
+                                        "chainSpecSha256": source_sha("config", "chain-spec"),
+                                        "nodeBinarySha256": source_sha("node", "node-binary"),
+                                        "nodeDataArchiveSha256": source_sha("node", "node-data"),
+                                    }},
+                                    "snapshot": {{"bytes": snapshot.stat().st_size, "sha256": source_sha("node", "try-runtime-snapshot")}},
+                                    "tryRuntime": {{
+                                        "log": "fixture exact-block snapshot\\n",
+                                        "sha256": "2" * 64,
+                                        "sourceRevision": "3" * 40,
+                                        "version": "try-runtime 0.42.0-fixture",
+                                    }},
+                                    "isolatedRpcObservation": {{
+                                        "blockHashAtNumber": args.frozen_block_hash,
+                                        "finalizedHead": args.frozen_block_hash,
+                                        "genesisHash": "0x" + "4" * 64,
+                                        "headerHash": args.frozen_block_hash,
+                                        "headerNumber": args.frozen_block_number,
+                                        "runtimeCodeHash": "0x" + "5" * 64,
+                                        "runtimeSpecVersion": 1,
+                                    }},
+                                    "creation": {{
+                                        "explicitAtHash": True,
+                                        "isolatedCopyOnly": True,
+                                        "networkIsolated": True,
+                                        "originalNodeRemainedStopped": True,
+                                        "sourceArchiveExtracted": True,
+                                    }},
+                                    "authorizations": {{"liveSubmission": False, "paidOrPublicActivation": False}},
+                                }}
+                                path.write_text(json.dumps(proof, sort_keys=True) + "\\n", encoding="utf-8")
+                            else:
+                                path.write_bytes(f"{{args.role}}:{{group}}:{{name}}\\n".encode())
                         payload = path.read_bytes()
                         artifacts.append({{
                             "group": group,
@@ -99,10 +145,7 @@ class FinalFreezeTests(unittest.TestCase):
                         frozen_block = {{"number": args.frozen_block_number, "hash": args.frozen_block_hash}}
                 frozen_at = None
                 if not args.dry_run and args.action != "preflight":
-                    frozen_at = (
-                        datetime.datetime.now(datetime.timezone.utc)
-                        - datetime.timedelta(seconds=45)
-                    ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                    frozen_at = "2026-07-31T00:00:00Z"
                 result = {{
                     "schemaVersion": 1,
                     "kind": "nexus-v2-private-alpha-final-freeze-component-result",
