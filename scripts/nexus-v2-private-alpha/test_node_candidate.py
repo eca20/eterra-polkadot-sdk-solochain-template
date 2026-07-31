@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -178,6 +179,45 @@ class NodeCandidateTests(unittest.TestCase):
             self.assertFalse(verified["paidProduction"])
         finally:
             path.unlink(missing_ok=True)
+
+    def test_genesis_probe_binds_p2p_to_loopback(self) -> None:
+        class ProbeProcess:
+            def poll(self) -> None:
+                return None
+
+            def terminate(self) -> None:
+                return None
+
+            def wait(self, timeout: int) -> int:
+                return 0
+
+        captured: list[str] = []
+        original_popen = subprocess.Popen
+        original_rpc = tool.rpc_request
+        try:
+            def fake_popen(command: list[str], **_: Any) -> ProbeProcess:
+                captured.extend(command)
+                return ProbeProcess()
+
+            responses = {
+                "state_getRuntimeVersion": {"specVersion": tool.TARGET_SPEC_VERSION},
+                "chain_getBlockHash": "0x" + "1" * 64,
+                "system_chain": "Eterra Alpha",
+            }
+            subprocess.Popen = fake_popen  # type: ignore[assignment]
+            tool.rpc_request = lambda _port, method, _params: responses[method]  # type: ignore[assignment]
+            result = tool.inspect_genesis(
+                self.root / "node",
+                self.root / "raw.json",
+                19946,
+                31346,
+            )
+        finally:
+            subprocess.Popen = original_popen  # type: ignore[assignment]
+            tool.rpc_request = original_rpc  # type: ignore[assignment]
+        self.assertEqual(result["chainName"], "Eterra Alpha")
+        listen_index = captured.index("--listen-addr")
+        self.assertEqual(captured[listen_index + 1], "/ip4/127.0.0.1/tcp/31346")
 
 
 if __name__ == "__main__":

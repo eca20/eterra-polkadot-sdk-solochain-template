@@ -321,6 +321,8 @@ def inspect_genesis(node: Path, raw_spec: Path, rpc_port: int, p2p_port: int) ->
                 str(rpc_port),
                 "--port",
                 str(p2p_port),
+                "--listen-addr",
+                f"/ip4/127.0.0.1/tcp/{p2p_port}",
                 "--rpc-methods",
                 "Safe",
                 "--no-telemetry",
