@@ -318,10 +318,12 @@ class ReleaseSafetyTests(unittest.TestCase):
         return self.make_executable(
             "try-runtime",
             """
-            import sys
+            import os, sys
             if sys.argv[1:] == ["--version"]:
                 print("try-runtime 0.42.0-test")
             else:
+                if "runtime::eterra_tcg=info" not in os.environ.get("RUST_LOG", ""):
+                    raise SystemExit("missing runtime migration log filter")
                 print("ETERRA_V16_MIGRATION_AWAITING_VERIFICATION copied-state fast-forward passed")
             """,
         )

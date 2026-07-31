@@ -536,13 +536,19 @@ def validate_external_driver(path: Path, label: str) -> Path:
     return driver
 
 
-def run_and_capture(command: Sequence[str], log_path: Path) -> subprocess.CompletedProcess[bytes]:
+def run_and_capture(
+    command: Sequence[str],
+    log_path: Path,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[bytes]:
     require(not log_path.exists(), f"refusing to overwrite log: {log_path}")
     completed = subprocess.run(
         list(command),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         check=False,
+        env=environment,
     )
     write_new_bytes(log_path, completed.stdout)
     return completed
@@ -732,7 +738,19 @@ def command_rehearse_migration(args: argparse.Namespace) -> None:
         "-p",
         str(snapshot),
     ]
-    completed = run_and_capture(try_command, try_log)
+    try_environment = dict(os.environ)
+    existing_log_filter = try_environment.get("RUST_LOG", "").strip().strip(",")
+    required_log_filter = "runtime::eterra_tcg=info,try_runtime_core=info"
+    try_environment["RUST_LOG"] = (
+        f"{existing_log_filter},{required_log_filter}"
+        if existing_log_filter
+        else required_log_filter
+    )
+    completed = run_and_capture(
+        try_command,
+        try_log,
+        environment=try_environment,
+    )
     require(completed.returncode == 0, f"try-runtime V14-to-V16 rehearsal failed; see {try_log}")
     require(
         "ETERRA_V16_MIGRATION_AWAITING_VERIFICATION" in try_log.read_text(encoding="utf-8"),
