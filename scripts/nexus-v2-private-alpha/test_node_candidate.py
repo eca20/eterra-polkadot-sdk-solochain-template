@@ -216,6 +216,7 @@ class NodeCandidateTests(unittest.TestCase):
             subprocess.Popen = original_popen  # type: ignore[assignment]
             tool.rpc_request = original_rpc  # type: ignore[assignment]
         self.assertEqual(result["chainName"], "Eterra Alpha")
+        self.assertNotIn("--port", captured)
         listen_index = captured.index("--listen-addr")
         self.assertEqual(captured[listen_index + 1], "/ip4/127.0.0.1/tcp/31346")
 
