@@ -39,6 +39,10 @@ python3 -m unittest "$FINAL_FREEZE_TEST" "$NODE_CANDIDATE_TEST" "$FROZEN_SNAPSHO
 "$LINUX_AMD64_NODE_BUILD" --help >/dev/null
 rg -q '948f9b08a66e7fe01b03a98ef1c7568292e07ec2e4fe90d88c07bb14563c84ff' \
 	"${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
+rg -Fq 'rustup component add rust-src --toolchain 1.89.0-x86_64-unknown-linux-gnu' \
+	"${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
+rg -Fq 'rustc --print sysroot)/lib/rustlib/src/rust/library/Cargo.toml' \
+	"${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
 rg -q 'nexus-v2-amd64-cargo-registry' "${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
 rg -q 'nexus-v2-amd64-cargo-git' "${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
 rg -q 'nexus-v2-amd64-target' "${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
