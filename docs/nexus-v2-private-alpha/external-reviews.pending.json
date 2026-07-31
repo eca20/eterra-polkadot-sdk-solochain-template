@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "releaseScope": "nexus-v2-private-alpha",
+  "privateAlphaPermittedOnlyWithEconomicGatesDisabled": true,
+  "reviews": {
+    "drandQuicknetCryptography": {
+      "status": "pending-external-review",
+      "blocks": [
+        "production-randomness",
+        "paid-pack-acquisition",
+        "production-economic-rewards"
+      ]
+    },
+    "blockchainiaFlowLicenseAndProvenance": {
+      "status": "pending-external-review",
+      "blocks": [
+        "public-crate-publication",
+        "public-npm-publication",
+        "public-builder-release"
+      ]
+    },
+    "marketplaceAndPlatformCompliance": {
+      "status": "pending-external-review",
+      "blocks": [
+        "marketplace-transfers",
+        "wagering",
+        "staking",
+        "paid-entry",
+        "cash-out"
+      ]
+    },
+    "nexusV2FinalArt": {
+      "status": "pending-artist-approval",
+      "blocks": [
+        "production-art-approval",
+        "public-catalog-activation"
+      ]
+    },
+    "magicCraftingEconomyAndEntitlements": {
+      "status": "pending-product-economy-review",
+      "blocks": [
+        "production-magic-crafting",
+        "production-crafting-fees",
+        "production-formula-entitlements"
+      ],
+      "notes": "Private-alpha recipes, batch limits, formula hashes, raw fee units, treasury destination, and receipt formats are provisional and valueless."
+    },
+    "productionBenchmarkWeights": {
+      "status": "pending-pinned-host-regeneration",
+      "blocks": [
+        "production-economic-activation"
+      ],
+      "notes": "Benchmark definitions and private-alpha conservative weights are tested; production weights must be regenerated on the pinned release host."
+    },
+    "publicPackagePublication": {
+      "status": "pending-product-owner-approval",
+      "blocks": [
+        "crate-publication",
+        "npm-publication",
+        "public-site-deployment"
+      ]
+    },
+    "productionLaunch": {
+      "status": "pending-product-owner-and-operations-approval",
+      "blocks": [
+        "public-production-deployment",
+        "production-economic-activation"
+      ]
+    }
+  }
+}

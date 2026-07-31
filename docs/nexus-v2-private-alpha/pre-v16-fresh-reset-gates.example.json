@@ -1,0 +1,74 @@
+{
+  "additionalEconomicFlags": {
+    "legacyFaucetIngressReachable": false,
+    "legacyStorefrontIngressReachable": false
+  },
+  "externalReviewFlags": {
+    "cryptographyApproved": false,
+    "paidFeaturesApproved": false,
+    "publicProductionApproved": false
+  },
+  "kind": "nexus-v2-private-alpha-pre-v16-fresh-reset-gates",
+  "knownLegacyEconomicSurfaces": {
+    "arcadePayContinueDispatchablePresent": true,
+    "economyDispatchablesPresent": true,
+    "faucetDispatchablePresent": true,
+    "reachableThroughWriteIngress": false,
+    "tcgMarketplaceDispatchablesPresent": true,
+    "tcgPaidMintDispatchablesPresent": true
+  },
+  "legacyWriteBarrier": {
+    "authorityServiceStopped": true,
+    "blockProductionStopped": true,
+    "inventoryCapturedAfterWriteStop": true,
+    "mode": "AllIngressStopped",
+    "nodeServiceStopped": true,
+    "offlineFinalizedHeadMatchesGateBlock": true,
+    "p2pIngressStopped": true,
+    "publicRpcWriteIngressStopped": true,
+    "stabilityWindowSeconds": 60,
+    "stoppedAtUtc": "1970-01-01T00:00:00Z",
+    "writeBarrierEvidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "observedAtFinalizedBlock": {
+    "hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "number": 0
+  },
+  "operationScope": {
+    "freshGenesisReplacementOnly": true,
+    "inPlaceRuntimeUpgradeAllowed": false,
+    "paidOrPublicActivationAllowed": false,
+    "v2ActivationAllowed": false
+  },
+  "releaseId": "replace-private-alpha-release-id",
+  "schemaVersion": 1,
+  "sourceCommit": "0000000000000000000000000000000000000000",
+  "sourceRuntime": {
+    "deployedSourceCommit": "0000000000000000000000000000000000000000",
+    "flowPalletIndex": 29,
+    "metadataVersion": 14,
+    "runtimeMetadataScaleSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "runtimeV14WasmSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "specVersion": 1,
+    "tcgPalletIndex": 9,
+    "tcgStorageVersion": 14,
+    "tcgStorageVersionObservationSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "v2StructuralAbsence": {
+    "absentPalletIndices": [
+      35,
+      36,
+      37,
+      38
+    ],
+    "absentPallets": [
+      "EterraRandomness",
+      "EterraCreatures",
+      "EterraMagic",
+      "EterraGameResults"
+    ],
+    "tcgV2DispatchablesPresent": false,
+    "tcgV2StoragePresent": false,
+    "v2EventsPresent": false
+  }
+}

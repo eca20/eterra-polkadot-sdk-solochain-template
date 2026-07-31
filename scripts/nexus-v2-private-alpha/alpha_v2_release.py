@@ -27,8 +27,10 @@ REQUIRED_ARTIFACTS: dict[str, set[str]] = {
     "node": {
         "node-data",
         "node-binary",
-        "runtime-v15-wasm",
-        "runtime-v16-wasm",
+        "runtime-v14-wasm",
+        "runtime-v16-production-wasm",
+        "runtime-v16-try-runtime-wasm",
+        "tcg-storage-version-observation",
         "try-runtime-snapshot",
     },
     "media": {"media-state", "media-image-lock"},
@@ -84,6 +86,10 @@ REQUIRED_MIGRATION_CHECKS = {
     "noSilentReclassification",
     "ownershipIndexesMatch",
     "subjectIndexesMatch",
+    "custodyDomainsMatch",
+    "lifecycleQuiescent",
+    "retiredEconomiesQuiescent",
+    "v2SidecarPrefixesAbsent",
     "anomaliesAccounted",
     "nextCardIdMonotonic",
     "safeLegacyExitsPreserved",
@@ -140,6 +146,19 @@ HEX_256_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 RELEASE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+POST_V16_ECONOMIC_GATE_KIND = "nexus-v2-private-alpha-economic-gates"
+PRE_V16_FRESH_RESET_GATE_KIND = (
+    "nexus-v2-private-alpha-pre-v16-fresh-reset-gates"
+)
+POST_V16_GATE_MODE = "post-v16-disabled"
+PRE_V16_FRESH_RESET_GATE_MODE = "pre-v16-fresh-reset-frozen"
+PRE_V16_ABSENT_V2_PALLETS = [
+    "EterraRandomness",
+    "EterraCreatures",
+    "EterraMagic",
+    "EterraGameResults",
+]
+PRE_V16_ABSENT_V2_PALLET_INDICES = [35, 36, 37, 38]
 
 
 class SafetyError(RuntimeError):
@@ -601,19 +620,25 @@ def validate_migration_result(
     try_log_hash: str,
 ) -> None:
     require(result.get("schemaVersion") == 1, "migration result schema mismatch")
-    require(result.get("kind") == "nexus-v2-v15-v16-migration-result", "migration result kind mismatch")
+    require(result.get("kind") == "nexus-v2-v14-v16-migration-result", "migration result kind mismatch")
     require(result.get("releaseId") == verified["releaseId"], "migration result release mismatch")
     require(result.get("sourceCommit") == verified["sourceCommit"], "migration result source commit mismatch")
     require(result.get("snapshotSha256") == snapshot_hash, "migration snapshot hash mismatch")
     require(result.get("runtimeWasmSha256") == runtime_hash, "migration runtime hash mismatch")
     require(result.get("tryRuntimeLogSha256") == try_log_hash, "migration log hash mismatch")
-    require(result.get("fromStorageVersion") == 15, "migration must start at storage version 15")
+    require(result.get("fromStorageVersion") == 14, "migration must start at storage version 14")
     require(result.get("toStorageVersion") == 16, "migration must finish at storage version 16")
     require(result.get("migrationPhase") == "Completed", "migration did not complete")
     require(result.get("legacyCreationSealed") is True, "legacy creation is not sealed")
     require(result.get("legacyWritesPaused") is False, "legacy safe-exit writes remained paused after completion")
     require(
-        result.get("v2Features") == {"Conversion": False, "Packs": False, "Ranked": False},
+        result.get("v2Features")
+        == {
+            "Conversion": False,
+            "Packs": False,
+            "Ranked": False,
+            "MythicalAscension": False,
+        },
         "migration result must keep every V2 feature paused",
     )
     strict_true_checks(result.get("checks"), REQUIRED_MIGRATION_CHECKS, "migration")
@@ -645,9 +670,13 @@ def command_rehearse_migration(args: argparse.Namespace) -> None:
     require(sha256_file(try_runtime) == expected_try_hash, "try-runtime binary hash mismatch")
     require(sha256_file(verifier) == expected_verifier_hash, "migration verifier hash mismatch")
     require(bool(re.fullmatch(r"[0-9a-f]{7,40}", args.try_runtime_revision)), "invalid try-runtime revision")
+    require(
+        isinstance(args.migration_blocks, int) and 1 <= args.migration_blocks <= 1_000_000,
+        "migration blocks must be in 1..1000000",
+    )
 
     snapshot = find_artifact(verified, bundle_root, "node", "try-runtime-snapshot")
-    runtime = find_artifact(verified, bundle_root, "node", "runtime-v16-wasm")
+    runtime = find_artifact(verified, bundle_root, "node", "runtime-v16-try-runtime-wasm")
     snapshot_hash = sha256_file(snapshot)
     runtime_hash = sha256_file(runtime)
     output = Path(args.evidence)
@@ -672,13 +701,24 @@ def command_rehearse_migration(args: argparse.Namespace) -> None:
         str(try_runtime),
         "--runtime",
         str(runtime),
-        "on-runtime-upgrade",
+        "fast-forward",
+        "--n-blocks",
+        str(args.migration_blocks),
+        "--blocktime",
+        "6000",
+        "--try-state",
+        "EterraTCG",
+        "--run-migrations",
         "snap",
         "-p",
         str(snapshot),
     ]
     completed = run_and_capture(try_command, try_log)
-    require(completed.returncode == 0, f"try-runtime V15-to-V16 rehearsal failed; see {try_log}")
+    require(completed.returncode == 0, f"try-runtime V14-to-V16 rehearsal failed; see {try_log}")
+    require(
+        "ETERRA_V16_MIGRATION_AWAITING_VERIFICATION" in try_log.read_text(encoding="utf-8"),
+        "try-runtime fast-forward did not reach the V16 independent-verification gate",
+    )
     try_log_hash = sha256_file(try_log)
 
     verifier_command = [
@@ -701,17 +741,18 @@ def command_rehearse_migration(args: argparse.Namespace) -> None:
 
     evidence = {
         "schemaVersion": 1,
-        "kind": "nexus-v2-v15-v16-migration-evidence",
+        "kind": "nexus-v2-v14-v16-migration-evidence",
         "releaseId": verified["releaseId"],
         "sourceCommit": verified["sourceCommit"],
         "backupManifestSha256": verified["sha256"],
-        "fromStorageVersion": 15,
+        "fromStorageVersion": 14,
         "toStorageVersion": 16,
         "snapshotSha256": snapshot_hash,
         "runtimeWasmSha256": runtime_hash,
         "tryRuntimeRevision": args.try_runtime_revision,
         "tryRuntimeBinarySha256": expected_try_hash,
         "tryRuntimeVersion": try_version,
+        "tryRuntimeFastForwardBlocks": args.migration_blocks,
         "tryRuntimeLogSha256": try_log_hash,
         "migrationVerifierSha256": expected_verifier_hash,
         "migrationVerifierLogSha256": sha256_file(verifier_log),
@@ -722,7 +763,7 @@ def command_rehearse_migration(args: argparse.Namespace) -> None:
         "extrinsicSubmitted": False,
     }
     write_new_json(output, evidence)
-    print(f"V15-to-V16 copied-state rehearsal passed: {output}")
+    print(f"V14-to-V16 copied-state rehearsal passed: {output}")
 
 
 def finalized_block(value: Any, label: str) -> tuple[int, str]:
@@ -759,7 +800,7 @@ def require_exact_keys(value: Any, expected: set[str], label: str) -> Mapping[st
     return value
 
 
-def validate_economic_gates(
+def validate_post_v16_economic_gates(
     path: Path,
     release_id: str | None = None,
     source_commit: str | None = None,
@@ -786,7 +827,7 @@ def validate_economic_gates(
         "economic gates",
     )
     require(gates.get("schemaVersion") == 1, "economic gate schema mismatch")
-    require(gates.get("kind") == "nexus-v2-private-alpha-economic-gates", "economic gate kind mismatch")
+    require(gates.get("kind") == POST_V16_ECONOMIC_GATE_KIND, "economic gate kind mismatch")
     gate_release = ensure_release_id(str(gates.get("releaseId", "")))
     gate_commit = ensure_commit(str(gates.get("sourceCommit", "")))
     if release_id is not None:
@@ -795,7 +836,11 @@ def validate_economic_gates(
         require(gate_commit == source_commit, "economic gate source commit mismatch")
     block_number, block_hash = finalized_block(gates.get("observedAtFinalizedBlock"), "economic gate")
     require_exact_keys(gates["tcg"], {"features", "legacyCreationSealed"}, "tcg gates")
-    require_exact_keys(gates["tcg"]["features"], {"Packs", "Conversion", "Ranked"}, "tcg feature gates")
+    require_exact_keys(
+        gates["tcg"]["features"],
+        {"Packs", "Conversion", "Ranked", "MythicalAscension"},
+        "tcg feature gates",
+    )
     require_exact_keys(
         gates["randomness"],
         {
@@ -849,6 +894,7 @@ def validate_economic_gates(
         ("tcg", "features", "Packs"): False,
         ("tcg", "features", "Conversion"): False,
         ("tcg", "features", "Ranked"): False,
+        ("tcg", "features", "MythicalAscension"): False,
         ("tcg", "legacyCreationSealed"): True,
         ("randomness", "cryptographyReviewApproved"): False,
         ("randomness", "drandQuicknetEnabled"): False,
@@ -885,12 +931,272 @@ def validate_economic_gates(
     require_all_false(gates.get("additionalEconomicFlags"), "additionalEconomicFlags")
     return {
         "value": gates,
+        "mode": POST_V16_GATE_MODE,
         "releaseId": gate_release,
         "sourceCommit": gate_commit,
         "blockNumber": block_number,
         "blockHash": block_hash,
         "sha256": sha256_file(path),
     }
+
+
+def validate_pre_v16_fresh_reset_gates(
+    path: Path,
+    release_id: str | None = None,
+    source_commit: str | None = None,
+) -> dict[str, Any]:
+    gates = read_json(path)
+    require_exact_keys(
+        gates,
+        {
+            "schemaVersion",
+            "kind",
+            "releaseId",
+            "sourceCommit",
+            "observedAtFinalizedBlock",
+            "operationScope",
+            "sourceRuntime",
+            "v2StructuralAbsence",
+            "knownLegacyEconomicSurfaces",
+            "legacyWriteBarrier",
+            "externalReviewFlags",
+            "additionalEconomicFlags",
+        },
+        "pre-V16 fresh-reset gates",
+    )
+    require(gates.get("schemaVersion") == 1, "pre-V16 fresh-reset gate schema mismatch")
+    require(
+        gates.get("kind") == PRE_V16_FRESH_RESET_GATE_KIND,
+        "pre-V16 fresh-reset gate kind mismatch",
+    )
+    gate_release = ensure_release_id(str(gates.get("releaseId", "")))
+    gate_commit = ensure_commit(str(gates.get("sourceCommit", "")))
+    if release_id is not None:
+        require(gate_release == release_id, "pre-V16 fresh-reset gate release mismatch")
+    if source_commit is not None:
+        require(gate_commit == source_commit, "pre-V16 fresh-reset gate source commit mismatch")
+    block_number, block_hash = finalized_block(
+        gates.get("observedAtFinalizedBlock"),
+        "pre-V16 fresh-reset gate",
+    )
+
+    operation_scope = require_exact_keys(
+        gates["operationScope"],
+        {
+            "freshGenesisReplacementOnly",
+            "inPlaceRuntimeUpgradeAllowed",
+            "v2ActivationAllowed",
+            "paidOrPublicActivationAllowed",
+        },
+        "pre-V16 operation scope",
+    )
+    expected_operation_scope = {
+        "freshGenesisReplacementOnly": True,
+        "inPlaceRuntimeUpgradeAllowed": False,
+        "v2ActivationAllowed": False,
+        "paidOrPublicActivationAllowed": False,
+    }
+    require(
+        operation_scope == expected_operation_scope,
+        "pre-V16 gates authorize only a fresh, economically disabled genesis replacement",
+    )
+
+    source_runtime = require_exact_keys(
+        gates["sourceRuntime"],
+        {
+            "deployedSourceCommit",
+            "specVersion",
+            "metadataVersion",
+            "tcgPalletIndex",
+            "tcgStorageVersion",
+            "flowPalletIndex",
+            "runtimeV14WasmSha256",
+            "runtimeMetadataScaleSha256",
+            "tcgStorageVersionObservationSha256",
+        },
+        "pre-V16 source runtime",
+    )
+    deployed_source_commit = ensure_commit(
+        str(source_runtime.get("deployedSourceCommit", ""))
+    )
+    require(source_runtime.get("specVersion") == 1, "pre-V16 source runtime must be spec 1")
+    require(
+        source_runtime.get("metadataVersion") == 14,
+        "pre-V16 source runtime metadata must be V14",
+    )
+    require(
+        source_runtime.get("tcgPalletIndex") == 9,
+        "pre-V16 source runtime must retain EterraTCG index 9",
+    )
+    require(
+        source_runtime.get("tcgStorageVersion") == 14,
+        "pre-V16 source runtime TCG storage must be V14",
+    )
+    require(
+        source_runtime.get("flowPalletIndex") == 29,
+        "pre-V16 source runtime must retain EterraFlow index 29",
+    )
+    runtime_v14_hash = ensure_sha256(
+        source_runtime.get("runtimeV14WasmSha256"),
+        "pre-V16 runtime V14 Wasm SHA-256",
+    )
+    metadata_hash = ensure_sha256(
+        source_runtime.get("runtimeMetadataScaleSha256"),
+        "pre-V16 runtime metadata SHA-256",
+    )
+    observation_hash = ensure_sha256(
+        source_runtime.get("tcgStorageVersionObservationSha256"),
+        "pre-V16 TCG storage-version observation SHA-256",
+    )
+
+    v2_absence = require_exact_keys(
+        gates["v2StructuralAbsence"],
+        {
+            "absentPallets",
+            "absentPalletIndices",
+            "tcgV2StoragePresent",
+            "tcgV2DispatchablesPresent",
+            "v2EventsPresent",
+        },
+        "pre-V16 V2 structural absence",
+    )
+    require(
+        v2_absence.get("absentPallets") == PRE_V16_ABSENT_V2_PALLETS,
+        "pre-V16 V2 sidecar pallet absence list mismatch",
+    )
+    require(
+        v2_absence.get("absentPalletIndices") == PRE_V16_ABSENT_V2_PALLET_INDICES,
+        "pre-V16 V2 sidecar pallet-index absence list mismatch",
+    )
+    for field in ("tcgV2StoragePresent", "tcgV2DispatchablesPresent", "v2EventsPresent"):
+        require(
+            v2_absence.get(field) is False,
+            f"pre-V16 V2 structural absence must set {field}=false",
+        )
+
+    known_surfaces = require_exact_keys(
+        gates["knownLegacyEconomicSurfaces"],
+        {
+            "tcgPaidMintDispatchablesPresent",
+            "tcgMarketplaceDispatchablesPresent",
+            "faucetDispatchablePresent",
+            "economyDispatchablesPresent",
+            "arcadePayContinueDispatchablePresent",
+            "reachableThroughWriteIngress",
+        },
+        "pre-V16 known legacy economic surfaces",
+    )
+    for field in (
+        "tcgPaidMintDispatchablesPresent",
+        "tcgMarketplaceDispatchablesPresent",
+        "faucetDispatchablePresent",
+        "economyDispatchablesPresent",
+        "arcadePayContinueDispatchablePresent",
+    ):
+        require(
+            known_surfaces.get(field) is True,
+            f"pre-V16 gate must truthfully acknowledge {field}=true",
+        )
+    require(
+        known_surfaces.get("reachableThroughWriteIngress") is False,
+        "pre-V16 legacy economic surfaces must be unreachable through write ingress",
+    )
+
+    write_barrier = require_exact_keys(
+        gates["legacyWriteBarrier"],
+        {
+            "mode",
+            "nodeServiceStopped",
+            "authorityServiceStopped",
+            "publicRpcWriteIngressStopped",
+            "p2pIngressStopped",
+            "blockProductionStopped",
+            "offlineFinalizedHeadMatchesGateBlock",
+            "inventoryCapturedAfterWriteStop",
+            "stoppedAtUtc",
+            "stabilityWindowSeconds",
+            "writeBarrierEvidenceSha256",
+        },
+        "pre-V16 legacy write barrier",
+    )
+    require(
+        write_barrier.get("mode") == "AllIngressStopped",
+        "pre-V16 legacy write barrier must be AllIngressStopped",
+    )
+    for field in (
+        "nodeServiceStopped",
+        "authorityServiceStopped",
+        "publicRpcWriteIngressStopped",
+        "p2pIngressStopped",
+        "blockProductionStopped",
+        "offlineFinalizedHeadMatchesGateBlock",
+        "inventoryCapturedAfterWriteStop",
+    ):
+        require(
+            write_barrier.get(field) is True,
+            f"pre-V16 legacy write barrier must set {field}=true",
+        )
+    stopped_at = parse_utc(
+        str(write_barrier.get("stoppedAtUtc", "")),
+        "pre-V16 write barrier stoppedAtUtc",
+    )
+    stability_window = write_barrier.get("stabilityWindowSeconds")
+    require(
+        isinstance(stability_window, int)
+        and not isinstance(stability_window, bool)
+        and stability_window >= 30,
+        "pre-V16 write barrier stability window must be at least 30 seconds",
+    )
+    write_barrier_hash = ensure_sha256(
+        write_barrier.get("writeBarrierEvidenceSha256"),
+        "pre-V16 write-barrier evidence SHA-256",
+    )
+
+    external_reviews = require_exact_keys(
+        gates["externalReviewFlags"],
+        {
+            "cryptographyApproved",
+            "paidFeaturesApproved",
+            "publicProductionApproved",
+        },
+        "pre-V16 external-review flags",
+    )
+    require_all_false(external_reviews, "pre-V16 externalReviewFlags")
+    require_all_false(gates.get("additionalEconomicFlags"), "additionalEconomicFlags")
+    return {
+        "value": gates,
+        "mode": PRE_V16_FRESH_RESET_GATE_MODE,
+        "releaseId": gate_release,
+        "sourceCommit": gate_commit,
+        "deployedSourceCommit": deployed_source_commit,
+        "blockNumber": block_number,
+        "blockHash": block_hash,
+        "runtimeV14WasmSha256": runtime_v14_hash,
+        "runtimeMetadataScaleSha256": metadata_hash,
+        "tcgStorageVersionObservationSha256": observation_hash,
+        "writeBarrierEvidenceSha256": write_barrier_hash,
+        "writeBarrierStoppedAtUtc": stopped_at.isoformat(),
+        "sha256": sha256_file(path),
+    }
+
+
+def validate_economic_gates(
+    path: Path,
+    release_id: str | None = None,
+    source_commit: str | None = None,
+    *,
+    allow_pre_v16_fresh_reset: bool = False,
+) -> dict[str, Any]:
+    kind = read_json(path).get("kind")
+    if kind == POST_V16_ECONOMIC_GATE_KIND:
+        return validate_post_v16_economic_gates(path, release_id, source_commit)
+    if kind == PRE_V16_FRESH_RESET_GATE_KIND and allow_pre_v16_fresh_reset:
+        return validate_pre_v16_fresh_reset_gates(path, release_id, source_commit)
+    if kind == PRE_V16_FRESH_RESET_GATE_KIND:
+        raise SafetyError(
+            "pre-V16 gates are fresh-reset-only and cannot authorize rollback or in-place activation"
+        )
+    raise SafetyError("economic gate kind mismatch")
 
 
 def validate_acceptance_inventory(
@@ -965,16 +1271,78 @@ def validate_migration_evidence(
 ) -> dict[str, Any]:
     evidence = read_json(path)
     require(evidence.get("schemaVersion") == 1, "migration evidence schema mismatch")
-    require(evidence.get("kind") == "nexus-v2-v15-v16-migration-evidence", "migration evidence kind mismatch")
+    require(evidence.get("kind") == "nexus-v2-v14-v16-migration-evidence", "migration evidence kind mismatch")
     require(evidence.get("releaseId") == release_id, "migration evidence release mismatch")
     require(evidence.get("sourceCommit") == source_commit, "migration evidence source commit mismatch")
     require(evidence.get("backupManifestSha256") == manifest_hash, "migration evidence manifest mismatch")
-    require(evidence.get("fromStorageVersion") == 15 and evidence.get("toStorageVersion") == 16, "migration evidence version mismatch")
-    require(evidence.get("result") == "passed", "V15-to-V16 rehearsal did not pass")
+    require(evidence.get("fromStorageVersion") == 14 and evidence.get("toStorageVersion") == 16, "migration evidence version mismatch")
+    require(evidence.get("result") == "passed", "V14-to-V16 rehearsal did not pass")
     require(evidence.get("liveRpcUsed") is False, "migration evidence used live RPC")
     require(evidence.get("extrinsicSubmitted") is False, "migration evidence submitted an extrinsic")
     parse_utc(str(evidence.get("completedAtUtc", "")), "migration completedAtUtc")
     return evidence
+
+
+def validate_pre_v16_fresh_reset_artifact_binding(
+    gates: Mapping[str, Any],
+    verified: Mapping[str, Any],
+    bundle_root: Path,
+) -> None:
+    runtime_v14 = find_artifact(verified, bundle_root, "node", "runtime-v14-wasm")
+    observation_path = find_artifact(
+        verified,
+        bundle_root,
+        "node",
+        "tcg-storage-version-observation",
+    )
+    require(
+        sha256_file(runtime_v14) == gates["runtimeV14WasmSha256"],
+        "pre-V16 gate runtime hash does not match the pinned V14 Wasm",
+    )
+    require(
+        sha256_file(observation_path) == gates["tcgStorageVersionObservationSha256"],
+        "pre-V16 gate observation hash does not match the pinned TCG observation",
+    )
+
+    observation = read_json(observation_path)
+    observed_block_number, observed_block_hash = finalized_block(
+        observation.get("finalizedBlock"),
+        "pinned TCG observation",
+    )
+    require(
+        (observed_block_number, observed_block_hash)
+        == (gates["blockNumber"], gates["blockHash"]),
+        "pre-V16 gate block does not match the pinned TCG observation",
+    )
+    decoded = observation.get("decoded")
+    require(
+        isinstance(decoded, dict)
+        and decoded.get("scaleType") == "u16"
+        and decoded.get("storageVersion") == 14,
+        "pinned TCG observation does not decode storage version 14",
+    )
+    read_only_rpc = observation.get("readOnlyRpc")
+    require(
+        isinstance(read_only_rpc, dict)
+        and read_only_rpc.get("method") == "state_getStorage"
+        and read_only_rpc.get("result") == "0x0e00",
+        "pinned TCG observation does not prove SCALE storage version 14",
+    )
+    ensure_hash256(
+        read_only_rpc.get("storageKey"),
+        "pinned TCG storage-version key",
+    )
+    live_source = observation.get("liveSource")
+    require(
+        isinstance(live_source, dict)
+        and live_source.get("declaredStorageVersion") == 14,
+        "pinned TCG observation live source does not declare storage version 14",
+    )
+    require(
+        ensure_commit(str(live_source.get("commit", "")))
+        == gates["deployedSourceCommit"],
+        "pre-V16 deployed source commit does not match the pinned TCG observation",
+    )
 
 
 def command_prepare_reset(args: argparse.Namespace) -> None:
@@ -1002,7 +1370,14 @@ def command_prepare_reset(args: argparse.Namespace) -> None:
         verified["sourceCommit"],
         verified["sha256"],
     )
-    gates = validate_economic_gates(gates_path, verified["releaseId"], verified["sourceCommit"])
+    gates = validate_economic_gates(
+        gates_path,
+        verified["releaseId"],
+        verified["sourceCommit"],
+        allow_pre_v16_fresh_reset=True,
+    )
+    if gates["mode"] == PRE_V16_FRESH_RESET_GATE_MODE:
+        validate_pre_v16_fresh_reset_artifact_binding(gates, verified, bundle_root)
     inventory = validate_acceptance_inventory(
         inventory_path,
         verified["releaseId"],
@@ -1014,6 +1389,11 @@ def command_prepare_reset(args: argparse.Namespace) -> None:
         "economic gates and acceptance inventory must come from the same finalized block",
     )
     require(not inventory["nonzero"], "reset readiness requires zero V2 acceptance assets")
+    reset_mode = (
+        "fresh-genesis-replacement"
+        if gates["mode"] == PRE_V16_FRESH_RESET_GATE_MODE
+        else "post-v16-disabled-state"
+    )
 
     output = Path(args.output)
     readiness = {
@@ -1026,6 +1406,10 @@ def command_prepare_reset(args: argparse.Namespace) -> None:
         "migrationEvidenceSha256": sha256_file(migration_path),
         "economicGatesSha256": gates["sha256"],
         "acceptanceInventorySha256": inventory["sha256"],
+        "economicGateMode": gates["mode"],
+        "resetMode": reset_mode,
+        "freshGenesisReplacementOnly": gates["mode"] == PRE_V16_FRESH_RESET_GATE_MODE,
+        "inPlaceRuntimeActivationAuthorized": False,
         "gateFinalizedBlock": {
             "number": gates["blockNumber"],
             "hash": gates["blockHash"],
@@ -1049,6 +1433,26 @@ def validate_readiness(path: Path) -> dict[str, Any]:
     ensure_release_id(str(value.get("releaseId", "")))
     ensure_commit(str(value.get("sourceCommit", "")))
     ensure_sha256(value.get("backupManifestSha256"), "readiness backup manifest SHA-256")
+    gate_mode = value.get("economicGateMode")
+    require(
+        gate_mode in {POST_V16_GATE_MODE, PRE_V16_FRESH_RESET_GATE_MODE},
+        "readiness economic gate mode mismatch",
+    )
+    expected_reset_mode = (
+        "fresh-genesis-replacement"
+        if gate_mode == PRE_V16_FRESH_RESET_GATE_MODE
+        else "post-v16-disabled-state"
+    )
+    require(value.get("resetMode") == expected_reset_mode, "readiness reset mode mismatch")
+    require(
+        value.get("freshGenesisReplacementOnly")
+        is (gate_mode == PRE_V16_FRESH_RESET_GATE_MODE),
+        "readiness fresh-genesis scope mismatch",
+    )
+    require(
+        value.get("inPlaceRuntimeActivationAuthorized") is False,
+        "reset readiness may never authorize in-place runtime activation",
+    )
     require(value.get("readyForSeparateOperatorResetAuthorization") is True, "reset readiness is not approved")
     require(value.get("automaticRollbackEligibleAtGateBlock") is True, "readiness was not pre-acceptance")
     require(value.get("economicFlagsDisabled") is True, "readiness did not keep economic flags disabled")
@@ -1101,6 +1505,10 @@ def command_automatic_rollback(args: argparse.Namespace) -> None:
         gates_path,
         str(readiness["releaseId"]),
         str(readiness["sourceCommit"]),
+    )
+    require(
+        gates["mode"] == POST_V16_GATE_MODE,
+        "automatic rollback requires post-V16 disabled-state gates",
     )
     gate_number, _ = finalized_block(readiness["gateFinalizedBlock"], "readiness gate")
     require(inventory["blockNumber"] >= gate_number, "rollback inventory predates reset readiness")
@@ -1213,12 +1621,13 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("--evidence", required=True)
     restore.set_defaults(handler=command_rehearse_restore)
 
-    migration = subparsers.add_parser("rehearse-migration", help="record V15-to-V16 copied-state evidence")
+    migration = subparsers.add_parser("rehearse-migration", help="record V14-to-V16 copied-state evidence")
     migration.add_argument("--manifest", required=True)
     migration.add_argument("--bundle-root", required=True)
     migration.add_argument("--try-runtime-bin", required=True)
     migration.add_argument("--try-runtime-revision", required=True)
     migration.add_argument("--try-runtime-sha256", required=True)
+    migration.add_argument("--migration-blocks", required=True, type=int)
     migration.add_argument("--migration-verifier", required=True)
     migration.add_argument("--migration-verifier-sha256", required=True)
     migration.add_argument("--evidence", required=True)

@@ -1,0 +1,101 @@
+{
+  "automaticRestoreApproved": true,
+  "components": [
+    {
+      "driverPath": "deploy/alpha/macmini2010/nexus-v2-rollback-component-driver",
+      "driverSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "driverSourceId": "chain",
+      "id": "chain-media",
+      "requiredResetArchives": {
+        "media": "/opt/eterra-alpha/archive/nexus-v2-fresh-reset/9999999999999999999999999999999999999999999999999999999999999999/media",
+        "node": "/opt/eterra-alpha/archive/nexus-v2-fresh-reset/9999999999999999999999999999999999999999999999999999999999999999/node"
+      },
+      "scriptPins": {
+        "deployMedia": {
+          "path": "deploy/alpha/macmini2010/deploy-media.sh",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "sourceId": "chain"
+        },
+        "deployNode": {
+          "path": "deploy/alpha/macmini2010/deploy-node.sh",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "sourceId": "chain"
+        },
+        "restoreState": {
+          "path": "deploy/alpha/macmini2010/restore-alpha-state.sh",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "sourceId": "chain"
+        },
+        "status": {
+          "path": "deploy/alpha/macmini2010/status.sh",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "sourceId": "chain"
+        }
+      },
+      "sourcePins": [
+        {
+          "expectedCommit": "0000000000000000000000000000000000000000",
+          "id": "chain",
+          "root": "/absolute/path/to/clean/chain"
+        },
+        {
+          "expectedCommit": "1111111111111111111111111111111111111111",
+          "id": "media",
+          "root": "/absolute/path/to/clean/media"
+        }
+      ]
+    },
+    {
+      "driverPath": "deploy/alpha/macmini2014/nexus-v2-rollback-component-driver",
+      "driverSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "driverSourceId": "site",
+      "id": "site-indexer",
+      "requiredResetArchives": {
+        "site": "/opt/eterra-alpha/archive/nexus-v2-fresh-reset/9999999999999999999999999999999999999999999999999999999999999999/site"
+      },
+      "scriptPins": {
+        "deploySite": {
+          "path": "deploy/alpha/macmini2014/deploy-site.sh",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "sourceId": "site"
+        },
+        "restoreState": {
+          "path": "deploy/alpha/macmini2014/restore-alpha-state.sh",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "sourceId": "site"
+        },
+        "status": {
+          "path": "deploy/alpha/macmini2014/status.sh",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "sourceId": "site"
+        }
+      },
+      "sourcePins": [
+        {
+          "expectedCommit": "0000000000000000000000000000000000000000",
+          "id": "chain",
+          "root": "/absolute/path/to/clean/chain"
+        },
+        {
+          "expectedCommit": "2222222222222222222222222222222222222222",
+          "id": "site",
+          "root": "/absolute/path/to/clean/site"
+        }
+      ]
+    }
+  ],
+  "coordinatorSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "createdAtUtc": "1970-01-01T00:00:00Z",
+  "expiresAtUtc": "1970-01-01T00:15:00Z",
+  "finalBackupManifestSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "freshResetReadinessSha256": "9999999999999999999999999999999999999999999999999999999999999999",
+  "kind": "nexus-v2-private-alpha-post-cutover-coordinator-plan",
+  "maxObservationAgeSeconds": 600,
+  "operationId": "replace-post-cutover-operation-id",
+  "paidOrPublicActivationAuthorized": false,
+  "postCutoverObservationSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "releaseId": "replace-private-alpha-release-id",
+  "restoreEvidenceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "schemaVersion": 1,
+  "sourceCommit": "0000000000000000000000000000000000000000"
+}

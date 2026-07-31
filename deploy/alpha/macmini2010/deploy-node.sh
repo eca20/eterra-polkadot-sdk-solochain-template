@@ -6,17 +6,41 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
 purge_state=0
+dry_run=0
+fresh_reset_readiness=""
+verify_restored_final_backup=""
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--purge-state)
 			purge_state=1
 			;;
+		--fresh-reset-readiness)
+			[[ $# -ge 2 ]] || die "--fresh-reset-readiness requires a packet path"
+			fresh_reset_readiness="$2"
+			shift
+			;;
+		--dry-run)
+			dry_run=1
+			;;
+		--verify-restored-final-backup)
+			[[ $# -ge 2 ]] || die "--verify-restored-final-backup requires a staging path"
+			verify_restored_final_backup="$2"
+			shift
+			;;
 		--help|-h)
 			cat <<'EOF'
 Usage: deploy-node.sh [--purge-state]
+       deploy-node.sh --purge-state --fresh-reset-readiness READINESS.json [--dry-run]
+       deploy-node.sh --verify-restored-final-backup STAGING_DIR
 
 Normal deploys preserve the alpha node base path and chain state.
-Pass --purge-state to wipe the remote alpha chain state before restarting.
+Development deploys may pass --purge-state directly.
+Release deploys accept it only with a SHA-256-pinned, frozen pre-V16
+--fresh-reset-readiness packet. --dry-run validates the guarded local plan and
+exits before SSH.
+The restore-verification mode is read-only. It proves that the exact staged
+node binary, chain spec, service unit, and environment are installed and that
+the restored node is healthy; it never builds, syncs, restarts, or deploys.
 Alpha spec/genesis changes are only applied when --purge-state is set.
 EOF
 			exit 0
@@ -31,21 +55,119 @@ done
 load_env
 require_cmd expect
 require_cmd git
+require_cmd jq
+require_cmd python3
 require_cmd rsync
 require_cmd shasum
 require_cmd ssh
 
+if [[ -n "${verify_restored_final_backup}" ]]; then
+	[[ "${purge_state}" -eq 0 && "${dry_run}" -eq 0 && -z "${fresh_reset_readiness}" ]] ||
+		die "--verify-restored-final-backup cannot be combined with deploy/reset options"
+	staging_dir="$(cd -- "${verify_restored_final_backup}" 2>/dev/null && pwd)" ||
+		die "restore staging directory not found: ${verify_restored_final_backup}"
+	[[ -f "${staging_dir}/staging-contract.json" ]] ||
+		die "restore staging contract is missing"
+	for restored_file in node-binary chain-spec.json node-service.service node.env; do
+		[[ -f "${staging_dir}/${restored_file}" && ! -L "${staging_dir}/${restored_file}" ]] ||
+			die "restore staging node file is unavailable: ${restored_file}"
+		expected_sha256="$(jq -er --arg name "${restored_file}" '.files[$name]' "${staging_dir}/staging-contract.json")" ||
+			die "restore staging contract does not pin ${restored_file}"
+		[[ "${expected_sha256}" =~ ^[0-9a-f]{64}$ ]] ||
+			die "restore staging hash is invalid: ${restored_file}"
+		[[ "$(shasum -a 256 "${staging_dir}/${restored_file}" | awk '{print $1}')" == "${expected_sha256}" ]] ||
+			die "restore staging hash mismatch: ${restored_file}"
+	done
+	[[ "$(jq -r '.schemaVersion' "${staging_dir}/staging-contract.json")" == "1" ]] ||
+		die "unsupported restore staging schema"
+	[[ "$(jq -r '.kind' "${staging_dir}/staging-contract.json")" == "nexus-v2-private-alpha-chain-media-restore-staging" ]] ||
+		die "restore staging kind mismatch"
+	[[ "$(jq -r '.releaseId' "${staging_dir}/staging-contract.json")" == "${ETERRA_RELEASE_VERSION}" ]] ||
+		die "restore staging release mismatch"
+	[[ "$(jq -r '.sourceCommit' "${staging_dir}/staging-contract.json")" == "${ETERRA_EXPECTED_CHAIN_COMMIT}" ]] ||
+		die "restore staging chain source mismatch"
+	[[ "$(jq -r '.componentSourceCommits.chain' "${staging_dir}/staging-contract.json")" == "${ETERRA_EXPECTED_CHAIN_COMMIT}" ]] ||
+		die "restore staging chain component source mismatch"
+	manifest_sha256="$(jq -r '.backupManifestSha256' "${staging_dir}/staging-contract.json")"
+	[[ "${manifest_sha256}" =~ ^[0-9a-f]{64}$ ]] ||
+		die "restore staging manifest hash is invalid"
+	expected_binary_sha256="$(jq -r '.files[\"node-binary\"]' "${staging_dir}/staging-contract.json")"
+	expected_spec_sha256="$(jq -r '.files[\"chain-spec.json\"]' "${staging_dir}/staging-contract.json")"
+	expected_service_sha256="$(jq -r '.files[\"node-service.service\"]' "${staging_dir}/staging-contract.json")"
+	expected_env_sha256="$(jq -r '.files[\"node.env\"]' "${staging_dir}/staging-contract.json")"
+	jq -e '.name | type == "string" and length > 0' "${staging_dir}/chain-spec.json" >/dev/null ||
+		die "restored chain spec name is invalid"
+	require_cmd curl
+	remote_root_bash <<EOF
+set -euo pipefail
+test "${DEPLOY_ROOT}" = "/opt/eterra-alpha"
+test "${REMOTE_NODE_DATA_DIR}" = "/var/lib/eterra-alpha-node"
+test "${CHAIN_RPC_PORT}" = "9944"
+test -f "${REMOTE_STATE_DIR}/nexus-v2-final-backup-restored.json"
+test "\$(jq -r '.schemaVersion' "${REMOTE_STATE_DIR}/nexus-v2-final-backup-restored.json")" = "1"
+test "\$(jq -r '.kind' "${REMOTE_STATE_DIR}/nexus-v2-final-backup-restored.json")" = "nexus-v2-private-alpha-final-backup-restored"
+test "\$(jq -r '.releaseId' "${REMOTE_STATE_DIR}/nexus-v2-final-backup-restored.json")" = "${ETERRA_RELEASE_VERSION}"
+test "\$(jq -r '.sourceCommit' "${REMOTE_STATE_DIR}/nexus-v2-final-backup-restored.json")" = "${ETERRA_EXPECTED_CHAIN_COMMIT}"
+test "\$(jq -r '.backupManifestSha256' "${REMOTE_STATE_DIR}/nexus-v2-final-backup-restored.json")" = "${manifest_sha256}"
+test "\$(shasum -a 256 "${REMOTE_NODE_BIN}" | awk '{print \$1}')" = "${expected_binary_sha256}"
+test "\$(shasum -a 256 "${REMOTE_NODE_SPEC}" | awk '{print \$1}')" = "${expected_spec_sha256}"
+test "\$(shasum -a 256 "${REMOTE_NODE_SERVICE_UNIT_FILE}" | awk '{print \$1}')" = "${expected_service_sha256}"
+test "\$(shasum -a 256 "${REMOTE_NODE_ENV_FILE}" | awk '{print \$1}')" = "${expected_env_sha256}"
+systemctl is-active --quiet "${REMOTE_NODE_SERVICE_NAME}.service"
+chain_response="\$(curl -fsS --max-time 10 -H 'Content-Type: application/json' \
+	-d '{"id":1,"jsonrpc":"2.0","method":"system_chain","params":[]}' \
+	"http://127.0.0.1:${CHAIN_RPC_PORT}")"
+jq -e '.result | type == "string" and length > 0' <<<"\${chain_response}" >/dev/null
+genesis_response="\$(curl -fsS --max-time 10 -H 'Content-Type: application/json' \
+	-d '{"id":1,"jsonrpc":"2.0","method":"chain_getBlockHash","params":[0]}' \
+	"http://127.0.0.1:${CHAIN_RPC_PORT}")"
+jq -e '.result | type == "string" and test("^0x[0-9a-fA-F]{64}$")' <<<"\${genesis_response}" >/dev/null
+runtime_response="\$(curl -fsS --max-time 10 -H 'Content-Type: application/json' \
+	-d '{"id":1,"jsonrpc":"2.0","method":"state_getRuntimeVersion","params":[]}' \
+	"http://127.0.0.1:${CHAIN_RPC_PORT}")"
+jq -e '.result.specVersion | type == "number" and . > 0' <<<"\${runtime_response}" >/dev/null
+EOF
+	log "restored final-backup node verified release=${ETERRA_RELEASE_VERSION} manifest_sha256=${manifest_sha256}"
+	exit 0
+fi
+
+if [[ -n "${fresh_reset_readiness}" && "${purge_state}" -ne 1 ]]; then
+	die "--fresh-reset-readiness requires --purge-state"
+fi
+if [[ "${dry_run}" -eq 1 && "${purge_state}" -ne 1 ]]; then
+	die "--dry-run is supported only for the guarded purge plan"
+fi
+if [[ -n "${fresh_reset_readiness}" ]]; then
+	[[ "${ETERRA_RELEASE_VERSION}" != "dev" ]] ||
+		die "--fresh-reset-readiness is valid only for a non-dev private-alpha release"
+	is_truthy "${NEXUS_V2_LOCAL_ONLY_RELEASE}" ||
+		die "guarded release reset requires NEXUS_V2_LOCAL_ONLY_RELEASE=1"
+fi
+if [[ "${ETERRA_RELEASE_VERSION}" != "dev" && "${purge_state}" -eq 1 && -z "${fresh_reset_readiness}" ]]; then
+	die "release deploys preserve live state unless --purge-state is paired with --fresh-reset-readiness"
+fi
+
 CHAIN_SOURCE_COMMIT="$(require_release_source "${REPO_ROOT}" "alpha chain" "${ETERRA_EXPECTED_CHAIN_COMMIT}")"
 export CHAIN_SOURCE_COMMIT
-
-if [[ "${ETERRA_RELEASE_VERSION}" != "dev" && "${purge_state}" -eq 1 ]]; then
-	die "release deploys must preserve live state; --purge-state is forbidden"
-fi
 
 bundle_dir="$(make_temp_dir)"
 remote_tmp_dir="${DEPLOY_ROOT}/tmp/node-deploy"
 render_runtime_env_bundle "${bundle_dir}"
 ensure_local_artifacts_dir
+if [[ -n "${fresh_reset_readiness}" ]]; then
+	stage_fresh_reset_readiness \
+		"${fresh_reset_readiness}" \
+		"${bundle_dir}/reset-readiness.json"
+fi
+if [[ "${ETERRA_RELEASE_VERSION}" != "dev" && "${purge_state}" -eq 1 ]]; then
+	[[ -n "${FRESH_RESET_READINESS_SHA256:-}" ]] ||
+		die "release purge requires a validated fresh-reset readiness packet"
+fi
+if [[ "${dry_run}" -eq 1 ]]; then
+	log "dry-run: guarded node purge validated; no SSH or live mutation performed"
+	log "dry-run: release=${ETERRA_RELEASE_VERSION} replacement_source=${CHAIN_SOURCE_COMMIT} readiness_sha256=${FRESH_RESET_READINESS_SHA256:-none}"
+	exit 0
+fi
 
 node_code_hash="$(compute_node_code_hash)"
 node_spec_hash="$(compute_node_spec_hash)"
@@ -98,6 +220,58 @@ remote_bash <<EOF
 set -euo pipefail
 mkdir -p "${remote_tmp_dir}" "${REMOTE_NODE_DIR}"
 EOF
+if [[ "${ETERRA_RELEASE_VERSION}" != "dev" && "${purge_state}" -eq 1 ]]; then
+	rsync_to_remote_no_delete \
+		"${FRESH_RESET_READINESS_STAGED_PATH}" \
+		"${remote_tmp_dir}/reset-readiness.json"
+	remote_root_bash <<EOF
+set -euo pipefail
+archive_root="${DEPLOY_ROOT}/archive/nexus-v2-fresh-reset/${FRESH_RESET_READINESS_SHA256}"
+component_dir="\${archive_root}/node"
+applied_marker="\${component_dir}/reset-applied.marker"
+[[ ! -e "\${applied_marker}" ]] || {
+	echo "[alpha-macmini2010] readiness packet was already consumed for the node reset" >&2
+	exit 1
+}
+mkdir -p "\${component_dir}"
+if [[ ! -e "\${component_dir}/deployment-identifiers.before" ]]; then
+	install -m 0400 "${remote_tmp_dir}/reset-readiness.json" "\${component_dir}/reset-readiness.json"
+	mkdir -p "\${component_dir}/shared-state.before"
+	if [[ -d "${REMOTE_STATE_DIR}" ]]; then
+		cp -a "${REMOTE_STATE_DIR}/." "\${component_dir}/shared-state.before/"
+	fi
+	{
+		printf 'deploy_root=%s\n' "${DEPLOY_ROOT}"
+		printf 'node_data_dir=%s\n' "${REMOTE_NODE_DATA_DIR}"
+		printf 'node_service=%s\n' "${REMOTE_NODE_SERVICE_NAME}.service"
+		printf 'node_dir=%s\n' "${REMOTE_NODE_DIR}"
+		printf 'readiness_sha256=%s\n' "${FRESH_RESET_READINESS_SHA256}"
+		printf 'readiness_release_id=%s\n' "${FRESH_RESET_RELEASE_ID}"
+		printf 'frozen_chain_source_commit=%s\n' "${FRESH_RESET_SOURCE_COMMIT}"
+		printf 'replacement_chain_source_commit=%s\n' "${CHAIN_SOURCE_COMMIT}"
+		printf 'frozen_block_number=%s\n' "${FRESH_RESET_GATE_BLOCK_NUMBER}"
+		printf 'frozen_block_hash=%s\n' "${FRESH_RESET_GATE_BLOCK_HASH}"
+	} >"\${component_dir}/deployment-identifiers.before"
+	: >"\${component_dir}/file-sha256.before"
+	for path in \
+		"${REMOTE_NODE_ENV_FILE}" \
+		"${REMOTE_NODE_BIN}" \
+		"${REMOTE_NODE_SPEC}" \
+		"${REMOTE_NODE_PLAIN_SPEC}" \
+		"${REMOTE_NODE_SERVICE_UNIT_FILE}"
+	do
+		if [[ -f "\${path}" ]]; then
+			shasum -a 256 "\${path}" >>"\${component_dir}/file-sha256.before"
+		fi
+	done
+	systemctl show "${REMOTE_NODE_SERVICE_NAME}.service" \
+		--property=Id,LoadState,ActiveState,SubState,FragmentPath \
+		>"\${component_dir}/service-identity.before" 2>/dev/null || true
+	chmod -R a-w "\${component_dir}"
+	chmod u+w "\${component_dir}"
+fi
+EOF
+fi
 
 log "syncing alpha solochain working tree to ${SSH_TARGET}"
 rsync_with_remote \
@@ -176,10 +350,24 @@ systemctl enable "${REMOTE_NODE_SERVICE_NAME}.service"
 
 if [[ "${purge_state}" -eq 1 ]]; then
 	echo "[alpha-macmini2010] node action: purge-state"
+	if [[ "${ETERRA_RELEASE_VERSION}" != "dev" ]]; then
+		archive_component_dir="${DEPLOY_ROOT}/archive/nexus-v2-fresh-reset/${FRESH_RESET_READINESS_SHA256:-}/node"
+		[[ ! -e "\${archive_component_dir}/reset-applied.marker" ]] || {
+			echo "[alpha-macmini2010] readiness packet was already consumed for the node reset" >&2
+			exit 1
+		}
+	fi
 	systemctl stop "${REMOTE_NODE_SERVICE_NAME}.service" >/dev/null 2>&1 || true
 	rm -rf "${REMOTE_NODE_DATA_DIR}"
 	mkdir -p "${REMOTE_NODE_DATA_DIR}"
 	chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "${REMOTE_NODE_DATA_DIR}"
+	if [[ "${ETERRA_RELEASE_VERSION}" != "dev" ]]; then
+		printf 'component=node\nreset_applied_at_utc=%s\nreplacement_source_commit=%s\n' \
+			"\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+			"${CHAIN_SOURCE_COMMIT}" \
+			>"\${archive_component_dir}/reset-applied.marker"
+		chmod 0440 "\${archive_component_dir}/reset-applied.marker"
+	fi
 fi
 
 if [[ "${node_restart_reason}" == "none" ]]; then

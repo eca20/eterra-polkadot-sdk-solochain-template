@@ -8,6 +8,9 @@ source "${SCRIPT_DIR}/lib.sh"
 load_env
 require_cmd ssh
 
+if [[ "${ETERRA_RELEASE_VERSION}" != "dev" ]]; then
+	die "direct release reset is forbidden; use deploy-node.sh --purge-state --fresh-reset-readiness READINESS.json"
+fi
 if [[ "${1:-}" != "--yes" ]]; then
 	die "refusing destructive reset without --yes"
 fi

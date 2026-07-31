@@ -2,14 +2,18 @@
   "checks": {
     "anomaliesAccounted": true,
     "boundedBatchWeightRespected": true,
+    "custodyDomainsMatch": true,
     "interruptedResumeSafe": true,
+    "lifecycleQuiescent": true,
     "nextCardIdMonotonic": true,
     "noCardDuplicated": true,
     "noCardLost": true,
     "noSilentReclassification": true,
     "ownershipIndexesMatch": true,
+    "retiredEconomiesQuiescent": true,
     "safeLegacyExitsPreserved": true,
     "subjectIndexesMatch": true,
+    "v2SidecarPrefixesAbsent": true,
     "v2WritesRemainPaused": true
   },
   "counts": {
@@ -23,8 +27,8 @@
     "nftWrapped": 0,
     "ordinary": 0
   },
-  "fromStorageVersion": 15,
-  "kind": "nexus-v2-v15-v16-migration-result",
+  "fromStorageVersion": 14,
+  "kind": "nexus-v2-v14-v16-migration-result",
   "legacyCreationSealed": true,
   "legacyWritesPaused": false,
   "migrationPhase": "Completed",
@@ -37,6 +41,7 @@
   "tryRuntimeLogSha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "v2Features": {
     "Conversion": false,
+    "MythicalAscension": false,
     "Packs": false,
     "Ranked": false
   }

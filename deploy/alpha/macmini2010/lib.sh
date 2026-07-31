@@ -9,6 +9,7 @@ ENV_FILE_EXAMPLE="${REPO_ROOT}/deploy/alpha/macmini2010.env.example"
 MEDIA_REPO_DIR_DEFAULT="${WORKSPACE_ROOT}/eterra-ipfs-media-service"
 AUTHORITY_REPO_DIR_DEFAULT="${WORKSPACE_ROOT}/SDKGen/Eterra"
 ARTIFACTS_DIR="${DEPLOY_LIB_DIR}/.artifacts"
+RESET_READINESS_VERIFIER="${REPO_ROOT}/scripts/nexus-v2-private-alpha/verify_reset_readiness.py"
 cleanup_paths=()
 
 die() {
@@ -52,7 +53,8 @@ require_release_source() {
 		die "${label} expected commit is required when ETERRA_RELEASE_VERSION is not dev"
 	fi
 
-	if [[ "${ETERRA_RELEASE_VERSION:-dev}" != "dev" ]]; then
+	if [[ "${ETERRA_RELEASE_VERSION:-dev}" != "dev" ]] &&
+		! is_truthy "${NEXUS_V2_LOCAL_ONLY_RELEASE:-0}"; then
 		local release_branch="release/${ETERRA_RELEASE_VERSION}"
 		[[ "$(git -C "${root}" rev-parse --verify "refs/heads/${release_branch}")" == "${actual_commit}" ]] ||
 			die "${label} local ${release_branch} is not pinned to ${actual_commit}"
@@ -62,6 +64,8 @@ require_release_source() {
 			die "${label} local release tag already exists; deploy and validate before tagging"
 		[[ -z "$(git -C "${root}" ls-remote origin "refs/tags/${ETERRA_RELEASE_VERSION}")" ]] ||
 			die "${label} remote release tag already exists; deploy and validate before tagging"
+	elif [[ "${ETERRA_RELEASE_VERSION:-dev}" != "dev" ]]; then
+		log "${label} uses explicit local-only release provenance; no release branch, tag, or remote lookup is required" >&2
 	fi
 
 	printf '%s\n' "${actual_commit}"
@@ -197,7 +201,9 @@ load_env() {
 	ETERRA_EXPECTED_MEDIA_COMMIT="${ETERRA_EXPECTED_MEDIA_COMMIT:-}"
 	ETERRA_EXPECTED_SDKGEN_COMMIT="${ETERRA_EXPECTED_SDKGEN_COMMIT:-}"
 	ALLOW_DIRTY_DEPLOY="${ALLOW_DIRTY_DEPLOY:-0}"
-	RUNTIME_SPEC_VERSION="${RUNTIME_SPEC_VERSION:-104}"
+	NEXUS_V2_LOCAL_ONLY_RELEASE="${NEXUS_V2_LOCAL_ONLY_RELEASE:-0}"
+	NEXUS_V2_RESET_READINESS_SHA256="${NEXUS_V2_RESET_READINESS_SHA256:-}"
+	RUNTIME_SPEC_VERSION="${RUNTIME_SPEC_VERSION:-106}"
 	RUNTIME_CODE_HASH="${RUNTIME_CODE_HASH:-unverified}"
 	MEDIA_RELEASE_CONTENT_SMOKE_URL="${MEDIA_RELEASE_CONTENT_SMOKE_URL:-}"
 	ETERRA_ALPHA_SUDO_MNEMONIC="${ETERRA_ALPHA_SUDO_MNEMONIC:-}"
@@ -262,10 +268,12 @@ load_env() {
 	fi
 	if [[ "${ETERRA_RELEASE_VERSION}" != "dev" ]]; then
 		! is_truthy "${ALLOW_DIRTY_DEPLOY}" || die "ALLOW_DIRTY_DEPLOY is forbidden for release deploys"
-		[[ "${RUNTIME_SPEC_VERSION}" == "104" ]] || die "release deploy requires runtime spec 104"
+		[[ "${RUNTIME_SPEC_VERSION}" == "106" ]] || die "release deploy requires runtime spec 106"
 		[[ "${RUNTIME_CODE_HASH}" =~ ^0x[0-9a-fA-F]{64}$ ]] || die "release deploy requires a verified runtime code hash"
 		[[ "${KUBO_IMAGE}" == *@sha256:* ]] || die "release deploy requires KUBO_IMAGE pinned by registry digest"
 		[[ -n "${MEDIA_RELEASE_CONTENT_SMOKE_URL}" ]] || die "release deploy requires MEDIA_RELEASE_CONTENT_SMOKE_URL"
+	elif is_truthy "${NEXUS_V2_LOCAL_ONLY_RELEASE}"; then
+		die "NEXUS_V2_LOCAL_ONLY_RELEASE is valid only for a non-dev private-alpha release"
 	fi
 
 	SSH_TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
@@ -473,6 +481,46 @@ hash_file() {
 	require_cmd shasum
 	[[ -f "${path}" ]] || die "hash input file not found: ${path}"
 	shasum -a 256 "${path}" | awk '{print $1}'
+}
+
+stage_fresh_reset_readiness() {
+	local input_path="$1"
+	local staged_path="$2"
+	local summary
+
+	require_cmd jq
+	require_cmd python3
+	require_cmd shasum
+	[[ "${ETERRA_RELEASE_VERSION}" != "dev" ]] ||
+		die "fresh-reset readiness is valid only for a non-dev private-alpha release"
+	is_truthy "${NEXUS_V2_LOCAL_ONLY_RELEASE}" ||
+		die "guarded release reset requires NEXUS_V2_LOCAL_ONLY_RELEASE=1"
+	[[ -n "${NEXUS_V2_RESET_READINESS_SHA256}" ]] ||
+		die "NEXUS_V2_RESET_READINESS_SHA256 is required for a guarded release reset"
+	[[ "${NEXUS_V2_RESET_READINESS_SHA256}" =~ ^[0-9a-f]{64}$ ]] ||
+		die "NEXUS_V2_RESET_READINESS_SHA256 must be 64 lowercase hex characters"
+	[[ -e "${input_path}" ]] || die "fresh-reset readiness packet not found: ${input_path}"
+	[[ ! -L "${input_path}" ]] || die "fresh-reset readiness packet must not be a symlink"
+	[[ -f "${input_path}" ]] || die "fresh-reset readiness packet must be a regular file"
+
+	install -m 0400 "${input_path}" "${staged_path}"
+	summary="$(
+		python3 "${RESET_READINESS_VERIFIER}" \
+			--readiness "${staged_path}" \
+			--expected-sha256 "${NEXUS_V2_RESET_READINESS_SHA256}"
+	)" || die "fresh-reset readiness verification failed"
+	FRESH_RESET_READINESS_SHA256="$(jq -r '.sha256' <<<"${summary}")"
+	FRESH_RESET_RELEASE_ID="$(jq -r '.releaseId' <<<"${summary}")"
+	FRESH_RESET_SOURCE_COMMIT="$(jq -r '.sourceCommit' <<<"${summary}")"
+	FRESH_RESET_GATE_BLOCK_NUMBER="$(jq -r '.gateFinalizedBlock.number' <<<"${summary}")"
+	FRESH_RESET_GATE_BLOCK_HASH="$(jq -r '.gateFinalizedBlock.hash' <<<"${summary}")"
+	[[ -n "${CHAIN_SOURCE_COMMIT:-}" ]] ||
+		die "guarded release reset requires the exact current chain source commit"
+	[[ "${FRESH_RESET_SOURCE_COMMIT}" == "${CHAIN_SOURCE_COMMIT}" ]] ||
+		die "fresh-reset readiness chain source commit does not match the current chain source commit"
+	FRESH_RESET_READINESS_STAGED_PATH="${staged_path}"
+	export FRESH_RESET_READINESS_SHA256 FRESH_RESET_RELEASE_ID FRESH_RESET_SOURCE_COMMIT
+	export FRESH_RESET_GATE_BLOCK_NUMBER FRESH_RESET_GATE_BLOCK_HASH FRESH_RESET_READINESS_STAGED_PATH
 }
 
 combine_hash_values() {

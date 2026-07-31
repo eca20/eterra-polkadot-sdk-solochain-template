@@ -8,6 +8,9 @@ media_args=()
 authority_args=()
 deploy_authority=0
 seed_nova_rail_config=0
+fresh=0
+fresh_reset_readiness=""
+dry_run=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -15,8 +18,17 @@ while [[ $# -gt 0 ]]; do
 			node_args+=("$1")
 			;;
 		--fresh)
+			fresh=1
 			node_args+=("--purge-state")
 			media_args+=("--fresh")
+			;;
+		--fresh-reset-readiness)
+			[[ $# -ge 2 ]] || { echo "--fresh-reset-readiness requires a packet path" >&2; exit 2; }
+			fresh_reset_readiness="$2"
+			shift
+			;;
+		--dry-run)
+			dry_run=1
 			;;
 		--with-arcade-authority)
 			deploy_authority=1
@@ -46,13 +58,15 @@ while [[ $# -gt 0 ]]; do
 		--help|-h)
 			cat <<'EOF'
 Usage: deploy-all.sh [--purge-state] [--fresh] [--with-arcade-authority] [--authorize-arcade-authority] [--seed-nova-rail-config]
+                     [--fresh-reset-readiness READINESS.json] [--dry-run]
                      [--build-media-candidate OUTPUT.json]
                      [--promote-media-candidate CANDIDATE.json --media-evidence OUTPUT.json]
 
 Normal deploys preserve alpha chain state.
 Pass --purge-state to wipe the remote alpha node base path before restart.
 Alpha spec/genesis changes are only applied when --purge-state is set.
-Pass --fresh to purge chain state and reset the alpha media/IPFS volumes after deploy.
+Release --fresh is accepted only with --fresh-reset-readiness and immutable
+media candidate promotion. --dry-run validates that guarded plan before SSH.
 Pass --with-arcade-authority to deploy the Nova Rail authority relay API/operator.
 Pass --authorize-arcade-authority to deploy and run the one-shot relay authorization operator.
 Pass --seed-nova-rail-config to run the explicit idempotent ArcadeCore seed after deploy.
@@ -68,6 +82,17 @@ EOF
 	esac
 	shift
 done
+
+if [[ -n "${fresh_reset_readiness}" ]]; then
+	[[ "${fresh}" -eq 1 ]] || { echo "--fresh-reset-readiness requires --fresh" >&2; exit 2; }
+	node_args+=("--fresh-reset-readiness" "${fresh_reset_readiness}")
+	media_args+=("--fresh-reset-readiness" "${fresh_reset_readiness}")
+fi
+if [[ "${dry_run}" -eq 1 ]]; then
+	[[ "${fresh}" -eq 1 ]] || { echo "--dry-run requires --fresh" >&2; exit 2; }
+	node_args+=("--dry-run")
+	media_args+=("--dry-run")
+fi
 
 "${SCRIPT_DIR}/deploy-node.sh" "${node_args[@]}"
 "${SCRIPT_DIR}/deploy-media.sh" "${media_args[@]}"

@@ -49,6 +49,7 @@
   "tcg": {
     "features": {
       "Conversion": false,
+      "MythicalAscension": false,
       "Packs": false,
       "Ranked": false
     },
