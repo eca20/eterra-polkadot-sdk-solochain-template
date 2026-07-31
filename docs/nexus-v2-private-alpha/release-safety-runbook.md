@@ -48,10 +48,48 @@ capture uses the SHA-256-pinned `final_freeze.py` plan described below. Do not
 use `restore-alpha-state.sh`, `reset-node.sh`, `reset-media.sh`,
 `deploy-all.sh --fresh`, or any purge option at this stage.
 
+### Linux-authoritative runtime bundle
+
+The macOS-built spec-106 bundle is superseded because absolute host source
+paths made its compact Wasm target-specific. It remains input evidence only:
+its V14 recovery Wasm, TCG V14 observation, host try-runtime CLI, host migration
+verifier, pending-review record, and Metadata V15 compatibility baseline are
+preserved with their original source commit and hashes. Its production Wasm is
+never copied into the replacement bundle or accepted as a release target.
+
+Assemble the replacement from the closed, checksum-verified Linux build root.
+The assembler rechecks the build attestation against its source commit, builds
+the try-runtime Wasm and Linux migration verifier from an exact Git archive in
+the digest-pinned Linux image, and runs the ELF64/x86-64 node only through a
+network-disabled container with a read-only root filesystem and a private,
+ephemeral writable evidence workspace. The derived dev spec, embedded
+`:code`, genesis, runtime version, Metadata V15 SCALE, and decoded metadata JSON
+are checksummed. Both metadata files must be byte-identical to the prior
+baseline; a structural-only comparison is insufficient.
+
+```bash
+./scripts/release/assemble-nexus-v2-linux-runtime-bundle.py \
+  --linux-build-root /private/path/to/linux-amd64-node-SOURCE \
+  --prior-runtime-bundle /private/path/to/superseded-macos-runtime-bundle \
+  --source-commit 40_HEX_LINUX_BUILD_SOURCE \
+  --expected-production-wasm-sha256 64_HEX_LINUX_WASM \
+  --expected-superseded-wasm-sha256 64_HEX_MACOS_WASM \
+  --expected-metadata-scale-sha256 64_HEX_METADATA_SCALE \
+  --expected-metadata-json-sha256 64_HEX_METADATA_JSON \
+  --try-runtime-revision 40_HEX_REVISION \
+  --subxt-bin /reviewed/path/subxt \
+  --subxt-sha256 64_HEX_SUBXT \
+  --output /private/path/to/runtime-release-spec106-linux
+```
+
+The command has no live RPC input and refuses a dirty assembly-tool worktree,
+an unpinned image/tool, a non-x86-64 build, a changed runtime source surface,
+the superseded production Wasm, or any metadata difference.
+
 ### Immutable node candidate and target identity
 
-Build the replacement candidate from the already-built `retry1` runtime bundle
-in a clean exact deployment worktree. The private override file is a closed,
+Build the replacement candidate from the Linux-authoritative runtime bundle in
+a clean exact deployment worktree. The private override file is a closed,
 address-only JSON document; seed phrases and secret URIs are rejected and are
 never copied into either output:
 

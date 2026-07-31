@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,9 +22,54 @@ def fail(message: str) -> None:
     raise SystemExit(1)
 
 
-def inspect_ss58(node_bin: str, secret_or_suri: str, scheme: str) -> str:
-    cmd = [
+def node_command(
+    node_bin: str,
+    arguments: list[str],
+    *,
+    node_runner: str | None,
+    node_workspace: str | None,
+) -> list[str]:
+    if node_runner is None:
+        if node_workspace is not None:
+            fail("--node-workspace requires --node-runner")
+        return [node_bin, *arguments]
+    if node_workspace is None:
+        fail("--node-runner requires --node-workspace")
+    runner = Path(node_runner).resolve()
+    workspace = Path(node_workspace).resolve()
+    node = Path(node_bin).resolve()
+    if not runner.is_file() or not os.access(runner, os.X_OK):
+        fail("node runner must be an executable regular file")
+    if not workspace.is_dir() or workspace.is_symlink():
+        fail("node workspace must be a regular directory")
+    try:
+        node_name = str(node.relative_to(workspace))
+    except ValueError:
+        fail("runner node must be inside node workspace")
+    if "/" in node_name or not node.is_file() or not os.access(node, os.X_OK):
+        fail("runner node must be an executable workspace basename")
+    return [
+        str(runner),
+        "--workspace",
+        str(workspace),
+        "--node",
+        node_name,
+        "--",
+        *arguments,
+    ]
+
+
+def inspect_ss58(
+    node_bin: str,
+    secret_or_suri: str,
+    scheme: str,
+    *,
+    node_runner: str | None,
+    node_workspace: str | None,
+) -> str:
+    cmd = node_command(
         node_bin,
+        [
         "key",
         "inspect",
         "--scheme",
@@ -31,7 +77,10 @@ def inspect_ss58(node_bin: str, secret_or_suri: str, scheme: str) -> str:
         "--output-type",
         "json",
         secret_or_suri,
-    ]
+        ],
+        node_runner=node_runner,
+        node_workspace=node_workspace,
+    )
     try:
         output = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
     except FileNotFoundError:
@@ -50,12 +99,17 @@ def inspect_ss58(node_bin: str, secret_or_suri: str, scheme: str) -> str:
     return address
 
 
-def build_denylist(node_bin: str) -> set[str]:
+def build_denylist(
+    node_bin: str,
+    *,
+    node_runner: str | None,
+    node_workspace: str | None,
+) -> set[str]:
     denylist: set[str] = set()
     for name in DEV_NAMES:
-        denylist.add(inspect_ss58(node_bin, f"//{name}", "sr25519"))
-        denylist.add(inspect_ss58(node_bin, f"//{name}//stash", "sr25519"))
-        denylist.add(inspect_ss58(node_bin, f"//{name}", "ed25519"))
+        denylist.add(inspect_ss58(node_bin, f"//{name}", "sr25519", node_runner=node_runner, node_workspace=node_workspace))
+        denylist.add(inspect_ss58(node_bin, f"//{name}//stash", "sr25519", node_runner=node_runner, node_workspace=node_workspace))
+        denylist.add(inspect_ss58(node_bin, f"//{name}", "ed25519", node_runner=node_runner, node_workspace=node_workspace))
     return denylist
 
 
@@ -83,6 +137,8 @@ def parse_args() -> argparse.Namespace:
         default="./target/release/solochain-eterra-node",
         help="Node binary path used for `key inspect`.",
     )
+    parser.add_argument("--node-runner", help="Digest-pinned Linux runner for node commands.")
+    parser.add_argument("--node-workspace", help="Read-only workspace mounted at /work by the runner.")
     return parser.parse_args()
 
 
@@ -159,7 +215,11 @@ def main() -> None:
     if not isinstance(initial_servers, list):
         fail("alpha spec initialServers must be an array")
 
-    denylist = build_denylist(args.node_bin)
+    denylist = build_denylist(
+        args.node_bin,
+        node_runner=args.node_runner,
+        node_workspace=args.node_workspace,
+    )
     spec_strings = walk_strings(spec)
     offenders = sorted({value for value in spec_strings if value in denylist})
     if offenders:

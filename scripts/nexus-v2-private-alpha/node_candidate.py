@@ -21,9 +21,6 @@ import struct
 import subprocess
 import sys
 import tempfile
-import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -32,6 +29,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FINALIZE_ALPHA = REPO_ROOT / "scripts/finalize-alpha-spec.py"
 VERIFY_ALPHA = REPO_ROOT / "scripts/verify-alpha-spec.py"
 LINUX_AMD64_RUNNER = REPO_ROOT / "scripts/release/linux-amd64-node-runner.sh"
+LINUX_ALPHA_GENESIS_PROBE = REPO_ROOT / "scripts/release/linux-alpha-genesis-probe.py"
+LINUX_RUNTIME_PROBE_RUNNER = REPO_ROOT / "scripts/release/linux-runtime-bundle-probe-runner.sh"
 LINUX_AMD64_DOCKERFILE = REPO_ROOT / "scripts/release/Dockerfile.node-linux-amd64"
 CODE_STORAGE_KEY = "0x3a636f6465"
 TARGET_SPEC_VERSION = 106
@@ -390,13 +389,28 @@ def verify_runtime_bundle(root: Path) -> dict[str, Any]:
     wasm_sha = ensure_sha(artifacts.get("stagedProductionWasmSha256"), "production Wasm SHA-256")
     metadata_sha = ensure_sha(artifacts.get("metadataScaleSha256"), "runtime metadata SHA-256")
     require(listed["solochain-eterra-node"] == node_sha, "runtime manifest native-node hash mismatch")
+    inspect_linux_x86_64_elf(root / "solochain-eterra-node", "runtime bundle Linux node")
     require(listed["runtime-spec-106.compact.compressed.wasm"] == wasm_sha, "runtime manifest Wasm hash mismatch")
     require(listed.get("runtime-metadata.scale") == metadata_sha, "runtime manifest metadata hash mismatch")
     metadata_prefix = (root / "runtime-metadata.scale").read_bytes()[:5]
     require(len(metadata_prefix) == 5 and metadata_prefix[:4] == b"meta", "runtime metadata SCALE magic mismatch")
     metadata_version = metadata_prefix[4]
     require(metadata_version == 15, "spec-106 target metadata must be V15")
-    require(manifest.get("runtimeIdentity", {}).get("stagedProductionMatchesTemporaryNodeEmbeddedCode") is True, "runtime bundle did not prove embedded production code")
+    runtime_identity = manifest.get("runtimeIdentity")
+    require(isinstance(runtime_identity, dict), "runtime bundle identity is missing")
+    require(runtime_identity.get("stagedProductionMatchesTemporaryNodeEmbeddedCode") is True, "runtime bundle did not prove embedded production code")
+    require(runtime_identity.get("authoritativeTargetPlatform") == TARGET_PLATFORM, "runtime bundle target platform mismatch")
+    require(runtime_identity.get("nativeHostExecutionAllowed") is False, "runtime bundle permits native host execution fallback")
+    require(runtime_identity.get("probeRunnerNetworkDisabled") is True, "runtime bundle did not prove a network-disabled Linux probe")
+    require(
+        runtime_identity.get("candidateRunnerSha256") == sha256_file(regular_file(LINUX_AMD64_RUNNER, "Linux/amd64 node runner", executable=True)),
+        "runtime bundle candidate runner identity mismatch",
+    )
+    require(
+        runtime_identity.get("probeRunnerSha256")
+        == sha256_file(regular_file(LINUX_RUNTIME_PROBE_RUNNER, "Linux runtime-probe runner", executable=True)),
+        "runtime bundle probe runner identity mismatch",
+    )
     authorizations = manifest.get("authorizations")
     require(isinstance(authorizations, dict), "runtime bundle authorization block is missing")
     require(authorizations.get("publicRelease") is False, "runtime bundle permits public release")
@@ -427,19 +441,40 @@ def run_checked(command: Sequence[str], label: str, stdout_path: Path | None = N
 
 
 def finalize_specs(node: Path, overrides: Path, output: Path) -> None:
-    run_checked(
-        [
-            sys.executable,
-            str(FINALIZE_ALPHA),
-            "--node-bin",
-            str(node),
-            "--overrides",
-            str(overrides),
-            "--out-dir",
-            str(output),
-        ],
-        "Alpha spec finalization",
-    )
+    runner = regular_file(LINUX_AMD64_RUNNER, "Linux/amd64 node runner", executable=True)
+    inspect_linux_x86_64_elf(node, "runtime bundle Linux spec builder")
+    workspace = output.parent / f".{output.name}-linux-workspace"
+    require(not workspace.exists(), "Linux spec-finalization workspace already exists")
+    workspace.mkdir(mode=0o700)
+    try:
+        workspace_node = workspace / "solochain-eterra-node"
+        workspace_overrides = workspace / "alpha-public-overrides.json"
+        workspace_output = workspace / "output"
+        shutil.copy2(node, workspace_node)
+        os.chmod(workspace_node, 0o755)
+        shutil.copyfile(overrides, workspace_overrides)
+        run_checked(
+            [
+                sys.executable,
+                str(FINALIZE_ALPHA),
+                "--node-bin",
+                str(workspace_node),
+                "--node-runner",
+                str(runner),
+                "--node-workspace",
+                str(workspace),
+                "--overrides",
+                str(workspace_overrides),
+                "--out-dir",
+                str(workspace_output),
+            ],
+            "containerized Linux Alpha spec finalization",
+        )
+        output.mkdir(mode=0o700)
+        shutil.copyfile(workspace_output / "alpha-plain.json", output / "alpha-plain.json")
+        shutil.copyfile(workspace_output / "alpha-raw.json", output / "alpha-raw.json")
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
     regular_file(output / "alpha-plain.json", "finalized Alpha plain spec")
     regular_file(output / "alpha-raw.json", "finalized Alpha raw spec")
 
@@ -511,72 +546,56 @@ def prove_deployment_node(
         }
 
 
-def rpc_request(port: int, method: str, params: list[Any]) -> Any:
-    body = json.dumps({"id": 1, "jsonrpc": "2.0", "method": method, "params": params}).encode()
-    request = urllib.request.Request(
-        f"http://127.0.0.1:{port}",
-        data=body,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(request, timeout=2) as response:
-        value = json.loads(response.read())
-    require(value.get("error") is None, f"temporary node RPC error for {method}")
-    return value.get("result")
-
-
 def inspect_genesis(node: Path, raw_spec: Path, rpc_port: int, p2p_port: int) -> dict[str, Any]:
-    log_file = tempfile.NamedTemporaryFile(prefix="nexus-v2-alpha-genesis.", suffix=".log", delete=False)
-    log_path = Path(log_file.name)
-    process: subprocess.Popen[bytes] | None = None
-    try:
-        process = subprocess.Popen(
+    runner = regular_file(LINUX_AMD64_RUNNER, "Linux/amd64 node runner", executable=True)
+    probe = regular_file(LINUX_ALPHA_GENESIS_PROBE, "Linux Alpha genesis probe", executable=True)
+    inspect_linux_x86_64_elf(node, "runtime bundle Linux genesis node")
+    require(rpc_port != p2p_port, "temporary Alpha ports must differ")
+    with tempfile.TemporaryDirectory(prefix="nexus-v2-linux-alpha-genesis.") as temporary:
+        workspace = Path(temporary)
+        workspace_node = workspace / "solochain-eterra-node"
+        workspace_raw = workspace / "alpha-raw.json"
+        workspace_probe = workspace / probe.name
+        shutil.copy2(node, workspace_node)
+        os.chmod(workspace_node, 0o755)
+        shutil.copyfile(raw_spec, workspace_raw)
+        shutil.copy2(probe, workspace_probe)
+        os.chmod(workspace_probe, 0o755)
+        completed = subprocess.run(
             [
-                str(node),
+                str(runner),
+                "--workspace",
+                str(workspace),
+                "--node",
+                workspace_probe.name,
+                "--",
+                "--node",
+                f"/work/{workspace_node.name}",
                 "--chain",
-                str(raw_spec),
-                "--tmp",
+                f"/work/{workspace_raw.name}",
                 "--rpc-port",
                 str(rpc_port),
-                "--listen-addr",
-                f"/ip4/127.0.0.1/tcp/{p2p_port}",
-                "--rpc-methods",
-                "Safe",
-                "--no-telemetry",
-                "--no-prometheus",
-                "--no-mdns",
+                "--p2p-port",
+                str(p2p_port),
             ],
-            stdout=log_file,
+            check=False,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            text=True,
         )
-        deadline = time.monotonic() + 90
-        while time.monotonic() < deadline:
-            require(process.poll() is None, f"temporary Alpha genesis node exited; log: {log_path}")
-            try:
-                version = rpc_request(rpc_port, "state_getRuntimeVersion", [])
-                genesis_hash = rpc_request(rpc_port, "chain_getBlockHash", [0])
-                chain_name = rpc_request(rpc_port, "system_chain", [])
-                break
-            except (CandidateError, OSError, urllib.error.URLError, json.JSONDecodeError):
-                time.sleep(0.25)
-        else:
-            raise CandidateError(f"temporary Alpha genesis RPC did not become ready; log: {log_path}")
-    finally:
-        if process is not None and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=10)
-        log_file.close()
-    require(isinstance(version, dict) and version.get("specVersion") == TARGET_SPEC_VERSION, "temporary Alpha node spec version mismatch")
+        require(completed.returncode == 0, "containerized Linux Alpha genesis probe failed")
+        try:
+            value = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise CandidateError("containerized Linux Alpha genesis probe returned invalid JSON") from exc
+    require(value.get("kind") == "nexus-v2-linux-alpha-genesis-probe", "Linux Alpha genesis proof kind mismatch")
+    require(value.get("runnerNetworkDisabled") is True, "Linux Alpha genesis proof lacks network isolation")
+    require(value.get("specVersion") == TARGET_SPEC_VERSION, "temporary Alpha node spec version mismatch")
+    genesis_hash = value.get("genesisHash")
+    chain_name = value.get("chainName")
     require(isinstance(genesis_hash, str) and bool(HASH256_RE.fullmatch(genesis_hash)), "invalid Alpha genesis hash")
     require(isinstance(chain_name, str) and chain_name, "temporary Alpha chain name is missing")
-    try:
-        log_path.unlink()
-    except OSError:
-        pass
-    return {"genesisHash": genesis_hash, "chainName": chain_name, "specVersion": version["specVersion"]}
+    return {"genesisHash": genesis_hash, "chainName": chain_name, "specVersion": value["specVersion"]}
 
 
 def raw_runtime_code(raw_spec: Mapping[str, Any]) -> bytes:
@@ -720,6 +739,7 @@ def command_build(args: argparse.Namespace) -> None:
             "finalizeAlphaToolSha256": sha256_file(FINALIZE_ALPHA),
             "verifyAlphaToolSha256": sha256_file(VERIFY_ALPHA),
             "linuxAmd64RunnerSha256": sha256_file(LINUX_AMD64_RUNNER),
+            "linuxAlphaGenesisProbeSha256": sha256_file(LINUX_ALPHA_GENESIS_PROBE),
         },
         "containsSecrets": False,
         "remoteBuildAllowed": False,
@@ -935,6 +955,7 @@ def verify_candidate(manifest_path: Path) -> dict[str, Any]:
         == {
             "finalizeAlphaToolSha256",
             "linuxAmd64RunnerSha256",
+            "linuxAlphaGenesisProbeSha256",
             "nodeCandidateToolSha256",
             "verifyAlphaToolSha256",
         },
@@ -943,6 +964,11 @@ def verify_candidate(manifest_path: Path) -> dict[str, Any]:
     for name, digest in builder.items():
         ensure_sha(digest, f"candidate builder SHA-256 for {name}")
     require(builder["linuxAmd64RunnerSha256"] == proof["runnerSha256"], "candidate runner pins disagree")
+    require(
+        builder["linuxAlphaGenesisProbeSha256"]
+        == sha256_file(regular_file(LINUX_ALPHA_GENESIS_PROBE, "Linux Alpha genesis probe", executable=True)),
+        "candidate Alpha genesis probe identity mismatch",
+    )
     return {
         "schemaVersion": 2,
         "kind": "nexus-v2-private-alpha-node-candidate-verification",

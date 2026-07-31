@@ -1,0 +1,54 @@
+FROM --platform=linux/amd64 docker.io/library/rust:1.89-bookworm@sha256:948f9b08a66e7fe01b03a98ef1c7568292e07ec2e4fe90d88c07bb14563c84ff AS builder
+
+ARG SOURCE_COMMIT
+ARG SOURCE_TREE
+ARG SOURCE_DATE_EPOCH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    clang \
+    cmake \
+    git \
+    libssl-dev \
+    pkg-config \
+    protobuf-compiler \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN test "$(rustc --version)" = "rustc 1.89.0 (29483883e 2025-08-04)" \
+ && test "$(uname -s)" = "Linux" \
+ && test "$(uname -m)" = "x86_64" \
+ && rustup component add rust-src --toolchain 1.89.0-x86_64-unknown-linux-gnu \
+ && rustup target add wasm32-unknown-unknown --toolchain 1.89.0-x86_64-unknown-linux-gnu \
+ && test -f "$(rustc --print sysroot)/lib/rustlib/src/rust/library/Cargo.toml"
+
+WORKDIR /source
+COPY . .
+
+ENV CARGO_INCREMENTAL=0 \
+    CARGO_NET_GIT_FETCH_WITH_CLI=true
+
+RUN --mount=type=cache,id=nexus-v2-amd64-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=nexus-v2-amd64-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=nexus-v2-amd64-target,target=/source/target \
+    test -n "${SOURCE_COMMIT}" \
+ && test -n "${SOURCE_TREE}" \
+ && test -n "${SOURCE_DATE_EPOCH}" \
+ && export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
+ && cargo build --locked --release -p solochain-eterra-runtime --features try-runtime,runtime-production \
+ && install -m 0644 target/release/wbuild/solochain-eterra-runtime/solochain_eterra_runtime.compact.compressed.wasm /tmp/runtime-spec-106.try-runtime.wasm \
+ && cargo build --locked --release -p nexus-v2-migration-verifier \
+ && install -m 0755 target/release/nexus-v2-migration-verifier /tmp/nexus-v2-migration-verifier.linux-amd64 \
+ && printf '%s\n' "${SOURCE_COMMIT}" >/tmp/source-commit.txt \
+ && printf '%s\n' "${SOURCE_TREE}" >/tmp/source-tree.txt \
+ && printf '%s\n' "${SOURCE_DATE_EPOCH}" >/tmp/source-date-epoch.txt \
+ && rustc --version >/tmp/rustc-version.txt \
+ && cargo --version >/tmp/cargo-version.txt
+
+FROM scratch AS export
+COPY --from=builder /tmp/runtime-spec-106.try-runtime.wasm /runtime-spec-106.try-runtime.wasm
+COPY --from=builder /tmp/nexus-v2-migration-verifier.linux-amd64 /nexus-v2-migration-verifier.linux-amd64
+COPY --from=builder /tmp/source-commit.txt /source-commit.txt
+COPY --from=builder /tmp/source-tree.txt /source-tree.txt
+COPY --from=builder /tmp/source-date-epoch.txt /source-date-epoch.txt
+COPY --from=builder /tmp/rustc-version.txt /rustc-version.txt
+COPY --from=builder /tmp/cargo-version.txt /cargo-version.txt

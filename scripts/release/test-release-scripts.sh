@@ -22,21 +22,26 @@ NODE_CANDIDATE_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_node_candid
 FROZEN_SNAPSHOT_PROOF_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_frozen_snapshot_proof.py"
 LINUX_AMD64_NODE_BUILD="${ROOT_DIR}/scripts/release/build-linux-amd64-node.sh"
 LINUX_AMD64_NODE_RUNNER="${ROOT_DIR}/scripts/release/linux-amd64-node-runner.sh"
+LINUX_RUNTIME_BUNDLE_ASSEMBLER="${ROOT_DIR}/scripts/release/assemble-nexus-v2-linux-runtime-bundle.py"
+LINUX_RUNTIME_PROBE_RUNNER="${ROOT_DIR}/scripts/release/linux-runtime-bundle-probe-runner.sh"
+LINUX_RUNTIME_BUNDLE_TEST="${ROOT_DIR}/scripts/release/test_linux_runtime_bundle_assembler.py"
 CLEAN_BUILD="${ROOT_DIR}/scripts/clean-build-artifacts.sh"
 DEPLOY="${ROOT_DIR}/scripts/deploy.sh"
 
 bash -n "$BUILD" "$NEXUS_V2_BUNDLE" "$REHEARSE" "$MEDIA_DEPLOY" "$NODE_DEPLOY" "$DEPLOY_ALL" \
 	"$DEPLOY_LIB" "$RESET_NODE" "$RESET_MEDIA" "$CLEAN_BUILD" "$DEPLOY" \
 	"${ROOT_DIR}/deploy/macmini2010/deploy-node.sh" "$FINAL_FREEZE_CHAIN_DRIVER" \
-	"$LINUX_AMD64_NODE_BUILD" "$LINUX_AMD64_NODE_RUNNER"
+	"$LINUX_AMD64_NODE_BUILD" "$LINUX_AMD64_NODE_RUNNER" "$LINUX_RUNTIME_PROBE_RUNNER"
 python3 -m unittest \
 	"${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_verify_reset_readiness.py"
 python3 -m unittest "${POST_CUTOVER_COORDINATOR_TEST}"
 python3 -m unittest "$FINAL_FREEZE_TEST" "$NODE_CANDIDATE_TEST" "$FROZEN_SNAPSHOT_PROOF_TEST"
+python3 -m unittest "$LINUX_RUNTIME_BUNDLE_TEST"
 "$BUILD" --help >/dev/null
 "$NEXUS_V2_BUNDLE" --help >/dev/null
 "$REHEARSE" --help >/dev/null
 "$LINUX_AMD64_NODE_BUILD" --help >/dev/null
+"$LINUX_RUNTIME_BUNDLE_ASSEMBLER" --help >/dev/null
 rg -q '948f9b08a66e7fe01b03a98ef1c7568292e07ec2e4fe90d88c07bb14563c84ff' \
 	"${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
 rg -Fq 'rustup component add rust-src --toolchain 1.89.0-x86_64-unknown-linux-gnu' \
@@ -47,6 +52,12 @@ rg -q 'nexus-v2-amd64-cargo-registry' "${ROOT_DIR}/scripts/release/Dockerfile.no
 rg -q 'nexus-v2-amd64-cargo-git' "${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
 rg -q 'nexus-v2-amd64-target' "${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
 rg -q -- '--platform linux/amd64' "$LINUX_AMD64_NODE_BUILD"
+rg -q -- '--network none' "$LINUX_RUNTIME_PROBE_RUNNER"
+rg -q 'nativeHostExecutionAllowed.*False' "$LINUX_RUNTIME_BUNDLE_ASSEMBLER"
+rg -q 'old macOS production Wasm cannot be accepted' "$LINUX_RUNTIME_BUNDLE_ASSEMBLER"
+rg -q 'exactScaleBytesEqual.*True' "$LINUX_RUNTIME_BUNDLE_ASSEMBLER"
+rg -q 'exactDecodedJsonBytesEqual.*True' "$LINUX_RUNTIME_BUNDLE_ASSEMBLER"
+rg -q 'productionWasmCopiedIntoBundle.*False' "$LINUX_RUNTIME_BUNDLE_ASSEMBLER"
 
 rg -q -- '--expected-source-commit' "$BUILD"
 rg -q 'status --porcelain --untracked-files=all' "$BUILD"

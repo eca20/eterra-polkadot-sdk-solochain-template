@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,54 @@ def run(cmd: list[str], *, output_path: Path | None = None) -> None:
         fail(f"command not found: {cmd[0]}")
     except subprocess.CalledProcessError as exc:
         fail(f"command failed ({exc.returncode}): {' '.join(cmd)}")
+
+
+def node_command(
+    node_bin: str,
+    arguments: list[str],
+    *,
+    node_runner: str | None,
+    node_workspace: str | None,
+) -> list[str]:
+    if node_runner is None:
+        if node_workspace is not None:
+            fail("--node-workspace requires --node-runner")
+        return [node_bin, *arguments]
+    if node_workspace is None:
+        fail("--node-runner requires --node-workspace")
+    runner = Path(node_runner).resolve()
+    workspace = Path(node_workspace).resolve()
+    node = Path(node_bin).resolve()
+    if not runner.is_file() or not os.access(runner, os.X_OK):
+        fail("node runner must be an executable regular file")
+    if not workspace.is_dir() or workspace.is_symlink():
+        fail("node workspace must be a regular directory")
+    try:
+        node_name = str(node.relative_to(workspace))
+    except ValueError:
+        fail("runner node must be inside node workspace")
+    if "/" in node_name or not node.is_file() or not os.access(node, os.X_OK):
+        fail("runner node must be an executable workspace basename")
+    mapped: list[str] = []
+    for argument in arguments:
+        candidate = Path(argument)
+        if candidate.is_absolute():
+            try:
+                relative = candidate.resolve().relative_to(workspace)
+            except ValueError:
+                fail(f"node argument path escapes runner workspace: {argument}")
+            mapped.append("/work/" + relative.as_posix())
+        else:
+            mapped.append(argument)
+    return [
+        str(runner),
+        "--workspace",
+        str(workspace),
+        "--node",
+        node_name,
+        "--",
+        *mapped,
+    ]
 
 
 def ensure_list_of_strings(name: str, value: Any, *, allow_empty: bool = False) -> list[str]:
@@ -114,6 +163,14 @@ def parse_args() -> argparse.Namespace:
         help="Node binary used for build-spec generation.",
     )
     parser.add_argument(
+        "--node-runner",
+        help="Digest-pinned Linux runner; when set the node is never executed natively.",
+    )
+    parser.add_argument(
+        "--node-workspace",
+        help="Read-only workspace mounted at /work by --node-runner.",
+    )
+    parser.add_argument(
         "--out-dir",
         default="chain-specs/finalized/alpha",
         help="Output directory for alpha-plain.json and alpha-raw.json.",
@@ -134,13 +191,17 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="eterra-alpha-spec.") as temp_dir:
         baseline_plain = Path(temp_dir) / "alpha-plain.baseline.json"
         run(
-            [
+            node_command(
                 args.node_bin,
+                [
                 "build-spec",
                 "--disable-default-bootnode",
                 "--chain",
                 "alpha",
-            ],
+                ],
+                node_runner=args.node_runner,
+                node_workspace=args.node_workspace,
+            ),
             output_path=baseline_plain,
         )
         spec = load_json(baseline_plain)
@@ -240,19 +301,34 @@ def main() -> None:
 
     out_plain.write_text(json.dumps(spec, indent=2) + "\n")
     run(
-        [
+        node_command(
             args.node_bin,
+            [
             "build-spec",
             "--disable-default-bootnode",
             "--chain",
             str(out_plain),
             "--raw",
-        ],
+            ],
+            node_runner=args.node_runner,
+            node_workspace=args.node_workspace,
+        ),
         output_path=out_raw,
     )
 
     verify_script = Path(__file__).with_name("verify-alpha-spec.py")
-    run([sys.executable, str(verify_script), "--node-bin", args.node_bin, str(out_plain)])
+    verify_command = [sys.executable, str(verify_script), "--node-bin", args.node_bin]
+    if args.node_runner is not None:
+        verify_command.extend(
+            [
+                "--node-runner",
+                args.node_runner,
+                "--node-workspace",
+                args.node_workspace,
+            ]
+        )
+    verify_command.append(str(out_plain))
+    run(verify_command)
 
     print(f"[finalize-alpha] wrote finalized alpha plain spec: {out_plain}")
     print(f"[finalize-alpha] wrote finalized alpha raw spec: {out_raw}")

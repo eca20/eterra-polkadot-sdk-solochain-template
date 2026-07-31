@@ -143,6 +143,7 @@ class NodeCandidateTests(unittest.TestCase):
                 "finalizeAlphaToolSha256": "f" * 64,
                 "verifyAlphaToolSha256": "0" * 64,
                 "linuxAmd64RunnerSha256": "8" * 64,
+                "linuxAlphaGenesisProbeSha256": tool.sha256_file(tool.LINUX_ALPHA_GENESIS_PROBE),
             },
             "containsSecrets": False,
             "remoteBuildAllowed": False,
@@ -208,6 +209,52 @@ class NodeCandidateTests(unittest.TestCase):
         )
         return path, node, wasm_sha
 
+    def make_runtime_bundle(self, *, identity_updates: dict[str, Any] | None = None, node_bytes: bytes | None = None) -> Path:
+        bundle = self.root / f"runtime-bundle-{len(list(self.root.glob('runtime-bundle-*')))}"
+        bundle.mkdir()
+        node = bundle / "solochain-eterra-node"
+        node.write_bytes(node_bytes or elf64())
+        node.chmod(0o700)
+        wasm = bundle / "runtime-spec-106.compact.compressed.wasm"
+        wasm.write_bytes(b"linux-production-wasm")
+        metadata = bundle / "runtime-metadata.scale"
+        metadata.write_bytes(b"meta\x0fmetadata-v15")
+        identity = {
+            "stagedProductionMatchesTemporaryNodeEmbeddedCode": True,
+            "authoritativeTargetPlatform": dict(tool.TARGET_PLATFORM),
+            "nativeHostExecutionAllowed": False,
+            "probeRunnerNetworkDisabled": True,
+            "candidateRunnerSha256": tool.sha256_file(tool.LINUX_AMD64_RUNNER),
+            "probeRunnerSha256": tool.sha256_file(tool.LINUX_RUNTIME_PROBE_RUNNER),
+        }
+        identity.update(identity_updates or {})
+        manifest = {
+            "schemaVersion": 1,
+            "kind": "nexus-v2-private-alpha-runtime-bundle",
+            "sourceCommit": "a" * 40,
+            "targetSpecVersion": tool.TARGET_SPEC_VERSION,
+            "targetStorageVersion": 16,
+            "runtimeIdentity": identity,
+            "artifacts": {
+                "nativeNodeSha256": tool.sha256_file(node),
+                "stagedProductionWasmSha256": tool.sha256_file(wasm),
+                "metadataScaleSha256": tool.sha256_file(metadata),
+            },
+            "authorizations": {"publicRelease": False, "publicDeploy": False, "paidProduction": False},
+        }
+        write_json(bundle / "runtime-bundle-manifest.json", manifest)
+        names = (
+            "runtime-bundle-manifest.json",
+            "runtime-spec-106.compact.compressed.wasm",
+            "runtime-metadata.scale",
+            "solochain-eterra-node",
+        )
+        (bundle / "SHA256SUMS").write_text(
+            "".join(f"{tool.sha256_file(bundle / name)}  {name}\n" for name in names),
+            encoding="utf-8",
+        )
+        return bundle
+
     def test_verifies_closed_hash_pinned_candidate(self) -> None:
         summary = tool.verify_candidate(self.make_candidate())
         self.assertEqual(summary["releaseId"], "nexus-v2-test")
@@ -251,6 +298,33 @@ class NodeCandidateTests(unittest.TestCase):
         source_commit = json.loads(path.read_text(encoding="utf-8"))["sourceCommit"]
         result = tool.verify_deployment_node_attestation(path, node, wasm_sha, source_commit)
         self.assertEqual(result["containerImage"], tool.PINNED_LINUX_AMD64_BUILD_IMAGE)
+
+    def test_runtime_bundle_requires_linux_elf(self) -> None:
+        bundle = self.make_runtime_bundle(node_bytes=bytes.fromhex("cffaedfe0c000001") + bytes(56))
+        with self.assertRaisesRegex(tool.CandidateError, "not an ELF"):
+            tool.verify_runtime_bundle(bundle)
+
+    def test_runtime_bundle_rejects_wrong_platform_identity(self) -> None:
+        wrong = dict(tool.TARGET_PLATFORM)
+        wrong["architecture"] = "aarch64"
+        bundle = self.make_runtime_bundle(identity_updates={"authoritativeTargetPlatform": wrong})
+        with self.assertRaisesRegex(tool.CandidateError, "target platform mismatch"):
+            tool.verify_runtime_bundle(bundle)
+
+    def test_runtime_bundle_rejects_native_fallback(self) -> None:
+        bundle = self.make_runtime_bundle(identity_updates={"nativeHostExecutionAllowed": True})
+        with self.assertRaisesRegex(tool.CandidateError, "native host execution fallback"):
+            tool.verify_runtime_bundle(bundle)
+
+    def test_runtime_bundle_rejects_swapped_runner_identity(self) -> None:
+        bundle = self.make_runtime_bundle(identity_updates={"candidateRunnerSha256": "f" * 64})
+        with self.assertRaisesRegex(tool.CandidateError, "candidate runner identity mismatch"):
+            tool.verify_runtime_bundle(bundle)
+
+    def test_runtime_bundle_rejects_swapped_probe_runner_identity(self) -> None:
+        bundle = self.make_runtime_bundle(identity_updates={"probeRunnerSha256": "e" * 64})
+        with self.assertRaisesRegex(tool.CandidateError, "probe runner identity mismatch"):
+            tool.verify_runtime_bundle(bundle)
 
     def test_rejects_unreviewed_deployment_dockerfile(self) -> None:
         path, node, wasm_sha = self.make_build_attestation()
@@ -323,45 +397,41 @@ class NodeCandidateTests(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
-    def test_genesis_probe_binds_p2p_to_loopback(self) -> None:
-        class ProbeProcess:
-            def poll(self) -> None:
-                return None
-
-            def terminate(self) -> None:
-                return None
-
-            def wait(self, timeout: int) -> int:
-                return 0
-
+    def test_genesis_probe_uses_linux_runner_without_native_fallback(self) -> None:
         captured: list[str] = []
-        original_popen = subprocess.Popen
-        original_rpc = tool.rpc_request
+        node = self.root / "node"
+        node.write_bytes(elf64())
+        node.chmod(0o700)
+        raw = self.root / "raw.json"
+        raw.write_text("{}\n", encoding="utf-8")
+        original_run = subprocess.run
         try:
-            def fake_popen(command: list[str], **_: Any) -> ProbeProcess:
+            def fake_run(command: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
                 captured.extend(command)
-                return ProbeProcess()
+                payload = {
+                    "schemaVersion": 1,
+                    "kind": "nexus-v2-linux-alpha-genesis-probe",
+                    "chainName": "Eterra Alpha",
+                    "genesisHash": "0x" + "1" * 64,
+                    "specVersion": tool.TARGET_SPEC_VERSION,
+                    "runnerNetworkDisabled": True,
+                }
+                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
 
-            responses = {
-                "state_getRuntimeVersion": {"specVersion": tool.TARGET_SPEC_VERSION},
-                "chain_getBlockHash": "0x" + "1" * 64,
-                "system_chain": "Eterra Alpha",
-            }
-            subprocess.Popen = fake_popen  # type: ignore[assignment]
-            tool.rpc_request = lambda _port, method, _params: responses[method]  # type: ignore[assignment]
+            subprocess.run = fake_run  # type: ignore[assignment]
             result = tool.inspect_genesis(
-                self.root / "node",
-                self.root / "raw.json",
+                node,
+                raw,
                 19946,
                 31346,
             )
         finally:
-            subprocess.Popen = original_popen  # type: ignore[assignment]
-            tool.rpc_request = original_rpc  # type: ignore[assignment]
+            subprocess.run = original_run  # type: ignore[assignment]
         self.assertEqual(result["chainName"], "Eterra Alpha")
-        self.assertNotIn("--port", captured)
-        listen_index = captured.index("--listen-addr")
-        self.assertEqual(captured[listen_index + 1], "/ip4/127.0.0.1/tcp/31346")
+        self.assertEqual(Path(captured[0]).resolve(), tool.LINUX_AMD64_RUNNER.resolve())
+        self.assertNotEqual(Path(captured[0]).name, node.name)
+        self.assertIn(tool.LINUX_ALPHA_GENESIS_PROBE.name, captured)
+        self.assertIn("/work/solochain-eterra-node", captured)
 
 
 if __name__ == "__main__":
