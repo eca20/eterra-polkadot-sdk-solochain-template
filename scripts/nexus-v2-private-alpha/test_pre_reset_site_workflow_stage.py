@@ -117,7 +117,14 @@ if mode == "execute":
             "publicActionSubmission": False,
         },
         "services": {
-            "caddy": service("caddy", "caddy:2.10.2-alpine", "sha256:" + "5" * 64, [
+            "caddy": service("caddy", (
+                "caddy:2.10.2-alpine@sha256:"
+                "4c6e91c6ed0e2fa03efd5b44747b625f"
+                "ec79bc9cd06ac5235a779726618e530d"
+            ), (
+                "sha256:4c6e91c6ed0e2fa03efd5b44747b625f"
+                "ec79bc9cd06ac5235a779726618e530d"
+            ), [
                 {"containerPort": 80, "protocol": "tcp", "hostIp": "0.0.0.0", "hostPort": 80},
                 {"containerPort": 443, "protocol": "tcp", "hostIp": "0.0.0.0", "hostPort": 443},
             ]),
