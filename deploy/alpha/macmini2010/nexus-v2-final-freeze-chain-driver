@@ -194,7 +194,8 @@ write_result() {
 	python3 - \
 		"${result_path}" "${action}" "${transaction_id}" "${release_id}" "${source_commit}" \
 		"${role}" "${target}" "${dry_run}" "${frozen_at}" "${block_number}" "${block_hash}" \
-		"${check_names}" "${bundle_root}" "${artifact_specs[@]}" <<'PY'
+		"${check_names}" "${bundle_root}" \
+		${artifact_specs[@]+"${artifact_specs[@]}"} <<'PY'
 import hashlib
 import json
 import os

@@ -21,6 +21,26 @@ def executable(path: Path, payload: bytes) -> Path:
 
 
 class FinalFreezeChainDriverTests(unittest.TestCase):
+    def test_empty_artifact_expansion_is_safe_in_native_bash(self) -> None:
+        source = DRIVER.read_text(encoding="utf-8")
+        self.assertIn('${artifact_specs[@]+"${artifact_specs[@]}"}', source)
+        completed = subprocess.run(
+            [
+                "/bin/bash",
+                "-c",
+                "set -u; artifact_specs=(); "
+                "python3 - fixed ${artifact_specs[@]+\"${artifact_specs[@]}\"} <<'PY'\n"
+                "import sys\n"
+                "assert sys.argv == ['-', 'fixed'], sys.argv\n"
+                "PY\n",
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+
     def test_generated_chain_preflight_executes_through_elf_probe(self) -> None:
         source = DRIVER.read_text(encoding="utf-8")
         preflight = source.split('if [[ "${action}" == "preflight" ]]', 1)[1].split(
