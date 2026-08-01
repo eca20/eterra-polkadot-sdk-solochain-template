@@ -350,6 +350,23 @@ PY
 		die "deployment host is absent from the release-locked SSH host-pin manifest"
 }
 
+build_nexus_v2_rsync_rsh() {
+	local token
+	RSYNC_RSH=""
+	for token in "$@"; do
+		# rsync parses -e itself rather than evaluating Bash's printf %q output.
+		# The protected transport permits only whitespace-free OpenSSH tokens, so
+		# join those exact bytes and keep commas in algorithm lists literal.
+		[[ -n "${token}" && "${token}" =~ ^[A-Za-z0-9._/@:=,+-]+$ ]] ||
+			die "protected Nexus V2 rsync SSH token is not safely serializable"
+		if [[ -n "${RSYNC_RSH}" ]]; then
+			RSYNC_RSH+=" "
+		fi
+		RSYNC_RSH+="${token}"
+	done
+	[[ -n "${RSYNC_RSH}" ]] || die "protected Nexus V2 rsync SSH command is empty"
+}
+
 build_nexus_v2_pinned_ssh_transport() {
 	local -a transport_options=(
 		-o "Hostname=${DEPLOY_HOST}"
@@ -390,8 +407,7 @@ build_nexus_v2_pinned_ssh_transport() {
 	local -a rsync_ssh_command=(ssh -F /dev/null "${transport_options[@]}")
 	SSH_CMD=("${rsync_ssh_command[@]}" "${SSH_TARGET}")
 	SCP_CMD=(scp -F /dev/null "${transport_options[@]}")
-	printf -v RSYNC_RSH '%q ' "${rsync_ssh_command[@]}"
-	RSYNC_RSH="${RSYNC_RSH% }"
+	build_nexus_v2_rsync_rsh "${rsync_ssh_command[@]}"
 	NEXUS_V2_SSH_TRANSPORT_CONTRACT_VERSION="nexus-v2-pinned-host-v1"
 	export NEXUS_V2_SSH_TRANSPORT_CONTRACT_VERSION
 }

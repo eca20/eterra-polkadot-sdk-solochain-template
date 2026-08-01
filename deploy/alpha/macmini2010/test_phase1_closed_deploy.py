@@ -4,6 +4,7 @@ import ast
 import os
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -287,7 +288,8 @@ class Phase1ClosedDeployTests(unittest.TestCase):
         self.assertIn("protected Nexus V2 transport rejects SSH_OPTS", library)
         self.assertIn("capture_ssh_host_pins.py", library)
         self.assertIn('SSH_CMD=("${rsync_ssh_command[@]}" "${SSH_TARGET}")', library)
-        self.assertIn("printf -v RSYNC_RSH '%q '", library)
+        self.assertIn('build_nexus_v2_rsync_rsh "${rsync_ssh_command[@]}"', library)
+        self.assertNotIn("printf -v RSYNC_RSH '%q '", library)
         for token in (
             "-F /dev/null",
             "Hostname=${DEPLOY_HOST}",
@@ -321,6 +323,108 @@ class Phase1ClosedDeployTests(unittest.TestCase):
         self.assertNotIn("SUDO_ASKPASS", library)
         self.assertNotIn("sudo -A", library)
         self.assertNotIn('send -- "yes\\r"', library)
+
+    def test_protected_rsync_transport_preserves_exact_algorithm_tokens(self) -> None:
+        rsync = shutil.which("rsync")
+        self.assertIsNotNone(rsync, "native rsync is required for deployment transport coverage")
+        host_key_algorithms = (
+            "ssh-ed25519,ecdsa-sha2-nistp256,rsa-sha2-512,rsa-sha2-256"
+        )
+        kex_algorithms = (
+            "curve25519-sha256,curve25519-sha256@libssh.org,"
+            "diffie-hellman-group16-sha512,diffie-hellman-group14-sha256"
+        )
+        ciphers = (
+            "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,"
+            "aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
+        )
+        macs = (
+            "hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,"
+            "hmac-sha2-512,hmac-sha2-256"
+        )
+        with tempfile.TemporaryDirectory(prefix="nexus-v2-rsync-rsh-") as temporary:
+            root = Path(temporary)
+            identity = root / "identity"
+            identity.write_text("fixture\n", encoding="utf-8")
+            identity.chmod(0o600)
+            known_hosts = root / "known_hosts"
+            known_hosts.write_text("fixture\n", encoding="utf-8")
+            manifest = root / "manifest.json"
+            manifest.write_text("{}\n", encoding="utf-8")
+            bash = subprocess.run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    r'''
+source "$1"
+DEPLOY_HOST=192.0.2.10
+DEPLOY_USER=eterra2010
+SSH_PORT=22
+SSH_TARGET=eterra2010@192.0.2.10
+SSH_IDENTITY_FILE="$2"
+NEXUS_V2_SSH_KNOWN_HOSTS_FILE="$3"
+NEXUS_V2_SSH_HOST_PIN_MANIFEST="$4"
+build_nexus_v2_pinned_ssh_transport
+printf '%s' "${RSYNC_RSH}"
+''',
+                    "nexus-v2-rsync-rsh",
+                    str(HERE / "lib.sh"),
+                    str(identity),
+                    str(known_hosts),
+                    str(manifest),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            serialized = bash.stdout
+            self.assertNotIn("\\,", serialized)
+            expected_options = (
+                f"HostKeyAlgorithms={host_key_algorithms}",
+                f"PubkeyAcceptedAlgorithms={host_key_algorithms}",
+                f"KexAlgorithms={kex_algorithms}",
+                f"Ciphers={ciphers}",
+                f"MACs={macs}",
+            )
+            for option in expected_options:
+                self.assertIn(f"-o {option}", serialized)
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            capture = root / "ssh-argv.bin"
+            fake_ssh = fake_bin / "ssh"
+            fake_ssh.write_text(
+                "#!/bin/bash\nprintf '%s\\0' \"$@\" >\"$NEXUS_TEST_SSH_ARGV\"\nexit 1\n",
+                encoding="utf-8",
+            )
+            fake_ssh.chmod(0o755)
+            environment = os.environ.copy()
+            environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+            environment["NEXUS_TEST_SSH_ARGV"] = str(capture)
+            completed = subprocess.run(
+                [
+                    str(rsync),
+                    "--list-only",
+                    "-e",
+                    serialized,
+                    "nexus-fixture:/",
+                    str(root / "destination"),
+                ],
+                env=environment,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertTrue(capture.is_file(), "rsync did not invoke the native remote shell")
+            argv = capture.read_bytes().split(b"\0")
+            if argv[-1:] == [b""]:
+                argv.pop()
+            decoded = [item.decode("utf-8") for item in argv]
+            for option in expected_options:
+                index = decoded.index(option)
+                self.assertEqual(decoded[index - 1], "-o")
+            self.assertFalse(any("\\," in item for item in decoded))
+            self.assertIn("nexus-fixture", decoded)
 
     def test_all_live_deploy_scripts_have_no_expect_askpass_or_pty_transport(self) -> None:
         audited: list[Path] = []
