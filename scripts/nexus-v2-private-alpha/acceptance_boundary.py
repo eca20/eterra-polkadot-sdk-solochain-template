@@ -28,6 +28,7 @@ from typing import Any, Mapping, Sequence
 
 TOOL_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOL_DIR))
+import deployment_secret_environment  # noqa: E402,F401
 import alpha_v2_release as release  # noqa: E402
 import final_freeze_runtime_bundle as runtime_bundle  # noqa: E402
 
@@ -182,6 +183,9 @@ PHASE1_EXECUTE_KEYS = {
     "driverSha256",
     "inputsSha256",
     "executeTokenSha256",
+    "preResetClosureHandoffSha256",
+    "automaticRestoreArmPath",
+    "automaticRestoreArmSha256",
     "observedAtFinalizedBlock",
     "acceptanceBoundaryCaptureSha256",
     "economicGatesSha256",
@@ -211,6 +215,9 @@ PHASE1_CHAIN_COMPONENT_KEYS = {
     "driverSha256",
     "inputsSha256",
     "executeTokenSha256",
+    "preResetClosureHandoffSha256",
+    "automaticRestoreArmPath",
+    "automaticRestoreArmSha256",
     "acceptanceBoundaryCaptureSha256",
     "closureObservationSha256",
     "postWindowObservationSha256",
@@ -237,6 +244,9 @@ PHASE1_SITE_COMPONENT_KEYS = {
     "driverSha256",
     "inputsSha256",
     "executeTokenSha256",
+    "preResetClosureHandoffSha256",
+    "automaticRestoreArmPath",
+    "automaticRestoreArmSha256",
     "acceptanceBoundaryCaptureSha256",
     "closureObservationSha256",
     "postWindowObservationSha256",
@@ -1340,6 +1350,29 @@ def validate_phase1_output(root_value: str, expected_execute_sha256: str) -> dic
     source_commit = ensure_commit(execute["sourceCommit"])
     site_commit = ensure_commit(execute["siteSourceCommit"])
     genesis_hash = ensure_hash256(execute["genesisHash"], "Phase-1 genesis hash")
+    pre_reset_closure_handoff_sha256 = ensure_sha256(
+        execute["preResetClosureHandoffSha256"],
+        "Phase-1 pre-reset closure handoff SHA-256",
+    )
+    automatic_restore_arm_sha256 = ensure_sha256(
+        execute["automaticRestoreArmSha256"],
+        "Phase-1 automatic restore arm SHA-256",
+    )
+    automatic_restore_arm_path = Path(execute["automaticRestoreArmPath"])
+    require(
+        automatic_restore_arm_path.is_absolute()
+        and automatic_restore_arm_path
+        == Path(os.path.normpath(os.fspath(automatic_restore_arm_path))),
+        "Phase-1 automatic restore arm path must be normalized and absolute",
+    )
+    automatic_restore_arm_path = release.ensure_regular_file(
+        automatic_restore_arm_path,
+        "Phase-1 automatic restore arm",
+    )
+    require(
+        sha256_file(automatic_restore_arm_path) == automatic_restore_arm_sha256,
+        "Phase-1 automatic restore arm hash mismatch",
+    )
     for field in (
         "siteCandidateUsableForExecute",
         "allExternalWriteIngressClosed",
@@ -1450,6 +1483,30 @@ def validate_phase1_output(root_value: str, expected_execute_sha256: str) -> dic
         require(component["releaseId"] == release_id, "Phase-1 component release mismatch")
         require(component["sourceCommit"] == source_commit, "Phase-1 component source mismatch")
         require(component["genesisHash"] == genesis_hash, "Phase-1 component genesis mismatch")
+        require(
+            ensure_sha256(
+                component["preResetClosureHandoffSha256"],
+                "Phase-1 component pre-reset closure handoff SHA-256",
+            )
+            == pre_reset_closure_handoff_sha256,
+            "Phase-1 component pre-reset closure handoff mismatch",
+        )
+        require(
+            ensure_sha256(
+                component["automaticRestoreArmSha256"],
+                "Phase-1 component automatic restore arm SHA-256",
+            )
+            == automatic_restore_arm_sha256,
+            "Phase-1 component automatic restore arm mismatch",
+        )
+        component_arm_path = Path(component["automaticRestoreArmPath"])
+        require(
+            component_arm_path.is_absolute()
+            and component_arm_path
+            == Path(os.path.normpath(os.fspath(component_arm_path)))
+            and component_arm_path == automatic_restore_arm_path,
+            "Phase-1 component automatic restore arm path mismatch",
+        )
         require(
             component["observedAtFinalizedBlock"] == capture["observedAtFinalizedBlock"],
             "Phase-1 component block mismatch",

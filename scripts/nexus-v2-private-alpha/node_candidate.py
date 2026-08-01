@@ -24,6 +24,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+import deployment_secret_environment  # noqa: F401
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FINALIZE_ALPHA = REPO_ROOT / "scripts/finalize-alpha-spec.py"

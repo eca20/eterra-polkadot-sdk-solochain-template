@@ -23,6 +23,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+import deployment_secret_environment  # noqa: F401
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -189,6 +191,13 @@ ACCEPTANCE_COUNT_FIELDS = (
     | LEGACY_AUTHORITY_ACCEPTANCE_COUNT_FIELDS
     | GAME_RESULTS_ACCEPTANCE_COUNT_FIELDS
 )
+PRE_V16_ACCEPTANCE_OBSERVATION_EVIDENCE_KEYS = {
+    "captureMode",
+    "legacySourceInventorySha256",
+    "runtimeMetadataScaleSha256",
+    "tcgStorageVersionObservationSha256",
+    "v2CountersDerivedFromStructuralAbsence",
+}
 
 MIGRATION_COUNT_FIELDS = {
     "legacyCardsBefore",
@@ -230,9 +239,38 @@ LEGACY_NEXT_CARD_ID_KEY = (
 LEGACY_CARDS_PREFIX = (
     "0x2ac14ba6b10e5ff91888f263bf83e9a947a302df212e07c474ca486147c54c8b"
 )
+LEGACY_GAME_AUTHORITY_STORAGE = {
+    "nextGameId": {
+        "storage": "NextGameId",
+        "key": "0x0fe4912f15e6c31fac74ae40589be4f1a7d6c931c9519bfbc114231c189cb500",
+        "plain": True,
+    },
+    "games": {
+        "storage": "Games",
+        "prefix": "0x0fe4912f15e6c31fac74ae40589be4f1c7888246b3c99d8f35bc494ff792ada0",
+    },
+    "activeGameByPlayer": {
+        "storage": "ActiveGameByPlayer",
+        "prefix": "0x0fe4912f15e6c31fac74ae40589be4f14be21b984611c3c606b54656927bb4a4",
+    },
+    "eliminations": {
+        "storage": "Eliminations",
+        "prefix": "0x0fe4912f15e6c31fac74ae40589be4f19bdbb1fedcec63769a04867c03631be0",
+    },
+    "processedEndCommands": {
+        "storage": "ProcessedEndCommands",
+        "prefix": "0x0fe4912f15e6c31fac74ae40589be4f1a1585f5fe383a9cf284442e868c2f953",
+    },
+    "processedEliminationEvents": {
+        "storage": "ProcessedEliminationEvents",
+        "prefix": "0x0fe4912f15e6c31fac74ae40589be4f18a91361e9da1abd51b0d70d8f9d3afef",
+    },
+}
 LEGACY_CARD_KEY_HEX_LENGTH = 2 + (32 + 16 + 4) * 2
 LEGACY_CARD_KEY_PAGE_SIZE = 256
 MAX_LEGACY_CARD_KEYS = 100_000
+LEGACY_AUTHORITY_KEY_PAGE_SIZE = 256
+MAX_LEGACY_AUTHORITY_KEYS_PER_STORAGE = 100_000
 V16_MIGRATION_BATCH_SIZE = 100
 MAX_MIGRATION_BLOCKS = 1_000_000
 LEGACY_SOURCE_INVENTORY_KEYS = {
@@ -251,7 +289,7 @@ LEGACY_SOURCE_INVENTORY_KEYS = {
 }
 LEGACY_FINALITY_KEYS = {"blockHashAtNumber", "finalizedHead", "header"}
 LEGACY_RPC_QUERY_KEYS = {"method", "params", "result"}
-LEGACY_STORAGE_KEYS = {"cards", "nextCardId", "tcgStorageVersion"}
+LEGACY_STORAGE_KEYS = {"cards", "gameAuthority", "nextCardId", "tcgStorageVersion"}
 LEGACY_CARD_STORAGE_KEYS = {
     "at",
     "method",
@@ -262,12 +300,28 @@ LEGACY_CARD_STORAGE_KEYS = {
     "storage",
 }
 LEGACY_PAGE_KEYS = {"keys", "startKey"}
+LEGACY_AUTHORITY_STORAGE_KEYS = set(LEGACY_GAME_AUTHORITY_STORAGE)
+LEGACY_AUTHORITY_MAP_KEYS = {
+    "at",
+    "method",
+    "pageSize",
+    "pages",
+    "pallet",
+    "prefix",
+    "storage",
+}
 LEGACY_SUMMARY_KEYS = {
     "cardIdsSha256",
     "cardsCount",
     "maxCardId",
     "minimumMigrationBlocks",
     "nextCardId",
+    "gameAuthorityActivePlayerLocks",
+    "gameAuthorityEliminationRecords",
+    "gameAuthorityEndCommandsProcessed",
+    "gameAuthorityEliminationEventsProcessed",
+    "gameAuthorityGames",
+    "gameAuthorityNextGameId",
     "tcgStorageVersion",
     "v16MigrationBatchSize",
 }
@@ -1015,6 +1069,16 @@ def decode_scale_u32(value: Any, label: str) -> int:
     return int.from_bytes(bytes.fromhex(value[2:]), "little")
 
 
+def decode_scale_u64(value: Any, label: str) -> int:
+    if value is None:
+        return 0
+    require(
+        isinstance(value, str) and re.fullmatch(r"0x[0-9a-f]{16}", value) is not None,
+        f"{label} must be null or exactly eight lowercase SCALE bytes",
+    )
+    return int.from_bytes(bytes.fromhex(value[2:]), "little")
+
+
 def decode_legacy_card_key(value: Any) -> int:
     require(
         isinstance(value, str)
@@ -1045,6 +1109,60 @@ def validate_rpc_query(
     return query
 
 
+def validate_paged_storage_keys(
+    value: Any,
+    *,
+    pallet: str,
+    storage_name: str,
+    prefix: str,
+    block_hash: str,
+    page_size: int,
+    maximum_keys: int,
+    label: str,
+) -> list[str]:
+    capture = require_exact_keys(value, LEGACY_AUTHORITY_MAP_KEYS, label)
+    require(
+        capture.get("pallet") == pallet and capture.get("storage") == storage_name,
+        f"{label} identity mismatch",
+    )
+    require(capture.get("prefix") == prefix, f"{label} prefix mismatch")
+    require(capture.get("method") == "state_getKeysPaged", f"{label} query method mismatch")
+    require(capture.get("at") == block_hash, f"{label} query block mismatch")
+    require(capture.get("pageSize") == page_size, f"{label} page size mismatch")
+    pages = capture.get("pages")
+    require(isinstance(pages, list) and pages, f"{label} pages must be a non-empty array")
+    all_keys: list[str] = []
+    expected_start: str | None = None
+    for index, raw_page in enumerate(pages):
+        page = require_exact_keys(raw_page, LEGACY_PAGE_KEYS, f"{label} page {index}")
+        require(page.get("startKey") == expected_start, f"{label} page {index} cursor mismatch")
+        keys = page.get("keys")
+        require(
+            isinstance(keys, list) and len(keys) <= page_size,
+            f"{label} page {index} is invalid",
+        )
+        require(keys == sorted(keys), f"{label} page {index} is not sorted")
+        for key in keys:
+            require(
+                isinstance(key, str)
+                and re.fullmatch(r"0x[0-9a-f]+", key) is not None
+                and key.startswith(prefix)
+                and len(key) > len(prefix),
+                f"{label} contains an invalid storage key",
+            )
+        if expected_start is not None and keys:
+            require(keys[0] > expected_start, f"{label} page {index} repeated its cursor")
+        all_keys.extend(keys)
+        require(len(all_keys) <= maximum_keys, f"{label} exceeds the collector bound")
+        expected_start = keys[-1] if keys else expected_start
+        if index < len(pages) - 1:
+            require(len(keys) == page_size, f"{label} capture continued after a short page")
+        else:
+            require(len(keys) < page_size, f"{label} capture lacks a terminal short page")
+    require(all_keys == sorted(set(all_keys)), f"{label} keys are duplicated or globally unsorted")
+    return all_keys
+
+
 def validate_legacy_source_inventory_value(
     value: Mapping[str, Any],
     *,
@@ -1052,7 +1170,7 @@ def validate_legacy_source_inventory_value(
     source_commit: str | None = None,
 ) -> dict[str, Any]:
     require_exact_keys(value, LEGACY_SOURCE_INVENTORY_KEYS, "legacy source inventory")
-    require(value.get("schemaVersion") == 1, "legacy source inventory schema mismatch")
+    require(value.get("schemaVersion") == 2, "legacy source inventory schema mismatch")
     require(value.get("kind") == LEGACY_SOURCE_INVENTORY_KIND, "legacy source inventory kind mismatch")
     inventory_release = ensure_release_id(str(value.get("releaseId", "")))
     inventory_source = ensure_commit(str(value.get("sourceCommit", "")))
@@ -1130,6 +1248,59 @@ def validate_legacy_source_inventory_value(
     )
     next_card_id = decode_scale_u32(next_query.get("result"), "legacy NextCardId result")
 
+    authority = require_exact_keys(
+        storage["gameAuthority"],
+        LEGACY_AUTHORITY_STORAGE_KEYS,
+        "legacy GameAuthority capture",
+    )
+    next_game_config = LEGACY_GAME_AUTHORITY_STORAGE["nextGameId"]
+    next_game = require_exact_keys(
+        authority["nextGameId"], plain_keys, "legacy GameAuthority NextGameId capture"
+    )
+    require(
+        next_game.get("pallet") == "EterraGameAuthority"
+        and next_game.get("storage") == next_game_config["storage"],
+        "legacy GameAuthority NextGameId identity mismatch",
+    )
+    require(
+        next_game.get("key") == next_game_config["key"],
+        "legacy GameAuthority NextGameId key mismatch",
+    )
+    next_game_query = validate_rpc_query(
+        next_game.get("query"),
+        "state_getStorage",
+        [next_game_config["key"], block_hash],
+        "legacy GameAuthority NextGameId query",
+    )
+    next_game_id = decode_scale_u64(
+        next_game_query.get("result"), "legacy GameAuthority NextGameId result"
+    )
+    authority_counts: dict[str, int] = {}
+    for alias in (
+        "games",
+        "activeGameByPlayer",
+        "eliminations",
+        "processedEndCommands",
+        "processedEliminationEvents",
+    ):
+        config = LEGACY_GAME_AUTHORITY_STORAGE[alias]
+        authority_counts[alias] = len(
+            validate_paged_storage_keys(
+                authority[alias],
+                pallet="EterraGameAuthority",
+                storage_name=str(config["storage"]),
+                prefix=str(config["prefix"]),
+                block_hash=block_hash,
+                page_size=LEGACY_AUTHORITY_KEY_PAGE_SIZE,
+                maximum_keys=MAX_LEGACY_AUTHORITY_KEYS_PER_STORAGE,
+                label=f"legacy GameAuthority {config['storage']} capture",
+            )
+        )
+    require(
+        next_game_id >= authority_counts["games"],
+        "legacy GameAuthority Games count exceeds NextGameId",
+    )
+
     cards = require_exact_keys(storage["cards"], LEGACY_CARD_STORAGE_KEYS, "legacy Cards capture")
     require(
         cards.get("pallet") == "EterraTCG" and cards.get("storage") == "Cards",
@@ -1185,6 +1356,14 @@ def validate_legacy_source_inventory_value(
         "maxCardId": max_card_id,
         "minimumMigrationBlocks": minimum_blocks,
         "nextCardId": next_card_id,
+        "gameAuthorityActivePlayerLocks": authority_counts["activeGameByPlayer"],
+        "gameAuthorityEliminationRecords": authority_counts["eliminations"],
+        "gameAuthorityEndCommandsProcessed": authority_counts["processedEndCommands"],
+        "gameAuthorityEliminationEventsProcessed": authority_counts[
+            "processedEliminationEvents"
+        ],
+        "gameAuthorityGames": authority_counts["games"],
+        "gameAuthorityNextGameId": next_game_id,
         "tcgStorageVersion": 14,
         "v16MigrationBatchSize": V16_MIGRATION_BATCH_SIZE,
     }
@@ -1294,26 +1473,52 @@ def collect_legacy_source_inventory(
         rpc, "state_getStorage", [LEGACY_TCG_STORAGE_VERSION_KEY, block_hash]
     )
     next_query = rpc_query(rpc, "state_getStorage", [LEGACY_NEXT_CARD_ID_KEY, block_hash])
-    pages: list[dict[str, Any]] = []
-    start_key: str | None = None
-    while True:
-        params: list[Any] = [LEGACY_CARDS_PREFIX, LEGACY_CARD_KEY_PAGE_SIZE, start_key, block_hash]
-        keys = rpc.call("state_getKeysPaged", params)
-        require(isinstance(keys, list), "legacy Cards RPC page is not an array")
-        pages.append({"startKey": start_key, "keys": keys})
-        total = sum(len(page["keys"]) for page in pages)
-        require(total <= MAX_LEGACY_CARD_KEYS, "legacy Cards inventory exceeds the collector bound")
-        if len(keys) < LEGACY_CARD_KEY_PAGE_SIZE:
-            break
-        require(keys, "legacy Cards RPC returned an impossible full empty page")
-        start_key = keys[-1]
+    next_game_config = LEGACY_GAME_AUTHORITY_STORAGE["nextGameId"]
+    next_game_query = rpc_query(
+        rpc, "state_getStorage", [next_game_config["key"], block_hash]
+    )
+
+    def collect_pages(
+        prefix: str, page_size: int, maximum_keys: int, label: str
+    ) -> list[dict[str, Any]]:
+        pages: list[dict[str, Any]] = []
+        start_key: str | None = None
+        while True:
+            params: list[Any] = [prefix, page_size, start_key, block_hash]
+            keys = rpc.call("state_getKeysPaged", params)
+            require(isinstance(keys, list), f"{label} RPC page is not an array")
+            pages.append({"startKey": start_key, "keys": keys})
+            total = sum(len(page["keys"]) for page in pages)
+            require(total <= maximum_keys, f"{label} inventory exceeds the collector bound")
+            if len(keys) < page_size:
+                break
+            require(keys, f"{label} RPC returned an impossible full empty page")
+            start_key = keys[-1]
+        return pages
+
+    pages = collect_pages(
+        LEGACY_CARDS_PREFIX,
+        LEGACY_CARD_KEY_PAGE_SIZE,
+        MAX_LEGACY_CARD_KEYS,
+        "legacy Cards",
+    )
+    authority_pages = {
+        alias: collect_pages(
+            str(config["prefix"]),
+            LEGACY_AUTHORITY_KEY_PAGE_SIZE,
+            MAX_LEGACY_AUTHORITY_KEYS_PER_STORAGE,
+            f"legacy GameAuthority {config['storage']}",
+        )
+        for alias, config in LEGACY_GAME_AUTHORITY_STORAGE.items()
+        if alias != "nextGameId"
+    }
     require(
         rpc.call("chain_getFinalizedHead", []) == block_hash,
         "isolated RPC finalized head changed during inventory capture",
     )
 
     provisional = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "kind": LEGACY_SOURCE_INVENTORY_KIND,
         "releaseId": release_id,
         "sourceCommit": source_commit,
@@ -1339,6 +1544,27 @@ def collect_legacy_source_inventory(
                 "key": LEGACY_NEXT_CARD_ID_KEY,
                 "query": next_query,
             },
+            "gameAuthority": {
+                "nextGameId": {
+                    "pallet": "EterraGameAuthority",
+                    "storage": next_game_config["storage"],
+                    "key": next_game_config["key"],
+                    "query": next_game_query,
+                },
+                **{
+                    alias: {
+                        "pallet": "EterraGameAuthority",
+                        "storage": config["storage"],
+                        "prefix": config["prefix"],
+                        "method": "state_getKeysPaged",
+                        "at": block_hash,
+                        "pageSize": LEGACY_AUTHORITY_KEY_PAGE_SIZE,
+                        "pages": authority_pages[alias],
+                    }
+                    for alias, config in LEGACY_GAME_AUTHORITY_STORAGE.items()
+                    if alias != "nextGameId"
+                },
+            },
             "cards": {
                 "pallet": "EterraTCG",
                 "storage": "Cards",
@@ -1359,6 +1585,13 @@ def collect_legacy_source_inventory(
         for key in page["keys"]
     ]
     next_card_id = decode_scale_u32(next_query["result"], "legacy NextCardId result")
+    authority_counts = {
+        alias: sum(len(page["keys"]) for page in pages)
+        for alias, pages in authority_pages.items()
+    }
+    next_game_id = decode_scale_u64(
+        next_game_query["result"], "legacy GameAuthority NextGameId result"
+    )
     provisional["summary"] = {
         "cardIdsSha256": sha256_bytes(
             b"".join(card_id.to_bytes(4, "little") for card_id in sorted(card_ids))
@@ -1367,6 +1600,14 @@ def collect_legacy_source_inventory(
         "maxCardId": max(card_ids) if card_ids else None,
         "minimumMigrationBlocks": minimum_v16_migration_blocks(next_card_id),
         "nextCardId": next_card_id,
+        "gameAuthorityActivePlayerLocks": authority_counts["activeGameByPlayer"],
+        "gameAuthorityEliminationRecords": authority_counts["eliminations"],
+        "gameAuthorityEndCommandsProcessed": authority_counts["processedEndCommands"],
+        "gameAuthorityEliminationEventsProcessed": authority_counts[
+            "processedEliminationEvents"
+        ],
+        "gameAuthorityGames": authority_counts["games"],
+        "gameAuthorityNextGameId": next_game_id,
         "tcgStorageVersion": 14,
         "v16MigrationBatchSize": V16_MIGRATION_BATCH_SIZE,
     }
@@ -1860,19 +2101,23 @@ def validate_acceptance_inventory(
     source_commit: str | None = None,
 ) -> dict[str, Any]:
     inventory = read_json(path)
+    schema_version = inventory.get("schemaVersion")
+    expected_keys = {
+        "schemaVersion",
+        "kind",
+        "releaseId",
+        "sourceCommit",
+        "observedAtFinalizedBlock",
+        "counts",
+    }
+    if schema_version == 2:
+        expected_keys.add("observationEvidence")
     require_exact_keys(
         inventory,
-        {
-            "schemaVersion",
-            "kind",
-            "releaseId",
-            "sourceCommit",
-            "observedAtFinalizedBlock",
-            "counts",
-        },
+        expected_keys,
         "acceptance inventory",
     )
-    require(inventory.get("schemaVersion") == 1, "acceptance inventory schema mismatch")
+    require(schema_version in {1, 2}, "acceptance inventory schema mismatch")
     require(inventory.get("kind") == "nexus-v2-acceptance-inventory", "acceptance inventory kind mismatch")
     inventory_release = ensure_release_id(str(inventory.get("releaseId", "")))
     inventory_commit = ensure_commit(str(inventory.get("sourceCommit", "")))
@@ -1889,6 +2134,28 @@ def validate_acceptance_inventory(
         require(isinstance(value, int) and not isinstance(value, bool) and value >= 0, f"invalid acceptance count: {name}")
         if value:
             nonzero[name] = value
+    observation_evidence = None
+    if schema_version == 2:
+        observation_evidence = require_exact_keys(
+            inventory.get("observationEvidence"),
+            PRE_V16_ACCEPTANCE_OBSERVATION_EVIDENCE_KEYS,
+            "pre-V16 acceptance observation evidence",
+        )
+        require(
+            observation_evidence.get("captureMode")
+            == "isolated-frozen-copy-read-only",
+            "pre-V16 acceptance observation was not captured from the isolated frozen copy",
+        )
+        for name in (
+            "legacySourceInventorySha256",
+            "runtimeMetadataScaleSha256",
+            "tcgStorageVersionObservationSha256",
+        ):
+            ensure_sha256(str(observation_evidence.get(name, "")), name)
+        require(
+            observation_evidence.get("v2CountersDerivedFromStructuralAbsence") is True,
+            "pre-V16 V2 counters were not derived from structural absence",
+        )
     return {
         "value": inventory,
         "releaseId": inventory_release,
@@ -1897,6 +2164,8 @@ def validate_acceptance_inventory(
         "blockHash": block_hash,
         "sha256": sha256_file(path),
         "nonzero": nonzero,
+        "observationEvidence": observation_evidence,
+        "schemaVersion": schema_version,
     }
 
 
@@ -1978,6 +2247,9 @@ def validate_pre_v16_fresh_reset_artifact_binding(
     bundle_root: Path,
 ) -> None:
     runtime_v14 = find_artifact(verified, bundle_root, "node", "runtime-v14-wasm")
+    runtime_metadata = find_artifact(
+        verified, bundle_root, "node", "runtime-v14-metadata"
+    )
     observation_path = find_artifact(
         verified,
         bundle_root,
@@ -1993,6 +2265,10 @@ def validate_pre_v16_fresh_reset_artifact_binding(
     require(
         sha256_file(runtime_v14) == gates["runtimeV14WasmSha256"],
         "pre-V16 gate runtime hash does not match the pinned V14 Wasm",
+    )
+    require(
+        sha256_file(runtime_metadata) == gates["runtimeMetadataScaleSha256"],
+        "pre-V16 gate metadata hash does not match the pinned V14 SCALE metadata",
     )
     require(
         sha256_file(observation_path) == gates["tcgStorageVersionObservationSha256"],
@@ -2063,6 +2339,65 @@ def validate_pre_v16_fresh_reset_artifact_binding(
     )
 
 
+def validate_pre_v16_acceptance_inventory_binding(
+    inventory: Mapping[str, Any],
+    gates: Mapping[str, Any],
+    source_inventory: Mapping[str, Any],
+) -> None:
+    require(
+        inventory.get("schemaVersion") == 2,
+        "pre-V16 reset requires evidence-bound acceptance inventory schema 2",
+    )
+    evidence = inventory.get("observationEvidence")
+    require(isinstance(evidence, Mapping), "pre-V16 acceptance evidence is missing")
+    require(
+        evidence.get("legacySourceInventorySha256")
+        == gates["legacySourceInventorySha256"]
+        == source_inventory["sha256"],
+        "pre-V16 acceptance inventory source-inventory hash mismatch",
+    )
+    require(
+        evidence.get("runtimeMetadataScaleSha256")
+        == gates["runtimeMetadataScaleSha256"],
+        "pre-V16 acceptance inventory metadata hash mismatch",
+    )
+    require(
+        evidence.get("tcgStorageVersionObservationSha256")
+        == gates["tcgStorageVersionObservationSha256"],
+        "pre-V16 acceptance inventory TCG observation hash mismatch",
+    )
+    counts = {name: 0 for name in ACCEPTANCE_COUNT_FIELDS}
+    counts.update(
+        {
+            "currentLegacyAuthorityGames": source_inventory["gameAuthorityGames"],
+            "currentLegacyAuthorityActivePlayerLocks": source_inventory[
+                "gameAuthorityActivePlayerLocks"
+            ],
+            "currentLegacyAuthorityEliminationRecords": source_inventory[
+                "gameAuthorityEliminationRecords"
+            ],
+            "lifetimeLegacyAuthorityGamesCreated": source_inventory[
+                "gameAuthorityNextGameId"
+            ],
+            "lifetimeLegacyAuthorityEndCommandsProcessed": source_inventory[
+                "gameAuthorityEndCommandsProcessed"
+            ],
+            "lifetimeLegacyAuthorityEliminationEventsProcessed": source_inventory[
+                "gameAuthorityEliminationEventsProcessed"
+            ],
+            "lifetimeLegacyAuthorityAcceptanceWritesLowerBound": (
+                source_inventory["gameAuthorityNextGameId"]
+                + source_inventory["gameAuthorityEndCommandsProcessed"]
+                + source_inventory["gameAuthorityEliminationEventsProcessed"]
+            ),
+        }
+    )
+    require(
+        inventory["value"]["counts"] == counts,
+        "pre-V16 acceptance counts are not derived from the frozen RPC inventory",
+    )
+
+
 def command_prepare_reset(args: argparse.Namespace) -> None:
     manifest_path = Path(args.manifest).resolve()
     bundle_root = Path(args.bundle_root).resolve()
@@ -2114,11 +2449,19 @@ def command_prepare_reset(args: argparse.Namespace) -> None:
     )
     reset_blocking = dict(inventory["nonzero"])
     if gates["mode"] == PRE_V16_FRESH_RESET_GATE_MODE:
+        validate_pre_v16_acceptance_inventory_binding(
+            inventory, gates, source_inventory
+        )
         # Legacy GameAuthority history belongs to the backed-up source Alpha,
         # not the fresh V2 state.  It must remain truthful in the inventory but
         # does not cancel the separately approved fresh-genesis replacement.
         for field in LEGACY_AUTHORITY_ACCEPTANCE_COUNT_FIELDS:
             reset_blocking.pop(field, None)
+    else:
+        require(
+            inventory["schemaVersion"] == 1,
+            "post-V16 reset requires deterministic acceptance-boundary inventory schema 1",
+        )
     require(
         not reset_blocking,
         "reset readiness requires zero V2 acceptance state",

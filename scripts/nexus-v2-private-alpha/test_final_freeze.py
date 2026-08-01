@@ -96,7 +96,7 @@ class FinalFreezeTests(unittest.TestCase):
                                 block = {{"number": args.frozen_block_number, "hash": args.frozen_block_hash}}
                                 query = lambda method, params, result: {{"method": method, "params": params, "result": result}}
                                 inventory = {{
-                                    "schemaVersion": 1,
+                                    "schemaVersion": 2,
                                     "kind": {tool.release.LEGACY_SOURCE_INVENTORY_KIND!r},
                                     "releaseId": args.release_id,
                                     "sourceCommit": args.source_commit,
@@ -120,6 +120,48 @@ class FinalFreezeTests(unittest.TestCase):
                                             "key": {tool.release.LEGACY_NEXT_CARD_ID_KEY!r},
                                             "query": query("state_getStorage", [{tool.release.LEGACY_NEXT_CARD_ID_KEY!r}, args.frozen_block_hash], None),
                                         }},
+                                        "gameAuthority": {{
+                                            "nextGameId": {{
+                                                "pallet": "EterraGameAuthority", "storage": "NextGameId",
+                                                "key": {tool.release.LEGACY_GAME_AUTHORITY_STORAGE['nextGameId']['key']!r},
+                                                "query": query("state_getStorage", [{tool.release.LEGACY_GAME_AUTHORITY_STORAGE['nextGameId']['key']!r}, args.frozen_block_hash], "0x0400000000000000"),
+                                            }},
+                                            "games": {{
+                                                "pallet": "EterraGameAuthority", "storage": "Games",
+                                                "prefix": {tool.release.LEGACY_GAME_AUTHORITY_STORAGE['games']['prefix']!r},
+                                                "method": "state_getKeysPaged", "at": args.frozen_block_hash,
+                                                "pageSize": {tool.release.LEGACY_AUTHORITY_KEY_PAGE_SIZE},
+                                                "pages": [{{"startKey": None, "keys": [{(tool.release.LEGACY_GAME_AUTHORITY_STORAGE['games']['prefix'] + '00000000')!r}]}}],
+                                            }},
+                                            "activeGameByPlayer": {{
+                                                "pallet": "EterraGameAuthority", "storage": "ActiveGameByPlayer",
+                                                "prefix": {tool.release.LEGACY_GAME_AUTHORITY_STORAGE['activeGameByPlayer']['prefix']!r},
+                                                "method": "state_getKeysPaged", "at": args.frozen_block_hash,
+                                                "pageSize": {tool.release.LEGACY_AUTHORITY_KEY_PAGE_SIZE},
+                                                "pages": [{{"startKey": None, "keys": [{(tool.release.LEGACY_GAME_AUTHORITY_STORAGE['activeGameByPlayer']['prefix'] + '00000000')!r}]}}],
+                                            }},
+                                            "eliminations": {{
+                                                "pallet": "EterraGameAuthority", "storage": "Eliminations",
+                                                "prefix": {tool.release.LEGACY_GAME_AUTHORITY_STORAGE['eliminations']['prefix']!r},
+                                                "method": "state_getKeysPaged", "at": args.frozen_block_hash,
+                                                "pageSize": {tool.release.LEGACY_AUTHORITY_KEY_PAGE_SIZE},
+                                                "pages": [{{"startKey": None, "keys": [{(tool.release.LEGACY_GAME_AUTHORITY_STORAGE['eliminations']['prefix'] + '00000000')!r}, {(tool.release.LEGACY_GAME_AUTHORITY_STORAGE['eliminations']['prefix'] + '00000001')!r}]}}],
+                                            }},
+                                            "processedEndCommands": {{
+                                                "pallet": "EterraGameAuthority", "storage": "ProcessedEndCommands",
+                                                "prefix": {tool.release.LEGACY_GAME_AUTHORITY_STORAGE['processedEndCommands']['prefix']!r},
+                                                "method": "state_getKeysPaged", "at": args.frozen_block_hash,
+                                                "pageSize": {tool.release.LEGACY_AUTHORITY_KEY_PAGE_SIZE},
+                                                "pages": [{{"startKey": None, "keys": [{(tool.release.LEGACY_GAME_AUTHORITY_STORAGE['processedEndCommands']['prefix'] + '00000000')!r}, {(tool.release.LEGACY_GAME_AUTHORITY_STORAGE['processedEndCommands']['prefix'] + '00000001')!r}]}}],
+                                            }},
+                                            "processedEliminationEvents": {{
+                                                "pallet": "EterraGameAuthority", "storage": "ProcessedEliminationEvents",
+                                                "prefix": {tool.release.LEGACY_GAME_AUTHORITY_STORAGE['processedEliminationEvents']['prefix']!r},
+                                                "method": "state_getKeysPaged", "at": args.frozen_block_hash,
+                                                "pageSize": {tool.release.LEGACY_AUTHORITY_KEY_PAGE_SIZE},
+                                                "pages": [{{"startKey": None, "keys": [{(tool.release.LEGACY_GAME_AUTHORITY_STORAGE['processedEliminationEvents']['prefix'] + '00000000')!r}, {(tool.release.LEGACY_GAME_AUTHORITY_STORAGE['processedEliminationEvents']['prefix'] + '00000001')!r}, {(tool.release.LEGACY_GAME_AUTHORITY_STORAGE['processedEliminationEvents']['prefix'] + '00000002')!r}]}}],
+                                            }},
+                                        }},
                                         "cards": {{
                                             "pallet": "EterraTCG", "storage": "Cards",
                                             "prefix": {tool.release.LEGACY_CARDS_PREFIX!r},
@@ -131,6 +173,12 @@ class FinalFreezeTests(unittest.TestCase):
                                     "summary": {{
                                         "cardIdsSha256": hashlib.sha256(b"").hexdigest(),
                                         "cardsCount": 0, "maxCardId": None,
+                                        "gameAuthorityActivePlayerLocks": 1,
+                                        "gameAuthorityEliminationRecords": 2,
+                                        "gameAuthorityEndCommandsProcessed": 2,
+                                        "gameAuthorityEliminationEventsProcessed": 3,
+                                        "gameAuthorityGames": 1,
+                                        "gameAuthorityNextGameId": 4,
                                         "minimumMigrationBlocks": 1, "nextCardId": 0,
                                         "tcgStorageVersion": 14,
                                         "v16MigrationBatchSize": {tool.release.V16_MIGRATION_BATCH_SIZE},
@@ -344,6 +392,72 @@ class FinalFreezeTests(unittest.TestCase):
         self.assertTrue(value["allIngressAndMutatingServicesStopped"])
         verified = tool.release.verify_backup_manifest(bundle / "backup-manifest.json", bundle)
         self.assertEqual(verified["sha256"], value["backupManifestSha256"])
+        inventory_path = tool.release.find_artifact(
+            verified, bundle, "config", "acceptance-inventory"
+        )
+        inventory = tool.release.validate_acceptance_inventory(inventory_path)
+        counts = inventory["value"]["counts"]
+        self.assertEqual(counts["currentLegacyAuthorityGames"], 1)
+        self.assertEqual(counts["currentLegacyAuthorityActivePlayerLocks"], 1)
+        self.assertEqual(counts["currentLegacyAuthorityEliminationRecords"], 2)
+        self.assertEqual(counts["lifetimeLegacyAuthorityGamesCreated"], 4)
+        self.assertEqual(counts["lifetimeLegacyAuthorityEndCommandsProcessed"], 2)
+        self.assertEqual(
+            counts["lifetimeLegacyAuthorityEliminationEventsProcessed"], 3
+        )
+        self.assertEqual(
+            counts["lifetimeLegacyAuthorityAcceptanceWritesLowerBound"], 9
+        )
+        for name in (
+            tool.release.V2_ACCEPTANCE_COUNT_FIELDS
+            | tool.release.GAME_RESULTS_ACCEPTANCE_COUNT_FIELDS
+        ):
+            self.assertEqual(counts[name], 0, name)
+        source_inventory_path = tool.release.find_artifact(
+            verified, bundle, "node", "legacy-source-inventory"
+        )
+        metadata_path = tool.release.find_artifact(
+            verified, bundle, "node", "runtime-v14-metadata"
+        )
+        observation_path = tool.release.find_artifact(
+            verified, bundle, "node", "tcg-storage-version-observation"
+        )
+        observation_evidence = inventory["observationEvidence"]
+        self.assertEqual(
+            observation_evidence["legacySourceInventorySha256"],
+            tool.sha256_file(source_inventory_path),
+        )
+        self.assertEqual(
+            observation_evidence["runtimeMetadataScaleSha256"],
+            tool.sha256_file(metadata_path),
+        )
+        self.assertEqual(
+            observation_evidence["tcgStorageVersionObservationSha256"],
+            tool.sha256_file(observation_path),
+        )
+
+    def test_pre_v16_inventory_rejects_source_from_another_finalized_block(self) -> None:
+        plan, digest = self.make_plan()
+        validated_plan = tool.validate_plan(plan, digest)
+        source_inventory = {
+            "blockNumber": 122,
+            "blockHash": "0x" + "1" * 64,
+            "sha256": "a" * 64,
+            "gameAuthorityGames": 0,
+            "gameAuthorityActivePlayerLocks": 0,
+            "gameAuthorityEliminationRecords": 0,
+            "gameAuthorityNextGameId": 0,
+            "gameAuthorityEndCommandsProcessed": 0,
+            "gameAuthorityEliminationEventsProcessed": 0,
+        }
+        with self.assertRaisesRegex(tool.FreezeError, "frozen finalized block"):
+            tool.pre_v16_acceptance_inventory(
+                validated_plan,
+                {"number": 123, "hash": "0x" + "1" * 64},
+                source_inventory,
+                runtime_metadata_sha256="b" * 64,
+                tcg_observation_sha256="c" * 64,
+            )
 
     def test_failed_partial_freeze_never_resumes_services(self) -> None:
         plan, digest = self.make_plan(fail=True)

@@ -7,12 +7,20 @@ Wants=network-online.target
 Type=simple
 User=eterra2010
 Group=eterra2010
-EnvironmentFile=-/opt/eterra-alpha/shared/env/arcade-authority.env
+EnvironmentFile=/opt/eterra-alpha/shared/env/arcade-authority.env
 WorkingDirectory=/opt/eterra-alpha/arcade-authority/current/api
 ExecStart=/opt/eterra-alpha/arcade-authority/current/api/Eterra.Arcade.Authority.Api
 Restart=always
 RestartSec=5
 LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/eterra/legends-authority-journal
 
 [Install]
 WantedBy=multi-user.target

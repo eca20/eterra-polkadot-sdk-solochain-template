@@ -26,6 +26,46 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+# This executable is intentionally copied into isolated, hash-pinned rollback
+# bundles.  Keep the credential boundary self-contained: importing a helper
+# outside the bundle would both break recovery and create a fail-open packaging
+# dependency.  The names are the exact cross-lane closed union shared by the
+# chain, site, authority, and FPS deployment paths.
+DEPLOYMENT_SECRET_ENVIRONMENT_NAMES = frozenset(
+    {
+        "ADMIN_API_KEY",
+        "ADMIN_SESSION_SECRET",
+        "ALPHA_ACCESS_SESSION_SECRET",
+        "AURA_SURI",
+        "AUTHORITY_RELAY_DERIVATION_PASSWORD",
+        "AUTHORITY_RELAY_MNEMONIC",
+        "DEPLOY_PASSWORD",
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_CLIENT_SECRET",
+        "ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD",
+        "ETERRA_ALPHA_SUDO_MNEMONIC",
+        "ETERRA_FPS_V2_OWNER_SECRET_PATH",
+        "ETERRA_FPS_V2_PLAYER_GATEWAY_ACCESS_TOKEN",
+        "ETERRA_FPS_V2_ROOT_SECRET_PATH",
+        "ETERRA_FPS_V2_SUDO_SECRET_PATH",
+        "ETERRA_LEGENDS_PLAYER_ACCESS_TOKEN",
+        "ETERRA_LEGENDS_PRIVATE_ALPHA_ACCESS_KEY",
+        "ETERRA_LEGENDS_SIGNER_DERIVATION_PASSWORD",
+        "ETERRA_LEGENDS_SIGNER_MNEMONIC",
+        "GRAN_SURI",
+        "MEDIA_ADMIN_API_KEY",
+        "MEDIA_SIGNER_SEED",
+        "MONGODB_URI",
+        "NEXUS_V2_PRIVATE_ALPHA_ACCESS_KEY",
+        "NEXUS_V2_SESSION_AUTHORIZATION_PROFILES_JSON",
+        "REMOTE_SUDO_PASSWORD",
+    }
+)
+for _secret_name in DEPLOYMENT_SECRET_ENVIRONMENT_NAMES:
+    os.environ.pop(_secret_name, None)
+del _secret_name
+
+
 COMPONENT_ID = "chain-media"
 ENTRYPOINT_PATH = Path(__file__).resolve()
 SOURCE_IDS = {"chain", "media"}

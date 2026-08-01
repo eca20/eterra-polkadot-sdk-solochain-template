@@ -245,6 +245,9 @@ class BoundaryTests(unittest.TestCase):
             closure_values[name] = tool.sha256_file(path)
 
         block = {"number": 42, "hash": BLOCK_HASH}
+        automatic_restore_arm = root / "automatic-restore-arm.json"
+        automatic_restore_arm.write_text("automatic restore arm fixture\n", encoding="utf-8")
+        automatic_restore_arm_sha256 = tool.sha256_file(automatic_restore_arm)
         common = {
             "schemaVersion": 1,
             "operationId": "phase1-compose-test",
@@ -256,6 +259,9 @@ class BoundaryTests(unittest.TestCase):
             "driverSha256": "1" * 64,
             "inputsSha256": "2" * 64,
             "executeTokenSha256": "3" * 64,
+            "preResetClosureHandoffSha256": "e" * 64,
+            "automaticRestoreArmPath": str(automatic_restore_arm),
+            "automaticRestoreArmSha256": automatic_restore_arm_sha256,
             "acceptanceBoundaryCaptureSha256": tool.sha256_file(
                 root / "acceptance-boundary-rpc-capture.json"
             ),
@@ -332,6 +338,9 @@ class BoundaryTests(unittest.TestCase):
             "driverSha256": "1" * 64,
             "inputsSha256": "2" * 64,
             "executeTokenSha256": "3" * 64,
+            "preResetClosureHandoffSha256": "e" * 64,
+            "automaticRestoreArmPath": str(automatic_restore_arm),
+            "automaticRestoreArmSha256": automatic_restore_arm_sha256,
             "observedAtFinalizedBlock": block,
             "acceptanceBoundaryCaptureSha256": tool.sha256_file(
                 root / "acceptance-boundary-rpc-capture.json"
@@ -378,6 +387,11 @@ class BoundaryTests(unittest.TestCase):
             self.assertEqual(value["componentSourceCommits"]["chain-media"]["media"], "e" * 40)
             with self.assertRaises(tool.BoundaryError):
                 tool.validate_phase1_output(str(root), "0" * 64)
+            (root / "automatic-restore-arm.json").write_text(
+                "drifted automatic restore arm fixture\n", encoding="utf-8"
+            )
+            with self.assertRaises(tool.BoundaryError):
+                tool.validate_phase1_output(str(root), execute_sha)
             output.unlink()
 
     def test_compose_coordinator_plan_is_accepted_by_coordinator_schema(self) -> None:

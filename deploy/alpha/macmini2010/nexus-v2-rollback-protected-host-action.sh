@@ -1,5 +1,19 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
+# Closed union of every credential-bearing environment variable accepted by the
+# chain, site, or Unity private-alpha deployment lanes.  Preserve each shell
+# value for local use, but remove its export attribute before the first child.
+export -n DEPLOY_PASSWORD REMOTE_SUDO_PASSWORD AURA_SURI GRAN_SURI \
+	MEDIA_SIGNER_SEED MEDIA_ADMIN_API_KEY AUTHORITY_RELAY_MNEMONIC \
+	AUTHORITY_RELAY_DERIVATION_PASSWORD ETERRA_LEGENDS_SIGNER_MNEMONIC \
+	ETERRA_LEGENDS_SIGNER_DERIVATION_PASSWORD ETERRA_LEGENDS_PRIVATE_ALPHA_ACCESS_KEY \
+	ETERRA_ALPHA_SUDO_MNEMONIC ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD \
+	ADMIN_SESSION_SECRET ALPHA_ACCESS_SESSION_SECRET DISCORD_CLIENT_SECRET \
+	DISCORD_BOT_TOKEN MONGODB_URI ETERRA_LEGENDS_PLAYER_ACCESS_TOKEN \
+	NEXUS_V2_PRIVATE_ALPHA_ACCESS_KEY NEXUS_V2_SESSION_AUTHORIZATION_PROFILES_JSON \
+	ADMIN_API_KEY ETERRA_FPS_V2_OWNER_SECRET_PATH \
+	ETERRA_FPS_V2_PLAYER_GATEWAY_ACCESS_TOKEN ETERRA_FPS_V2_ROOT_SECRET_PATH \
+	ETERRA_FPS_V2_SUDO_SECRET_PATH 2>/dev/null || true
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib.sh
@@ -51,7 +65,6 @@ done
 	die "refusing to overwrite protected action result"
 
 require_cmd curl
-require_cmd expect
 require_cmd jq
 require_cmd rsync
 require_cmd shasum
@@ -74,6 +87,7 @@ jq -e '
 		"postCutoverObservationSha256",
 		"releaseId",
 		"requiredResetArchives",
+		"resetReadinessPath",
 		"restoreEvidenceSha256",
 		"schemaVersion",
 		"scripts",
@@ -104,12 +118,20 @@ economic_gates_sha256="$(jq -er '.economicGatesSha256' "${context_path}")"
 inventory_sha256="$(jq -er '.acceptanceInventorySha256' "${context_path}")"
 acceptance_assets_exist="$(jq -r '.acceptanceAssetsExist' "${context_path}")"
 staging_path="$(jq -r '.stagingPath // ""' "${context_path}")"
+reset_readiness_path="$(jq -er '.resetReadinessPath' "${context_path}")"
 node_reset_archive="$(jq -er '.requiredResetArchives.node' "${context_path}")"
 media_reset_archive="$(jq -er '.requiredResetArchives.media' "${context_path}")"
 
-[[ "${action}" =~ ^(post-cutover-smoke|pause-v2-writes|archive-failed-v2|restore-final-backup|restored-smoke)$ ]] ||
+[[ "${action}" =~ ^(prepare-reset-archives|post-cutover-smoke|pause-v2-writes|archive-failed-v2|restore-final-backup|restored-smoke)$ ]] ||
 	die "unsupported protected action"
-[[ "${mode}" =~ ^(dry-run|execute)$ ]] || die "unsupported protected mode"
+[[ "${mode}" =~ ^(prepare|dry-run|execute)$ ]] || die "unsupported protected mode"
+if [[ "${mode}" == "prepare" ]]; then
+	[[ "${action}" == "prepare-reset-archives" ]] ||
+		die "prepare mode supports only reset archive preparation"
+else
+	[[ "${action}" != "prepare-reset-archives" ]] ||
+		die "reset archive preparation requires prepare mode"
+fi
 [[ "${operation_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] ||
 	die "invalid protected operation ID"
 [[ "${release_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] ||
@@ -131,22 +153,36 @@ if [[ "${acceptance_assets_exist}" == "true" &&
 	die "post-acceptance recovery is pause-and-forward-fix only"
 fi
 
-declare -A expected_scripts=(
-	[restoreState]="${SCRIPT_DIR}/restore-alpha-state.sh"
-	[deployNode]="${SCRIPT_DIR}/deploy-node.sh"
-	[deployMedia]="${SCRIPT_DIR}/deploy-media.sh"
-	[status]="${SCRIPT_DIR}/status.sh"
-)
-declare -A pinned_scripts=()
+pinned_restore_state=""
+pinned_deploy_node=""
+pinned_deploy_media=""
+pinned_status=""
 for role in restoreState deployNode deployMedia status; do
-	pinned_scripts["${role}"]="$(jq -er --arg role "${role}" '.scripts[$role]' "${context_path}")"
-	pinned_parent="$(cd -- "$(dirname -- "${pinned_scripts[${role}]}")" 2>/dev/null && pwd)" ||
+	pinned_script="$(jq -er --arg role "${role}" '.scripts[$role]' "${context_path}")"
+	case "${role}" in
+		restoreState)
+			expected_script="${SCRIPT_DIR}/restore-alpha-state.sh"
+			pinned_restore_state="${pinned_script}"
+			;;
+		deployNode)
+			expected_script="${SCRIPT_DIR}/deploy-node.sh"
+			pinned_deploy_node="${pinned_script}"
+			;;
+		deployMedia)
+			expected_script="${SCRIPT_DIR}/deploy-media.sh"
+			pinned_deploy_media="${pinned_script}"
+			;;
+		status)
+			expected_script="${SCRIPT_DIR}/status.sh"
+			pinned_status="${pinned_script}"
+			;;
+	esac
+	pinned_parent="$(cd -- "$(dirname -- "${pinned_script}")" 2>/dev/null && pwd)" ||
 		die "protected ${role} parent is unavailable"
-	pinned_absolute="${pinned_parent}/$(basename -- "${pinned_scripts[${role}]}")"
-	[[ "${pinned_absolute}" == "${expected_scripts[${role}]}" ]] ||
+	pinned_absolute="${pinned_parent}/$(basename -- "${pinned_script}")"
+	[[ "${pinned_absolute}" == "${expected_script}" ]] ||
 		die "protected ${role} path is not the existing deployment script"
-	[[ -f "${pinned_scripts[${role}]}" && -x "${pinned_scripts[${role}]}" &&
-		! -L "${pinned_scripts[${role}]}" ]] ||
+	[[ -f "${pinned_script}" && -x "${pinned_script}" && ! -L "${pinned_script}" ]] ||
 		die "protected ${role} script is unavailable"
 done
 
@@ -155,6 +191,10 @@ done
 readiness_sha256="${BASH_REMATCH[1]}"
 [[ "${media_reset_archive}" == "/opt/eterra-alpha/archive/nexus-v2-fresh-reset/${readiness_sha256}/media" ]] ||
 	die "protected media reset archive path is not paired with the node archive"
+[[ -f "${reset_readiness_path}" && ! -L "${reset_readiness_path}" ]] ||
+	die "protected reset-readiness packet is unavailable"
+[[ "$(shasum -a 256 "${reset_readiness_path}" | awk '{print $1}')" == "${readiness_sha256}" ]] ||
+	die "protected reset-readiness packet hash mismatch"
 
 if [[ "${action}" == "restore-final-backup" ]]; then
 	[[ -n "${staging_path}" && -d "${staging_path}" && ! -L "${staging_path}" ]] ||
@@ -191,6 +231,155 @@ load_env
 [[ "${ETERRA_EXPECTED_MEDIA_COMMIT}" == "${media_commit}" ]] ||
 	die "protected expected media commit does not match the coordinator"
 
+work_dir="$(make_temp_dir)"
+if [[ "${mode}" == "prepare" ]]; then
+	remote_readiness="${REMOTE_SCRIPT_DIR}/nexus-v2-${operation_id}-reset-readiness.json"
+	remote_root_bash <<EOF
+set -euo pipefail
+mkdir -p "${REMOTE_SCRIPT_DIR}"
+rm -f "${remote_readiness}"
+EOF
+	rsync_to_remote_no_delete "${reset_readiness_path}" "${remote_readiness}"
+	preparation_state="$(
+		remote_root_bash <<EOF
+set -euo pipefail
+test "\$(shasum -a 256 "${remote_readiness}" | awk '{print \$1}')" = "${readiness_sha256}"
+node_dir="${node_reset_archive}"
+media_dir="${media_reset_archive}"
+for archive_dir in "\${node_dir}" "\${media_dir}"; do
+	if [[ -e "\${archive_dir}" && ! -f "\${archive_dir}/prepared.marker.json" ]]; then
+		echo "partial reset archive requires manual review" >&2
+		exit 1
+	fi
+	test ! -e "\${archive_dir}/reset-applied.marker"
+done
+if [[ -f "\${node_dir}/prepared.marker.json" && -f "\${media_dir}/prepared.marker.json" ]]; then
+	for pair in "node:\${node_dir}" "media:\${media_dir}"; do
+		component="\${pair%%:*}"
+		archive_dir="\${pair#*:}"
+		test -z "\$(find "\${archive_dir}" -perm /222 -print -quit)"
+		(cd "\${archive_dir}" && shasum -a 256 -c file-sha256.prepared >/dev/null)
+		jq -e \
+			--arg component "\${component}" \
+			--arg operationId "${operation_id}" \
+			--arg planSha256 "${plan_sha256}" \
+			--arg releaseId "${release_id}" \
+			--arg sourceCommit "${source_commit}" \
+			--arg mediaSourceCommit "${media_commit}" \
+			--arg readinessSha256 "${readiness_sha256}" \
+			'.schemaVersion == 1 and
+			 .kind == "nexus-v2-private-alpha-prepared-reset-archive" and
+			 .componentId == \$component and
+			 .operationId == \$operationId and
+			 .planSha256 == \$planSha256 and
+			 .releaseId == \$releaseId and
+			 .sourceCommit == \$sourceCommit and
+			 .mediaSourceCommit == \$mediaSourceCommit and
+			 .resetReadinessSha256 == \$readinessSha256 and
+			 .currentAlphaStatePreserved == true and
+			 .resetApplied == false' \
+			"\${archive_dir}/prepared.marker.json" >/dev/null
+	done
+	rm -f "${remote_readiness}"
+	printf 'reused'
+	exit 0
+fi
+[[ ! -e "\${node_dir}" && ! -e "\${media_dir}" ]] || {
+	echo "paired reset archives must be wholly absent or wholly prepared" >&2
+	exit 1
+}
+before_state="\$(
+	{
+		systemctl show "${REMOTE_NODE_SERVICE_NAME}.service" "${AUTHORITY_SERVICE_NAME}.service" \
+			--property=Id,LoadState,ActiveState,SubState 2>/dev/null || true
+		${REMOTE_DOCKER_COMPOSE_CMD} ps --format json 2>/dev/null || true
+	} | shasum -a 256 | awk '{print \$1}'
+)"
+for archive_dir in "\${node_dir}" "\${media_dir}"; do
+	mkdir -p "\${archive_dir}/shared-state.before"
+	install -m 0400 "${remote_readiness}" "\${archive_dir}/reset-readiness.json"
+	if [[ -d "${REMOTE_STATE_DIR}" ]]; then
+		cp -a "${REMOTE_STATE_DIR}/." "\${archive_dir}/shared-state.before/"
+	fi
+done
+{
+	printf 'deploy_root=%s\n' "${DEPLOY_ROOT}"
+	printf 'node_data_dir=%s\n' "${REMOTE_NODE_DATA_DIR}"
+	printf 'node_service=%s\n' "${REMOTE_NODE_SERVICE_NAME}.service"
+	printf 'readiness_sha256=%s\n' "${readiness_sha256}"
+	printf 'release_id=%s\n' "${release_id}"
+	printf 'source_commit=%s\n' "${source_commit}"
+	printf 'media_source_commit=%s\n' "${media_commit}"
+} >"\${node_dir}/deployment-identifiers.before"
+{
+	printf 'deploy_root=%s\n' "${DEPLOY_ROOT}"
+	printf 'compose_project=%s\n' "${REMOTE_MEDIA_PROJECT_NAME}"
+	printf 'ipfs_data_volume=%s\n' "${REMOTE_IPFS_DATA_VOLUME}"
+	printf 'ipfs_staging_volume=%s\n' "${REMOTE_IPFS_STAGING_VOLUME}"
+	printf 'readiness_sha256=%s\n' "${readiness_sha256}"
+	printf 'release_id=%s\n' "${release_id}"
+	printf 'source_commit=%s\n' "${source_commit}"
+	printf 'media_source_commit=%s\n' "${media_commit}"
+} >"\${media_dir}/deployment-identifiers.before"
+for path in "${REMOTE_NODE_ENV_FILE}" "${REMOTE_NODE_BIN}" "${REMOTE_NODE_SPEC}" \
+	"${REMOTE_NODE_PLAIN_SPEC}" "${REMOTE_NODE_SERVICE_UNIT_FILE}"; do
+	[[ ! -f "\${path}" ]] || shasum -a 256 "\${path}" >>"\${node_dir}/file-sha256.before"
+done
+for path in "${REMOTE_MEDIA_ENV_FILE}" "${REMOTE_MEDIA_COMPOSE_BASE}" \
+	"${REMOTE_MEDIA_COMPOSE_OVERRIDE}" "${REMOTE_MEDIA_COMPOSE_PHASE1}"; do
+	[[ ! -f "\${path}" ]] || shasum -a 256 "\${path}" >>"\${media_dir}/file-sha256.before"
+done
+systemctl show "${REMOTE_NODE_SERVICE_NAME}.service" \
+	--property=Id,LoadState,ActiveState,SubState,FragmentPath \
+	>"\${node_dir}/service-identity.before" 2>/dev/null || true
+docker volume inspect "${REMOTE_IPFS_DATA_VOLUME}" "${REMOTE_IPFS_STAGING_VOLUME}" \
+	>"\${media_dir}/volume-identities.before.json"
+${REMOTE_DOCKER_COMPOSE_CMD} ps --format json \
+	>"\${media_dir}/compose-services.before.json" 2>/dev/null || true
+for pair in "node:\${node_dir}" "media:\${media_dir}"; do
+	component="\${pair%%:*}"
+	archive_dir="\${pair#*:}"
+	(
+		cd "\${archive_dir}"
+		find . -type f ! -name prepared.marker.json ! -name file-sha256.prepared \
+			-print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256
+	) >"\${archive_dir}/file-sha256.prepared"
+	jq -cn \
+		--arg componentId "\${component}" \
+		--arg operationId "${operation_id}" \
+		--arg planSha256 "${plan_sha256}" \
+		--arg releaseId "${release_id}" \
+		--arg sourceCommit "${source_commit}" \
+		--arg mediaSourceCommit "${media_commit}" \
+		--arg resetReadinessSha256 "${readiness_sha256}" \
+		--arg preparedAtUtc "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+		'{schemaVersion:1,kind:"nexus-v2-private-alpha-prepared-reset-archive",
+		  componentId:\$componentId,operationId:\$operationId,planSha256:\$planSha256,
+		  releaseId:\$releaseId,sourceCommit:\$sourceCommit,
+		  mediaSourceCommit:\$mediaSourceCommit,
+		  resetReadinessSha256:\$resetReadinessSha256,
+		  currentAlphaStatePreserved:true,resetApplied:false,
+		  preparedAtUtc:\$preparedAtUtc}' >"\${archive_dir}/prepared.marker.json"
+	chmod -R a-w "\${archive_dir}"
+	test -z "\$(find "\${archive_dir}" -perm /222 -print -quit)"
+	(cd "\${archive_dir}" && shasum -a 256 -c file-sha256.prepared >/dev/null)
+done
+after_state="\$(
+	{
+		systemctl show "${REMOTE_NODE_SERVICE_NAME}.service" "${AUTHORITY_SERVICE_NAME}.service" \
+			--property=Id,LoadState,ActiveState,SubState 2>/dev/null || true
+		${REMOTE_DOCKER_COMPOSE_CMD} ps --format json 2>/dev/null || true
+	} | shasum -a 256 | awk '{print \$1}'
+)"
+test "\${before_state}" = "\${after_state}"
+rm -f "${remote_readiness}"
+printf 'created'
+EOF
+	)"
+	[[ "${preparation_state}" == "created" || "${preparation_state}" == "reused" ]] ||
+		die "protected reset archive preparation failed"
+fi
+
 archive_preflight="$(
 	remote_root_bash <<EOF
 set -euo pipefail
@@ -198,17 +387,22 @@ for archive_dir in "${node_reset_archive}" "${media_reset_archive}"; do
 	test -d "\${archive_dir}"
 	test -f "\${archive_dir}/reset-readiness.json"
 	test -f "\${archive_dir}/deployment-identifiers.before"
-	test -f "\${archive_dir}/reset-applied.marker"
+	test -f "\${archive_dir}/prepared.marker.json"
+	test -f "\${archive_dir}/file-sha256.prepared"
+	(cd "\${archive_dir}" && shasum -a 256 -c file-sha256.prepared >/dev/null)
 done
 test "\$(shasum -a 256 "${node_reset_archive}/reset-readiness.json" | awk '{print \$1}')" = "${readiness_sha256}"
 test "\$(shasum -a 256 "${media_reset_archive}/reset-readiness.json" | awk '{print \$1}')" = "${readiness_sha256}"
+if [[ "${action}" == "post-cutover-smoke" && "${mode}" == "execute" ]]; then
+	test -f "${node_reset_archive}/reset-applied.marker"
+	test -f "${media_reset_archive}/reset-applied.marker"
+fi
 printf 'ready'
 EOF
 )"
 [[ "${archive_preflight}" == "ready" ]] ||
 	die "protected reset archive preflight failed"
 
-work_dir="$(make_temp_dir)"
 marker_dir="${DEPLOY_ROOT}/shared/rollback/nexus-v2-post-cutover/${operation_id}/${component_id}/actions"
 marker_path="${marker_dir}/${action}.json"
 
@@ -432,7 +626,7 @@ EOF
 
 strict_post_cutover_smoke() {
 	local status_output="${work_dir}/status.log"
-	"${pinned_scripts[status]}" >"${status_output}" 2>&1 ||
+	"${pinned_status}" >"${status_output}" 2>&1 ||
 		die "pinned status script failed"
 	remote_root_bash <<EOF
 set +e
@@ -471,6 +665,17 @@ failed_hash=""
 checks_path="${work_dir}/checks.json"
 
 case "${action}" in
+	prepare-reset-archives)
+		jq -cn '{
+			sourceIdentityPinned:true,
+			credentialsResolvable:true,
+			archivePreparationNonDestructive:true,
+			archivesPreparedAndReadOnly:true,
+			currentAlphaStatePreserved:true,
+			noResetApplied:true,
+			readinessIdentityBound:true
+		}' >"${checks_path}"
+		;;
 	post-cutover-smoke)
 		smoke_passed="$(strict_post_cutover_smoke)"
 		[[ "${smoke_passed}" == "true" || "${smoke_passed}" == "false" ]] ||
@@ -599,9 +804,9 @@ EOF
 		)"
 		[[ "${remote_failed_hash}" == "${failed_hash}" ]] ||
 			die "failed V2 archive identity drifted before restore"
-		"${pinned_scripts[restoreState]}" --verified-final-backup "${staging_path}"
-		"${pinned_scripts[deployNode]}" --verify-restored-final-backup "${staging_path}"
-		"${pinned_scripts[deployMedia]}" --verify-restored-final-backup "${staging_path}"
+		"${pinned_restore_state}" --verified-final-backup "${staging_path}"
+		"${pinned_deploy_node}" --verify-restored-final-backup "${staging_path}"
+		"${pinned_deploy_media}" --verify-restored-final-backup "${staging_path}"
 		jq -cn '{
 			sourceIdentityPinned:true,
 			requiredResetArchivesPresent:true,
@@ -621,7 +826,7 @@ EOF
 		failed_hash="$(jq -er '.failedV2RootArchiveSha256' "${archive_marker}")"
 		[[ "$(jq -r '.failedV2RootArchiveSha256' "${restore_marker}")" == "${failed_hash}" ]] ||
 			die "protected restore marker lost the failed V2 archive identity"
-		"${pinned_scripts[status]}" >"${work_dir}/restored-status.log" 2>&1 ||
+		"${pinned_status}" >"${work_dir}/restored-status.log" 2>&1 ||
 			die "pinned status script failed after restore"
 		remote_root_bash <<EOF
 set -euo pipefail

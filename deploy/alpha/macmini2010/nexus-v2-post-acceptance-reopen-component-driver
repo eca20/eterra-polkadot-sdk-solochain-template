@@ -1,0 +1,548 @@
+#!/bin/bash
+set -euo pipefail
+# Closed union of every credential-bearing environment variable accepted by the
+# chain, site, or Unity private-alpha deployment lanes.  Preserve each shell
+# value for local use, but remove its export attribute before the first child.
+export -n DEPLOY_PASSWORD REMOTE_SUDO_PASSWORD AURA_SURI GRAN_SURI \
+	MEDIA_SIGNER_SEED MEDIA_ADMIN_API_KEY AUTHORITY_RELAY_MNEMONIC \
+	AUTHORITY_RELAY_DERIVATION_PASSWORD ETERRA_LEGENDS_SIGNER_MNEMONIC \
+	ETERRA_LEGENDS_SIGNER_DERIVATION_PASSWORD ETERRA_LEGENDS_PRIVATE_ALPHA_ACCESS_KEY \
+	ETERRA_ALPHA_SUDO_MNEMONIC ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD \
+	ADMIN_SESSION_SECRET ALPHA_ACCESS_SESSION_SECRET DISCORD_CLIENT_SECRET \
+	DISCORD_BOT_TOKEN MONGODB_URI ETERRA_LEGENDS_PLAYER_ACCESS_TOKEN \
+	NEXUS_V2_PRIVATE_ALPHA_ACCESS_KEY NEXUS_V2_SESSION_AUTHORIZATION_PROFILES_JSON \
+	ADMIN_API_KEY ETERRA_FPS_V2_OWNER_SECRET_PATH \
+	ETERRA_FPS_V2_PLAYER_GATEWAY_ACCESS_TOKEN ETERRA_FPS_V2_ROOT_SECRET_PATH \
+	ETERRA_FPS_V2_SUDO_SECRET_PATH 2>/dev/null || true
+umask 077
+
+# Credential-loading adapter for the restricted reopen coordinator.  It uses
+# the existing, independently pinned chain/site deployment libraries and sends
+# only a hash-pinned helper plus the public reopen plan to either host.
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
+COORDINATOR="${SCRIPT_DIR}/nexus-v2-post-acceptance-reopen.py"
+
+component=""
+action=""
+mode=""
+operation_id=""
+plan_path=""
+plan_sha256=""
+result_path=""
+peer_commit_result=""
+peer_commit_result_sha256=""
+fps_adoption_seal=""
+fps_adoption_seal_sha256=""
+
+die() {
+	printf 'nexus-v2-post-acceptance-reopen-component-driver: %s\n' "$*" >&2
+	exit 2
+}
+
+clear_cross_lane_secret_exports() {
+	export -n DEPLOY_PASSWORD REMOTE_SUDO_PASSWORD AURA_SURI GRAN_SURI \
+		MEDIA_SIGNER_SEED MEDIA_ADMIN_API_KEY AUTHORITY_RELAY_MNEMONIC \
+		AUTHORITY_RELAY_DERIVATION_PASSWORD ETERRA_LEGENDS_SIGNER_MNEMONIC \
+		ETERRA_LEGENDS_SIGNER_DERIVATION_PASSWORD ETERRA_LEGENDS_PRIVATE_ALPHA_ACCESS_KEY \
+		ETERRA_ALPHA_SUDO_MNEMONIC ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD \
+		ADMIN_SESSION_SECRET ALPHA_ACCESS_SESSION_SECRET DISCORD_CLIENT_SECRET \
+		DISCORD_BOT_TOKEN MONGODB_URI ETERRA_LEGENDS_PLAYER_ACCESS_TOKEN \
+		NEXUS_V2_PRIVATE_ALPHA_ACCESS_KEY NEXUS_V2_SESSION_AUTHORIZATION_PROFILES_JSON \
+		ADMIN_API_KEY ETERRA_FPS_V2_OWNER_SECRET_PATH \
+		ETERRA_FPS_V2_PLAYER_GATEWAY_ACCESS_TOKEN ETERRA_FPS_V2_ROOT_SECRET_PATH \
+		ETERRA_FPS_V2_SUDO_SECRET_PATH 2>/dev/null || true
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--component) component="${2:?missing component}"; shift ;;
+		--action) action="${2:?missing action}"; shift ;;
+		--mode) mode="${2:?missing mode}"; shift ;;
+		--operation-id) operation_id="${2:?missing operation ID}"; shift ;;
+		--plan) plan_path="${2:?missing plan}"; shift ;;
+		--plan-sha256) plan_sha256="${2:?missing plan SHA-256}"; shift ;;
+		--result) result_path="${2:?missing result}"; shift ;;
+		--peer-commit-result) peer_commit_result="${2:?missing peer commit result}"; shift ;;
+		--peer-commit-result-sha256) peer_commit_result_sha256="${2:?missing peer commit result SHA-256}"; shift ;;
+		--fps-adoption-seal) fps_adoption_seal="${2:?missing FPS adoption seal}"; shift ;;
+		--fps-adoption-seal-sha256) fps_adoption_seal_sha256="${2:?missing FPS adoption seal SHA-256}"; shift ;;
+		--help|-h)
+			cat <<'EOF'
+Implements the chain-transport, FPS-server, and site-ingress component protocol for
+nexus-v2-post-acceptance-reopen.py. Protected execution additionally requires:
+
+  NEXUS_V2_POST_ACCEPTANCE_REOPEN_BACKEND=protected-alpha
+  NEXUS_V2_POST_ACCEPTANCE_REOPEN_CONFIRMATION=PRIVATE_ALPHA_RESTRICTED_REOPEN
+
+Dry-run preflight validates local source, environment, artifact, and credential
+resolution only. It never contacts a host.
+EOF
+			exit 0
+			;;
+		*) die "unknown argument: $1" ;;
+	esac
+	shift
+done
+
+[[ "${component}" =~ ^(chain-transport|fps-server|site-ingress)$ ]] || die "invalid component"
+[[ "${action}" =~ ^(preflight|open|adopt|promote|verify|prepare-commit|commit|close)$ ]] || die "invalid action"
+case "${component}:${action}" in
+	chain-transport:preflight|chain-transport:adopt|chain-transport:verify|chain-transport:commit|chain-transport:close) ;;
+	fps-server:preflight|fps-server:promote|fps-server:verify) ;;
+	site-ingress:preflight|site-ingress:open|site-ingress:verify|site-ingress:prepare-commit|site-ingress:commit|site-ingress:close) ;;
+	*) die "action is invalid for component" ;;
+esac
+[[ "${mode}" =~ ^(dry-run|execute)$ ]] || die "invalid mode"
+[[ "${operation_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "invalid operation ID"
+[[ "${plan_path}" = /* && -f "${plan_path}" && ! -L "${plan_path}" ]] || die "plan must be an absolute regular file"
+[[ "${plan_sha256}" =~ ^[0-9a-f]{64}$ ]] || die "invalid plan SHA-256"
+[[ "${result_path}" = /* && ! -e "${result_path}" ]] || die "result path must be a new absolute path"
+[[ "${operation_id}" == "$(jq -er '.operationId' "${plan_path}")" ]] || die "operation ID differs from plan"
+if [[ "${action}" == "commit" ]]; then
+	[[ "${peer_commit_result}" = /* && -f "${peer_commit_result}" && ! -L "${peer_commit_result}" ]] ||
+		die "final commit requires an absolute regular peer commit result"
+	[[ "${peer_commit_result_sha256}" =~ ^[0-9a-f]{64}$ ]] || die "invalid peer commit result SHA-256"
+	[[ "$(shasum -a 256 "${peer_commit_result}" | awk '{print $1}')" == "${peer_commit_result_sha256}" ]] ||
+		die "peer commit result hash mismatch"
+elif [[ -n "${peer_commit_result}" || -n "${peer_commit_result_sha256}" ]]; then
+	die "peer commit result is valid only for a final component commit"
+fi
+case "${component}:${action}:${mode}" in
+	site-ingress:open:execute|site-ingress:verify:execute|site-ingress:prepare-commit:execute|site-ingress:commit:execute)
+		[[ "${fps_adoption_seal}" = /* && -f "${fps_adoption_seal}" && ! -L "${fps_adoption_seal}" ]] ||
+			die "protected site-ingress action requires an absolute regular FPS adoption seal"
+		[[ "${fps_adoption_seal_sha256}" =~ ^[0-9a-f]{64}$ ]] || die "invalid FPS adoption seal SHA-256"
+		;;
+	*)
+		[[ -z "${fps_adoption_seal}" && -z "${fps_adoption_seal_sha256}" ]] ||
+			die "FPS adoption seal is valid only for protected site-ingress actions"
+		;;
+esac
+
+for command in base64 git jq python3 shasum; do
+	command -v "${command}" >/dev/null 2>&1 || die "missing required command: ${command}"
+done
+
+validation_command=validate
+if [[ "${action}" == close ]]; then validation_command=validate-close; fi
+python3 "${COORDINATOR}" "${validation_command}" --plan "${plan_path}" --expected-sha256 "${plan_sha256}" >/dev/null ||
+	die "reopen authority validation failed"
+if [[ -n "${fps_adoption_seal}" ]]; then
+	[[ "$(shasum -a 256 "${fps_adoption_seal}" | awk '{print $1}')" == "${fps_adoption_seal_sha256}" ]] ||
+		die "FPS adoption seal hash mismatch"
+	python3 "${COORDINATOR}" validate-adoption-seal \
+		--plan "${plan_path}" --expected-sha256 "${plan_sha256}" \
+		--fps-adoption-seal "${fps_adoption_seal}" \
+		--fps-adoption-seal-sha256 "${fps_adoption_seal_sha256}" >/dev/null ||
+		die "FPS adoption seal validation failed"
+fi
+
+driver_sha256="$(shasum -a 256 "${BASH_SOURCE[0]}" | awk '{print $1}')"
+expected_driver_sha256="$(jq -er --arg component "${component}" '.drivers[$component].sha256' "${plan_path}")"
+[[ "${driver_sha256}" == "${expected_driver_sha256}" ]] || die "component driver hash mismatch"
+source_commit="$(jq -er '.sourceCommit' "${plan_path}")"
+site_source_commit="$(jq -er '.siteSourceCommit' "${plan_path}")"
+release_id="$(jq -er '.releaseId' "${plan_path}")"
+site_release_version="$(jq -er '.siteReleaseVersion | select(test("^v[A-Za-z0-9][A-Za-z0-9._-]{0,126}$"))' "${plan_path}")"
+genesis_hash="$(jq -er '.genesisHash' "${plan_path}")"
+chain_lan_ip="$(jq -er '.network.chainLanIp' "${plan_path}")"
+site_lan_ip="$(jq -er '.network.siteLanIp' "${plan_path}")"
+ssh_known_hosts="$(jq -er '.sshHostPins.knownHosts.path' "${plan_path}")"
+ssh_known_hosts_sha256="$(jq -er '.sshHostPins.knownHosts.sha256' "${plan_path}")"
+ssh_host_pin_manifest="$(jq -er '.sshHostPins.manifest.path' "${plan_path}")"
+ssh_host_pin_manifest_sha256="$(jq -er '.sshHostPins.manifest.sha256' "${plan_path}")"
+ssh_host_pin_validator="$(jq -er '.sshHostPins.validator.path' "${plan_path}")"
+ssh_host_pin_validator_sha256="$(jq -er '.sshHostPins.validator.sha256' "${plan_path}")"
+[[ "${ssh_known_hosts}" = /* && -f "${ssh_known_hosts}" && ! -L "${ssh_known_hosts}" ]] || die "pinned dedicated SSH known_hosts is unavailable"
+[[ "${ssh_host_pin_manifest}" = /* && -f "${ssh_host_pin_manifest}" && ! -L "${ssh_host_pin_manifest}" ]] || die "pinned SSH host-pin manifest is unavailable"
+[[ "${ssh_host_pin_validator}" = /* && -f "${ssh_host_pin_validator}" && ! -L "${ssh_host_pin_validator}" ]] || die "pinned SSH host-pin validator is unavailable"
+[[ "$(shasum -a 256 "${ssh_known_hosts}" | awk '{print $1}')" == "${ssh_known_hosts_sha256}" ]] || die "pinned dedicated SSH known_hosts hash mismatch"
+[[ "$(shasum -a 256 "${ssh_host_pin_manifest}" | awk '{print $1}')" == "${ssh_host_pin_manifest_sha256}" ]] || die "pinned SSH host-pin manifest hash mismatch"
+[[ "$(shasum -a 256 "${ssh_host_pin_validator}" | awk '{print $1}')" == "${ssh_host_pin_validator_sha256}" ]] || die "pinned SSH host-pin validator hash mismatch"
+python3 "${ssh_host_pin_validator}" verify \
+	--known-hosts "${ssh_known_hosts}" \
+	--manifest "${ssh_host_pin_manifest}" >/dev/null || die "pinned SSH host-pin contract is invalid"
+export NEXUS_V2_SSH_KNOWN_HOSTS_FILE="${ssh_known_hosts}"
+export NEXUS_V2_SSH_KNOWN_HOSTS_SHA256="${ssh_known_hosts_sha256}"
+export NEXUS_V2_SSH_HOST_PIN_MANIFEST="${ssh_host_pin_manifest}"
+export NEXUS_V2_SSH_HOST_PIN_MANIFEST_SHA256="${ssh_host_pin_manifest_sha256}"
+
+helper_path="$(jq -er --arg component "${component}" '.helpers[$component].path' "${plan_path}")"
+helper_sha256="$(jq -er --arg component "${component}" '.helpers[$component].sha256' "${plan_path}")"
+[[ -f "${helper_path}" && ! -L "${helper_path}" && -x "${helper_path}" ]] || die "component helper is unavailable"
+[[ "$(shasum -a 256 "${helper_path}" | awk '{print $1}')" == "${helper_sha256}" ]] || die "component helper hash mismatch"
+
+chain_env="$(jq -er '.selectedDeploymentEnvironment.path' "${plan_path}")"
+site_env="$(jq -er '.selectedSiteDeploymentEnvironment.path' "${plan_path}")"
+final_lock="$(jq -er '.finalReleaseLock.path' "${plan_path}")"
+web_root="$(jq -er '.repositories.web.root' "${final_lock}")"
+
+require_loaded_ssh_transport() {
+	local expected_host="$1"
+	local expected_user="$2"
+	[[ "${SSH_OPTS:-}" == "" ]] || die "protected reopen transport rejects SSH_OPTS"
+	[[ "${NEXUS_V2_SSH_KNOWN_HOSTS_FILE:-}" == "${ssh_known_hosts}" ]] || die "loaded SSH known_hosts path differs from reopen plan"
+	[[ "${NEXUS_V2_SSH_KNOWN_HOSTS_SHA256:-}" == "${ssh_known_hosts_sha256}" ]] || die "loaded SSH known_hosts hash differs from reopen plan"
+	[[ "${NEXUS_V2_SSH_HOST_PIN_MANIFEST:-}" == "${ssh_host_pin_manifest}" ]] || die "loaded SSH host-pin manifest path differs from reopen plan"
+	[[ "${NEXUS_V2_SSH_HOST_PIN_MANIFEST_SHA256:-}" == "${ssh_host_pin_manifest_sha256}" ]] || die "loaded SSH host-pin manifest hash differs from reopen plan"
+	case "${NEXUS_V2_SSH_TRANSPORT_CONTRACT_VERSION:-}" in
+		nexus-v2-pinned-host-v1|nexus-v2-pinned-key-only-v2) ;;
+		*) die "deployment library did not activate an approved pinned key-only SSH transport contract" ;;
+	esac
+	[[ "${SSH_CMD[0]:-}" == ssh ]] || die "deployment library did not construct an SSH command"
+	[[ "${SSH_TARGET:-}" == "${expected_user}@${expected_host}" ]] || die "SSH target differs from the plan"
+	local config_file_options=0 null_config_file_options=0 destination_options=0 index
+	for ((index = 0; index < ${#SSH_CMD[@]}; index++)); do
+		if [[ "${SSH_CMD[index]}" == -F ]]; then
+			config_file_options=$((config_file_options + 1))
+			if [[ "${SSH_CMD[index + 1]:-}" == /dev/null ]]; then
+				null_config_file_options=$((null_config_file_options + 1))
+			fi
+		fi
+		if [[ "${SSH_CMD[index]}" == "${SSH_TARGET}" ]]; then
+			destination_options=$((destination_options + 1))
+		fi
+	done
+	[[ "${config_file_options}" -eq 1 && "${null_config_file_options}" -eq 1 ]] || die "SSH command does not ignore ambient configuration exactly once"
+	[[ "${destination_options}" -le 1 ]] || die "SSH command contains a duplicate deployment destination"
+	if [[ "${destination_options}" -eq 1 ]]; then
+		[[ "${SSH_CMD[${#SSH_CMD[@]}-1]:-}" == "${SSH_TARGET}" ]] || die "SSH command embeds its destination outside the final argument"
+	fi
+	local token observed
+	for token in \
+		"Hostname=${expected_host}" \
+		"HostKeyAlias=${expected_host}" \
+		"UserKnownHostsFile=${ssh_known_hosts}" \
+		"GlobalKnownHostsFile=/dev/null" \
+		"StrictHostKeyChecking=yes" \
+		"UpdateHostKeys=no" \
+		"KnownHostsCommand=none" \
+		"VerifyHostKeyDNS=no" \
+		"CheckHostIP=yes" \
+		"CanonicalizeHostname=no" \
+		"ProxyCommand=none" \
+		"ProxyJump=none" \
+		"HostKeyAlgorithms=ssh-ed25519,ecdsa-sha2-nistp256,rsa-sha2-512,rsa-sha2-256" \
+		"PubkeyAcceptedAlgorithms=ssh-ed25519,ecdsa-sha2-nistp256,rsa-sha2-512,rsa-sha2-256" \
+		"KexAlgorithms=curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group14-sha256" \
+		"Ciphers=chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr" \
+		"MACs=hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256" \
+		"IdentitiesOnly=yes" \
+		"IdentityAgent=none" \
+		"BatchMode=yes" \
+		"PasswordAuthentication=no" \
+		"KbdInteractiveAuthentication=no" \
+		"PreferredAuthentications=publickey"; do
+		observed=0
+		local item
+		for item in "${SSH_CMD[@]}"; do
+			if [[ "${item}" == "${token}" ]]; then observed=$((observed + 1)); fi
+		done
+		[[ "${observed}" -eq 1 ]] || die "SSH command lacks one exact ${token} option"
+	done
+	local no_tty=0
+	for item in "${SSH_CMD[@]}"; do
+		if [[ "${item}" == "RequestTTY=no" || "${item}" == -T ]]; then no_tty=1; fi
+	done
+	[[ "${no_tty}" -eq 1 ]] || die "SSH command does not explicitly disable pseudo-terminal allocation"
+	[[ "${RSYNC_RSH:-}" == *"-F /dev/null"* ]] || die "rsync SSH command does not ignore ambient configuration"
+}
+
+load_chain_context() {
+	export ALPHA_MACMINI2010_ENV_FILE="${chain_env}"
+	# shellcheck source=./lib.sh
+	source "${SCRIPT_DIR}/lib.sh"
+	load_env
+	clear_cross_lane_secret_exports
+	require_loaded_ssh_transport "${chain_lan_ip}" "${DEPLOY_USER}"
+	[[ "${ETERRA_RELEASE_VERSION}" == "${release_id}" ]] || die "chain environment release mismatch"
+	[[ "${ETERRA_EXPECTED_CHAIN_COMMIT}" == "${source_commit}" ]] || die "chain environment source mismatch"
+	[[ "${MINI_LAN_IP}" == "${chain_lan_ip}" && "${SITE_PROXY_LAN_IP}" == "${site_lan_ip}" ]] || die "chain environment host identity mismatch"
+	[[ "${CHAIN_RPC_PORT}" == 9944 && "${CHAIN_P2P_PORT}" == 30333 && "${MEDIA_PORT}" == 4000 ]] || die "chain environment core port mismatch"
+	[[ "${IPFS_API_PORT}" == 5001 && "${IPFS_GATEWAY_PORT}" == 8080 && "${AUTHORITY_PORT}" == 8787 ]] || die "chain environment service port mismatch"
+	require_release_source "${REPO_ROOT}" "restricted reopen component driver" "${source_commit}" >/dev/null
+}
+
+load_site_context() {
+	local site_lib="${web_root}/tcg/deploy/alpha/macmini2014/lib.sh"
+	[[ -f "${site_lib}" && ! -L "${site_lib}" ]] || die "pinned site deployment library is unavailable"
+	export ALPHA_MACMINI2014_ENV_FILE="${site_env}"
+	# shellcheck source=/dev/null
+	source "${site_lib}"
+	load_env
+	clear_cross_lane_secret_exports
+	require_loaded_ssh_transport "${site_lan_ip}" "${DEPLOY_USER}"
+	[[ "${RELEASE_VERSION}" == "${site_release_version}" && "${EXPECTED_SOURCE_COMMIT}" == "${site_source_commit}" ]] || die "site environment release/source mismatch"
+	[[ "${CHAIN_UPSTREAM_HOST}" == "${chain_lan_ip}" && "${MEDIA_UPSTREAM_HOST}" == "${chain_lan_ip}" ]] || die "site chain/media upstream mismatch"
+	[[ "${IPFS_UPSTREAM_HOST}" == "${chain_lan_ip}" && "${AUTHORITY_UPSTREAM_HOST}" == "${chain_lan_ip}" ]] || die "site IPFS/authority upstream mismatch"
+	[[ "${CHAIN_RPC_PORT}" == 9944 && "${MEDIA_PORT}" == 4000 && "${IPFS_GATEWAY_PORT}" == 8080 && "${AUTHORITY_PORT}" == 8787 ]] || die "site upstream port mismatch"
+	[[ "${SITE_LAN_IP}" == "${site_lan_ip}" ]] || die "site environment host identity mismatch"
+	public_hostname="$(jq -er '.network.publicHostname' "${plan_path}")"
+	case "${public_hostname}" in
+		"${HOME_HOSTNAME}"|"${POCKET_HOSTNAME}"|"${FPS_HOSTNAME}"|"${RPG_HOSTNAME}") ;;
+		*) die "site public hostname is not one of the final environment's Eterra hosts" ;;
+	esac
+	assert_release_source
+	[[ "${SOURCE_COMMIT}" == "${site_source_commit}" ]] || die "pinned site source mismatch"
+}
+
+load_fps_context() {
+	local unity_root unity_lib fps_env
+	unity_root="$(jq -er '.repositories.unity.root' "${final_lock}")"
+	unity_lib="${unity_root}/deploy/alpha/macmini2014/lib.sh"
+	fps_env="$(jq -er '.unityFpsDeploymentEnvironment.path' "${plan_path}")"
+	[[ -f "${unity_lib}" && ! -L "${unity_lib}" ]] || die "pinned Unity deployment library is unavailable"
+	[[ -f "${fps_env}" && ! -L "${fps_env}" ]] || die "pinned Unity FPS environment is unavailable"
+	export ETERRA_FPS_ALPHA_ENV_FILE="${fps_env}"
+	# shellcheck source=/dev/null
+	source "${unity_lib}"
+	load_env
+	clear_cross_lane_secret_exports
+	require_loaded_ssh_transport "${site_lan_ip}" "${DEPLOY_USER}"
+	[[ "${DEPLOY_HOST}" == "${site_lan_ip}" && "${DEPLOY_USER}" == eterra2014 ]] || die "FPS deployment target differs from plan"
+	[[ "${ETERRA_NODE_WS_URL}" == ws://127.0.0.1:9944 ]] || die "FPS chain endpoint is not the site-local proxy"
+	[[ "${FPS_ALPHA_EXPECT_CHAIN_RELEASE_ID}" == "${release_id}" ]] || die "FPS chain release differs from plan"
+	[[ "${FPS_ALPHA_EXPECT_CHAIN_DEPLOYMENT_SOURCE_COMMIT}" == "${source_commit}" ]] || die "FPS chain deployment source differs from plan"
+	[[ "${FPS_ALPHA_EXPECT_UNITY_SOURCE_COMMIT}" == "$(jq -er '.repositories.unity.head' "${final_lock}")" ]] || die "FPS Unity source differs from final lock"
+}
+
+if [[ "${component}" == "chain-transport" ]]; then
+	load_chain_context
+elif [[ "${component}" == "fps-server" ]]; then
+	load_fps_context
+else
+	load_site_context
+fi
+
+write_dry_run_result() {
+	python3 - "${result_path}" "${component}" "${action}" "${operation_id}" "${plan_path}" "${plan_sha256}" "${driver_sha256}" <<'PY'
+import datetime as dt
+import json
+import os
+import pathlib
+import sys
+
+output, component, action, operation, plan_path, plan_sha, driver_sha = sys.argv[1:]
+plan = json.loads(pathlib.Path(plan_path).read_text(encoding="utf-8"))
+checks = {
+    "chain-transport": {
+        "credentialsResolved": True,
+        "sourcePinned": True,
+        "authorityArtifactsPinned": True,
+        "systemdSocketProxyRequired": True,
+        "firewallDefaultDenyRequired": True,
+        "forbiddenExposureProhibited": True,
+    },
+    "site-ingress": {
+        "credentialsResolved": True,
+        "sourcePinned": True,
+        "caddyArtifactsPinned": True,
+        "candidateCaddyStaticContractValidated": True,
+        "siteFirewallContractPinned": True,
+        "loopbackPublicationContractPinned": True,
+    },
+    "fps-server": {
+        "credentialsResolved": True,
+        "sourcePinned": True,
+        "candidatePinned": True,
+        "environmentPinned": True,
+        "sshPinsExact": True,
+        "proxyContractPinned": True,
+        "threeModesRequired": True,
+        "rollbackContractPinned": True,
+    },
+}[component]
+value = {
+    "schemaVersion": 1,
+    "kind": "nexus-v2-private-alpha-post-acceptance-reopen-component-result",
+    "operationId": operation,
+    "planSha256": plan_sha,
+    "releaseId": plan["releaseId"],
+    "siteReleaseVersion": plan["siteReleaseVersion"],
+    "sourceCommit": plan["sourceCommit"],
+    "siteSourceCommit": plan["siteSourceCommit"],
+    "componentId": component,
+    "action": action,
+    "mode": "dry-run",
+    "result": "passed",
+    "mutationPerformed": False,
+    "alreadyApplied": False,
+    "finalReleaseLockSha256": plan["finalReleaseLock"]["sha256"],
+    "acceptanceBoundaryReceiptSha256": plan["acceptanceBoundaryReceipt"]["sha256"],
+    "phase2FinalSealSha256": plan["phase2FinalSeal"]["sha256"],
+    "fpsAdoptionSealSha256": None,
+    "driverSha256": driver_sha,
+    "remoteMarkerSha256": None,
+    "componentReceipt": None,
+    "checks": checks,
+    "completedAtUtc": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+path = pathlib.Path(output)
+path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+with os.fdopen(fd, "wb") as handle:
+    handle.write((json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
+PY
+}
+
+if [[ "${mode}" == "dry-run" ]]; then
+	[[ "${action}" == "preflight" ]] || die "dry-run supports preflight only"
+	write_dry_run_result
+	exit 0
+fi
+
+[[ "${NEXUS_V2_POST_ACCEPTANCE_REOPEN_BACKEND:-}" == "protected-alpha" ]] ||
+	die "protected reopen backend was not selected"
+[[ "${NEXUS_V2_POST_ACCEPTANCE_REOPEN_CONFIRMATION:-}" == "PRIVATE_ALPHA_RESTRICTED_REOPEN" ]] ||
+	die "protected reopen confirmation is missing"
+
+run_fps_component() {
+	local candidate snapshot deployment_receipt wrapper_output wrapper_action
+	local marker_sha component_receipt already_applied mutation checks
+	candidate="$(dirname -- "$(jq -er '.unityFpsCandidateManifest.path' "${plan_path}")")"
+	snapshot="$(jq -er '.emergencyClosure.fps.snapshotPath' "${plan_path}")"
+	deployment_receipt="$(jq -er '.emergencyClosure.fps.deploymentReceiptPath' "${plan_path}")"
+	mkdir -p -- "$(dirname -- "${snapshot}")"
+	wrapper_action="${action}"
+	wrapper_output="$("${helper_path}" "${wrapper_action}" \
+		--candidate "${candidate}" \
+		--snapshot "${snapshot}" \
+		--deployment-receipt "${deployment_receipt}")" || die "guarded FPS ${action} failed"
+	python3 - "${wrapper_output}" "${wrapper_action}" "$(jq -er '.unityFpsCandidateManifest.sha256' "${plan_path}")" <<'PY' || die "guarded FPS result contract mismatch"
+import json, re, sys
+value = json.loads(sys.argv[1])
+action, candidate_sha = sys.argv[2:]
+if set(value) != {"action","candidateId","chainProxyState","deploymentReceipt","deploymentSnapshot","mutationPerformed","result","rollbackReceipt","safety","schema","verified"}:
+    raise SystemExit(1)
+if value["schema"] != "eterra.nexus-v2-fps-reopen-component-result.v1" or value["action"] != action or value["result"] != "passed" or value["verified"] is not True:
+    raise SystemExit(1)
+if value["safety"] != {"marketplace":False,"paidEntry":False,"permanentAssetLoss":False,"publicProduction":False,"wagering":False}:
+    raise SystemExit(1)
+if not re.fullmatch(r"nexus-v2-fps-[0-9a-f]{12}-[0-9a-f]{16}", value["candidateId"]):
+    raise SystemExit(1)
+if action == "preflight":
+    if value["mutationPerformed"] is not False or value["chainProxyState"] != "required-runtime-only": raise SystemExit(1)
+else:
+    if value["chainProxyState"] != "active-runtime-only": raise SystemExit(1)
+PY
+	if [[ "${action}" == preflight ]]; then
+		marker_sha="$(jq -er '.unityFpsCandidateManifest.sha256' "${plan_path}")"
+		component_receipt=null
+		already_applied=false
+		mutation=false
+		checks='{"candidatePinned":true,"credentialsResolved":true,"environmentPinned":true,"proxyContractPinned":true,"rollbackContractPinned":true,"sourcePinned":true,"sshPinsExact":true,"threeModesRequired":true}'
+	elif [[ "${action}" == promote ]]; then
+		[[ -f "${deployment_receipt}" && ! -L "${deployment_receipt}" ]] || die "FPS promotion receipt is unavailable"
+		marker_sha="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["deploymentSnapshot"]["sha256"])' "${wrapper_output}")"
+		component_receipt="$(python3 - "${deployment_receipt}" <<'PY'
+import hashlib, json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); print(json.dumps({"path":str(p),"sha256":hashlib.sha256(p.read_bytes()).hexdigest()},sort_keys=True,separators=(",",":")))
+PY
+)"
+		already_applied=false
+		mutation=true
+		checks='{"candidatePromoted":true,"deploymentReceiptPinned":true,"priorDeploymentCaptured":true,"safetyExact":true,"servicesActive":true,"siteLocalChainProxyExact":true,"threeModesReady":true}'
+	else
+		[[ -f "${deployment_receipt}" && ! -L "${deployment_receipt}" ]] || die "FPS deployment receipt is unavailable"
+		marker_sha="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["deploymentSnapshot"]["sha256"])' "${wrapper_output}")"
+		component_receipt="$(python3 - "${deployment_receipt}" <<'PY'
+import hashlib, json, pathlib, sys
+p=pathlib.Path(sys.argv[1]); print(json.dumps({"path":str(p),"sha256":hashlib.sha256(p.read_bytes()).hexdigest()},sort_keys=True,separators=(",",":")))
+PY
+)"
+		already_applied=true
+		mutation=false
+		checks='{"abilityDeathmatchReady":true,"currentCandidateExact":true,"deploymentReceiptPinned":true,"extractionBattleRoyaleReady":true,"extractionReady":true,"immutableDeploymentReceipt":true,"safetyExact":true,"siteLocalChainProxyExact":true}'
+	fi
+	python3 - "${result_path}" "${operation_id}" "${plan_path}" "${plan_sha256}" "${driver_sha256}" \
+		"${action}" "${marker_sha}" "${component_receipt}" "${already_applied}" "${mutation}" "${checks}" <<'PY'
+import datetime as dt, json, os, pathlib, sys
+output, operation, plan_path, plan_sha, driver_sha, action, marker_sha, receipt_raw, already, mutation, checks_raw = sys.argv[1:]
+plan=json.loads(pathlib.Path(plan_path).read_text())
+value={"schemaVersion":1,"kind":"nexus-v2-private-alpha-post-acceptance-reopen-component-result",
+ "operationId":operation,"planSha256":plan_sha,"releaseId":plan["releaseId"],
+ "siteReleaseVersion":plan["siteReleaseVersion"],"sourceCommit":plan["sourceCommit"],
+ "siteSourceCommit":plan["siteSourceCommit"],"componentId":"fps-server","action":action,
+ "mode":"execute","result":"passed","mutationPerformed":mutation=="true",
+ "alreadyApplied":already=="true","finalReleaseLockSha256":plan["finalReleaseLock"]["sha256"],
+ "acceptanceBoundaryReceiptSha256":plan["acceptanceBoundaryReceipt"]["sha256"],
+ "phase2FinalSealSha256":plan["phase2FinalSeal"]["sha256"],"fpsAdoptionSealSha256":None,
+ "driverSha256":driver_sha,
+ "remoteMarkerSha256":marker_sha,"componentReceipt":json.loads(receipt_raw),
+ "checks":json.loads(checks_raw),"completedAtUtc":dt.datetime.now(dt.timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")}
+p=pathlib.Path(output); p.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o400)
+with os.fdopen(fd,"wb") as h: h.write((json.dumps(value,indent=2,sort_keys=True)+"\n").encode())
+PY
+}
+
+if [[ "${component}" == fps-server ]]; then
+	run_fps_component
+	exit 0
+fi
+
+plan_base64="$(base64 <"${plan_path}" | tr -d '\r\n')"
+normal_caddy_base64="$(base64 <"$(jq -er '.caddyfiles.normal.path' "${plan_path}")" | tr -d '\r\n')"
+phase1_caddy_base64="$(base64 <"$(jq -er '.caddyfiles.phase1.path' "${plan_path}")" | tr -d '\r\n')"
+helper_base64="$(base64 <"${helper_path}" | tr -d '\r\n')"
+peer_commit_base64=""
+if [[ -n "${peer_commit_result}" ]]; then
+	peer_commit_base64="$(base64 <"${peer_commit_result}" | tr -d '\r\n')"
+fi
+fps_adoption_seal_base64=""
+if [[ -n "${fps_adoption_seal}" ]]; then
+	fps_adoption_seal_base64="$(base64 <"${fps_adoption_seal}" | tr -d '\r\n')"
+fi
+
+run_remote_helper() {
+	{
+		printf '%s\n' 'set -euo pipefail'
+		printf 'helper="$(mktemp /tmp/nexus-v2-post-acceptance-reopen-helper.XXXXXX)"\n'
+		printf 'trap '\''rm -f "${helper}"'\'' EXIT\n'
+		printf 'printf %%s %q | base64 -d >"${helper}"\n' "${helper_base64}"
+		printf 'test "$(sha256sum "${helper}" | awk '\''{print $1}'\'')" = %q\n' "${helper_sha256}"
+		printf 'chmod 0700 "${helper}"\n'
+		if [[ -n "${fps_adoption_seal_base64}" && -n "${peer_commit_base64}" ]]; then
+			printf '"${helper}" %q %q %q %q %q %q %q %q %q %q\n' \
+				"${action}" "${plan_base64}" "${plan_sha256}" "${driver_sha256}" "${helper_sha256}" \
+				"${normal_caddy_base64}" "${phase1_caddy_base64}" \
+				"${fps_adoption_seal_base64}" "${fps_adoption_seal_sha256}" "${peer_commit_base64}"
+		elif [[ -n "${fps_adoption_seal_base64}" ]]; then
+			printf '"${helper}" %q %q %q %q %q %q %q %q %q\n' \
+				"${action}" "${plan_base64}" "${plan_sha256}" "${driver_sha256}" "${helper_sha256}" \
+				"${normal_caddy_base64}" "${phase1_caddy_base64}" \
+				"${fps_adoption_seal_base64}" "${fps_adoption_seal_sha256}"
+		elif [[ -n "${peer_commit_base64}" ]]; then
+			printf '"${helper}" %q %q %q %q %q %q %q %q\n' \
+				"${action}" "${plan_base64}" "${plan_sha256}" "${driver_sha256}" "${helper_sha256}" \
+				"${normal_caddy_base64}" "${phase1_caddy_base64}" "${peer_commit_base64}"
+		else
+			printf '"${helper}" %q %q %q %q %q %q %q\n' \
+				"${action}" "${plan_base64}" "${plan_sha256}" "${driver_sha256}" "${helper_sha256}" \
+				"${normal_caddy_base64}" "${phase1_caddy_base64}"
+		fi
+	} | remote_root_bash
+}
+
+remote_output="$(run_remote_helper)" || die "protected remote helper failed"
+encoded_result="$(printf '%s\n' "${remote_output}" | sed -n 's/^NEXUS_V2_REOPEN_RESULT://p')"
+[[ -n "${encoded_result}" && "$(printf '%s\n' "${remote_output}" | grep -c '^NEXUS_V2_REOPEN_RESULT:')" == 1 ]] ||
+	die "protected helper returned an invalid result envelope"
+mkdir -p "$(dirname -- "${result_path}")"
+printf '%s' "${encoded_result}" | base64 -d >"${result_path}.pending"
+python3 - "${result_path}.pending" "${result_path}" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+source, destination = map(pathlib.Path, sys.argv[1:])
+value = json.loads(source.read_text(encoding="utf-8"))
+payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+with os.fdopen(fd, "wb") as handle:
+    handle.write(payload)
+source.unlink()
+PY

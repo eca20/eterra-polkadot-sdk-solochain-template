@@ -23,6 +23,7 @@ from typing import Any, Mapping, Sequence
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import deployment_secret_environment  # noqa: E402,F401
 import alpha_v2_release as release  # noqa: E402
 import frozen_snapshot_proof as snapshot_proof  # noqa: E402
 
@@ -547,6 +548,66 @@ def invoke_driver(
     return validate_result(result, plan, role, action, dry_run, bundle_root, frozen), result_path, log_path
 
 
+def pre_v16_acceptance_inventory(
+    plan: Mapping[str, Any],
+    frozen: Mapping[str, Any],
+    legacy_inventory: Mapping[str, Any],
+    *,
+    runtime_metadata_sha256: str,
+    tcg_observation_sha256: str,
+) -> dict[str, Any]:
+    require(
+        (legacy_inventory["blockNumber"], legacy_inventory["blockHash"])
+        == (frozen["number"], frozen["hash"]),
+        "acceptance source inventory does not use the frozen finalized block",
+    )
+    counts = {name: 0 for name in release.ACCEPTANCE_COUNT_FIELDS}
+    counts.update(
+        {
+            "currentLegacyAuthorityGames": legacy_inventory["gameAuthorityGames"],
+            "currentLegacyAuthorityActivePlayerLocks": legacy_inventory[
+                "gameAuthorityActivePlayerLocks"
+            ],
+            "currentLegacyAuthorityEliminationRecords": legacy_inventory[
+                "gameAuthorityEliminationRecords"
+            ],
+            "lifetimeLegacyAuthorityGamesCreated": legacy_inventory[
+                "gameAuthorityNextGameId"
+            ],
+            "lifetimeLegacyAuthorityEndCommandsProcessed": legacy_inventory[
+                "gameAuthorityEndCommandsProcessed"
+            ],
+            "lifetimeLegacyAuthorityEliminationEventsProcessed": legacy_inventory[
+                "gameAuthorityEliminationEventsProcessed"
+            ],
+            "lifetimeLegacyAuthorityAcceptanceWritesLowerBound": (
+                legacy_inventory["gameAuthorityNextGameId"]
+                + legacy_inventory["gameAuthorityEndCommandsProcessed"]
+                + legacy_inventory["gameAuthorityEliminationEventsProcessed"]
+            ),
+        }
+    )
+    return {
+        "schemaVersion": 2,
+        "kind": "nexus-v2-acceptance-inventory",
+        "releaseId": plan["releaseId"],
+        "sourceCommit": plan["sourceCommit"],
+        "observedAtFinalizedBlock": dict(frozen),
+        "observationEvidence": {
+            "captureMode": "isolated-frozen-copy-read-only",
+            "legacySourceInventorySha256": legacy_inventory["sha256"],
+            "runtimeMetadataScaleSha256": ensure_sha(
+                runtime_metadata_sha256, "runtime metadata SHA-256"
+            ),
+            "tcgStorageVersionObservationSha256": ensure_sha(
+                tcg_observation_sha256, "TCG observation SHA-256"
+            ),
+            "v2CountersDerivedFromStructuralAbsence": True,
+        },
+        "counts": counts,
+    }
+
+
 def coordinator_artifacts(
     plan: Mapping[str, Any],
     bundle_root: Path,
@@ -745,14 +806,13 @@ def coordinator_artifacts(
             "legacyStorefrontIngressReachable": False,
         },
     }
-    inventory = {
-        "schemaVersion": 1,
-        "kind": "nexus-v2-acceptance-inventory",
-        "releaseId": plan["releaseId"],
-        "sourceCommit": plan["sourceCommit"],
-        "observedAtFinalizedBlock": frozen,
-        "counts": {name: 0 for name in sorted(release.ACCEPTANCE_COUNT_FIELDS)},
-    }
+    inventory = pre_v16_acceptance_inventory(
+        plan,
+        frozen,
+        legacy_inventory,
+        runtime_metadata_sha256=metadata_v14_hash,
+        tcg_observation_sha256=tcg_observation_hash,
+    )
     write_new_json(gates_path, gates, mode=0o600)
     write_new_json(inventory_path, inventory, mode=0o600)
     release.validate_pre_v16_fresh_reset_gates(
@@ -760,10 +820,19 @@ def coordinator_artifacts(
         plan["releaseId"],
         plan["sourceCommit"],
     )
-    release.validate_acceptance_inventory(
+    validated_inventory = release.validate_acceptance_inventory(
         inventory_path,
         plan["releaseId"],
         plan["sourceCommit"],
+    )
+    release.validate_pre_v16_acceptance_inventory_binding(
+        validated_inventory,
+        release.validate_pre_v16_fresh_reset_gates(
+            gates_path,
+            plan["releaseId"],
+            plan["sourceCommit"],
+        ),
+        legacy_inventory,
     )
     output = []
     for group, name, path in (

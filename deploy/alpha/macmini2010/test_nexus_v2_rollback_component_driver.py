@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import tarfile
 import unittest
@@ -283,6 +284,7 @@ class ChainMediaDriverTest(unittest.TestCase):
                 artifact = self.bundle / "artifacts" / group / f"{name}.bin"
                 artifact.parent.mkdir(parents=True, exist_ok=True)
                 artifact.write_bytes(f"{group}:{name}\n".encode())
+
                 entries.append(
                     {
                         "group": group,
@@ -386,6 +388,22 @@ class ChainMediaDriverTest(unittest.TestCase):
             },
         )
         self.protected_host = self.root / "protected-host.NONDEPLOYABLE"
+
+    def test_isolated_copied_driver_has_no_repository_import_dependency(self) -> None:
+        environment = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PYTHONPATH": "",
+        }
+        completed = subprocess.run(
+            [sys.executable, "-I", str(self.driver), "--help"],
+            cwd=self.root,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn("ModuleNotFoundError", completed.stderr)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -920,6 +938,9 @@ make_temp_dir() { mktemp -d "${TMPDIR}/protected-helper.XXXXXX"; }
         )
         context = self.root / "actual-protected-context.json"
         result = self.root / "actual-protected-result.json"
+        reset_readiness = self.root / "actual-protected-reset-readiness.json"
+        reset_readiness.write_bytes(b'{"kind":"fixture-reset-readiness"}\n')
+        reset_readiness_sha256 = digest(reset_readiness)
         write_json(
             context,
             {
@@ -939,15 +960,16 @@ make_temp_dir() { mktemp -d "${TMPDIR}/protected-helper.XXXXXX"; }
                 "requiredResetArchives": {
                     "node": (
                         "/opt/eterra-alpha/archive/nexus-v2-fresh-reset/"
-                        + "9" * 64
+                        + reset_readiness_sha256
                         + "/node"
                     ),
                     "media": (
                         "/opt/eterra-alpha/archive/nexus-v2-fresh-reset/"
-                        + "9" * 64
+                        + reset_readiness_sha256
                         + "/media"
                     ),
                 },
+                "resetReadinessPath": str(reset_readiness),
                 "scripts": {
                     "restoreState": str(helper_root / "restore-alpha-state.sh"),
                     "deployNode": str(helper_root / "deploy-node.sh"),

@@ -1,0 +1,895 @@
+#!/usr/bin/env python3
+"""Protected chain/media adapter for the pre-reset automatic-restore supervisor.
+
+The adapter deliberately has no V2 RPC/capture input.  It translates the
+supervisor's earliest-failure-safe action contract to the already reviewed,
+hash-pinned protected Alpha recovery helper.  Preflight runs every recovery
+action in the helper's read-only dry-run mode; execute preserves the closed
+pause -> archive -> restore -> smoke ordering enforced by the supervisor.
+
+The default fixture backend is permanently NONDEPLOYABLE.  Protected access
+requires the explicit ``PRIVATE_ALPHA_ROLLBACK_ONLY`` confirmation and the
+existing deployment credentials loaded only by the pinned host helper.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+
+# This driver is copied into an isolated immutable source root during reset
+# rehearsal.  Its credential boundary therefore cannot depend on an unpinned
+# sibling module that might not be present in that bundle.
+DEPLOYMENT_SECRET_ENVIRONMENT_NAMES = frozenset(
+    {
+        "ADMIN_API_KEY",
+        "ADMIN_SESSION_SECRET",
+        "ALPHA_ACCESS_SESSION_SECRET",
+        "AURA_SURI",
+        "AUTHORITY_RELAY_DERIVATION_PASSWORD",
+        "AUTHORITY_RELAY_MNEMONIC",
+        "DEPLOY_PASSWORD",
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_CLIENT_SECRET",
+        "ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD",
+        "ETERRA_ALPHA_SUDO_MNEMONIC",
+        "ETERRA_FPS_V2_OWNER_SECRET_PATH",
+        "ETERRA_FPS_V2_PLAYER_GATEWAY_ACCESS_TOKEN",
+        "ETERRA_FPS_V2_ROOT_SECRET_PATH",
+        "ETERRA_FPS_V2_SUDO_SECRET_PATH",
+        "ETERRA_LEGENDS_PLAYER_ACCESS_TOKEN",
+        "ETERRA_LEGENDS_PRIVATE_ALPHA_ACCESS_KEY",
+        "ETERRA_LEGENDS_SIGNER_DERIVATION_PASSWORD",
+        "ETERRA_LEGENDS_SIGNER_MNEMONIC",
+        "GRAN_SURI",
+        "MEDIA_ADMIN_API_KEY",
+        "MEDIA_SIGNER_SEED",
+        "MONGODB_URI",
+        "NEXUS_V2_PRIVATE_ALPHA_ACCESS_KEY",
+        "NEXUS_V2_SESSION_AUTHORIZATION_PROFILES_JSON",
+        "REMOTE_SUDO_PASSWORD",
+    }
+)
+for _secret_name in DEPLOYMENT_SECRET_ENVIRONMENT_NAMES:
+    os.environ.pop(_secret_name, None)
+del _secret_name
+
+
+COMPONENT_ID = "chain-media"
+PRODUCTION_BACKEND = "protected-private-alpha"
+FIXTURE_BACKEND = "fixture-nondeployable"
+CONFIRMATION = "PRIVATE_ALPHA_ROLLBACK_ONLY"
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+SITE_RELEASE_RE = re.compile(
+    r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
+ACTIONS = {
+    "prepare-reset-archives",
+    "preflight",
+    "pause-v2-writes",
+    "archive-failed-v2",
+    "restore-final-backup",
+    "restored-smoke",
+}
+PREPARATION_CHECKS = {
+    "archivePreparationNonDestructive",
+    "archivesPreparedAndReadOnly",
+    "currentAlphaStatePreserved",
+    "noResetApplied",
+    "readinessIdentityBound",
+    "restoreInputsVerified",
+    "sourcePinsVerified",
+}
+PROTECTED_ACTIONS = (
+    "pause-v2-writes",
+    "archive-failed-v2",
+    "restore-final-backup",
+    "restored-smoke",
+)
+PREFLIGHT_CHECKS = {
+    "archivesReadable",
+    "credentialsResolvable",
+    "driverHashVerified",
+    "helperHashesVerified",
+    "noMutation",
+    "restoreInputsVerified",
+    "scriptHashesVerified",
+    "sourcePinsVerified",
+}
+ACTION_CHECKS = {
+    "pause-v2-writes": {"noV2RpcRequired", "statePreserved", "v2WritesPaused"},
+    "archive-failed-v2": {
+        "failedV2RootArchived",
+        "failedV2RootPreserved",
+        "noV2RpcRequired",
+    },
+    "restore-final-backup": {
+        "failedV2RootPreserved",
+        "finalBackupRestored",
+        "noV2RpcRequired",
+    },
+    "restored-smoke": {
+        "backupIdentityMatched",
+        "economicFlagsDisabled",
+        "failedV2RootPreserved",
+        "restoredComponentHealthy",
+    },
+}
+RESULT_KEYS = {
+    "schemaVersion",
+    "kind",
+    "operationId",
+    "releaseId",
+    "siteReleaseVersion",
+    "planSha256",
+    "componentId",
+    "mode",
+    "action",
+    "result",
+    "fixtureOnly",
+    "mutationPerformed",
+    "credentialsResolvable",
+    "requiredResetArchivesPresent",
+    "failedV2RootArchiveSha256",
+    "checks",
+    "completedAtUtc",
+}
+SCRIPT_ROLES = {
+    "restoreState",
+    "deployNode",
+    "deployMedia",
+    "status",
+    "rollbackStagingLibrary",
+}
+ARCHIVE_ROLES = {"node", "media"}
+PROTECTED_RESULT_KEYS = {
+    "schemaVersion",
+    "kind",
+    "operationId",
+    "planSha256",
+    "releaseId",
+    "sourceCommit",
+    "componentSourceCommits",
+    "componentId",
+    "action",
+    "mode",
+    "result",
+    "remoteActionsExecuted",
+    "alreadyApplied",
+    "requiredResetArchives",
+    "failedV2RootArchiveSha256",
+    "remoteIdempotencyMarkerSha256",
+    "checks",
+    "completedAtUtc",
+}
+PROTECTED_DRY_CHECKS = {
+    "pause-v2-writes": {
+        "sourceIdentityPinned",
+        "credentialsResolvable",
+        "requiredResetArchivesPresent",
+        "pausePlanSafe",
+        "restoreExcluded",
+    },
+    "archive-failed-v2": {
+        "sourceIdentityPinned",
+        "credentialsResolvable",
+        "requiredResetArchivesPresent",
+        "archivePlanSafe",
+        "restoreExcluded",
+    },
+    "restore-final-backup": {
+        "sourceIdentityPinned",
+        "credentialsResolvable",
+        "requiredResetArchivesPresent",
+        "finalBackupInputsMatched",
+        "failedV2ArchiveRequired",
+        "existingRestoreScriptPinned",
+        "existingDeployScriptsPinned",
+        "restorePlanSafe",
+    },
+    "restored-smoke": {
+        "sourceIdentityPinned",
+        "credentialsResolvable",
+        "requiredResetArchivesPresent",
+        "restoredSmokeProbePlanned",
+    },
+}
+PROTECTED_EXEC_CHECKS = {
+    "pause-v2-writes": {
+        "sourceIdentityPinned",
+        "requiredResetArchivesPresent",
+        "v2WritesPaused",
+        "statePreserved",
+        "restoreNotAttempted",
+    },
+    "archive-failed-v2": {
+        "sourceIdentityPinned",
+        "requiredResetArchivesPresent",
+        "failedV2RootArchived",
+        "archiveManifestImmutable",
+    },
+    "restore-final-backup": {
+        "sourceIdentityPinned",
+        "requiredResetArchivesPresent",
+        "failedV2RootArchivePresent",
+        "finalBackupHashesVerified",
+        "restoreEvidenceMatched",
+        "existingRestoreScriptUsed",
+        "existingDeployScriptsUsed",
+        "restoreCompleted",
+    },
+    "restored-smoke": {
+        "sourceIdentityPinned",
+        "requiredResetArchivesPresent",
+        "failedV2RootArchivePresent",
+        "componentHealthy",
+        "backupIdentityReadback",
+        "economicFlagsDisabled",
+    },
+}
+PROTECTED_PREPARE_CHECKS = {
+    "archivePreparationNonDestructive",
+    "archivesPreparedAndReadOnly",
+    "credentialsResolvable",
+    "currentAlphaStatePreserved",
+    "noResetApplied",
+    "readinessIdentityBound",
+    "sourceIdentityPinned",
+}
+STAGING_NAMES = {
+    ("node", "node-data"): "node-data.tar.gz",
+    ("node", "node-binary"): "node-binary",
+    ("media", "media-state"): "media-state.tar.gz",
+    ("media", "media-image-lock"): "media-image-lock.json",
+    ("ipfs", "ipfs-data"): "ipfs-data.tar.gz",
+    ("ipfs", "ipfs-staging"): "ipfs-staging.tar.gz",
+    ("config", "node-env"): "node.env",
+    ("config", "media-env"): "media.env",
+    ("config", "economic-gates"): "backup-economic-gates.json",
+    ("config", "chain-spec"): "chain-spec.json",
+    ("service", "node-service"): "node-service.service",
+    ("service", "media-service"): "media-service.json",
+}
+STAGING_CONTRACT_KEYS = {
+    "schemaVersion",
+    "kind",
+    "releaseId",
+    "sourceCommit",
+    "componentSourceCommits",
+    "planSha256",
+    "backupManifestSha256",
+    "files",
+    "createdAtUtc",
+}
+
+
+class DriverError(RuntimeError):
+    pass
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise DriverError(message)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def ensure_sha256(value: Any, label: str) -> str:
+    require(
+        isinstance(value, str) and SHA256_RE.fullmatch(value) is not None,
+        f"invalid {label}",
+    )
+    return value
+
+
+def read_json(path: Path, label: str) -> dict[str, Any]:
+    require(path.is_file() and not path.is_symlink(), f"{label} is unavailable")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise DriverError(f"invalid {label}") from exc
+    require(isinstance(value, dict), f"{label} must be an object")
+    return value
+
+
+def immutable_root(source_id: str) -> Path:
+    raw = os.environ.get(
+        f"NEXUS_V2_PRE_RESET_IMMUTABLE_{source_id.upper()}_ROOT", ""
+    )
+    require(raw, f"immutable {source_id} root is unavailable")
+    path = Path(raw)
+    require(path.is_absolute() and path.is_dir() and not path.is_symlink(), f"invalid immutable {source_id} root")
+    return path.resolve()
+
+
+def resolve_pin(pin: Any, roots: Mapping[str, Path], label: str) -> Path:
+    require(
+        isinstance(pin, dict) and set(pin) == {"sourceId", "path", "sha256"},
+        f"{label} pin schema mismatch",
+    )
+    source_id = pin.get("sourceId")
+    require(source_id in roots, f"{label} source is not immutable")
+    relative = pin.get("path")
+    require(
+        isinstance(relative, str)
+        and relative
+        and not relative.startswith("/")
+        and ".." not in Path(relative).parts,
+        f"invalid {label} path",
+    )
+    path = (roots[source_id] / relative).resolve()
+    require(roots[source_id] in path.parents, f"{label} escapes its immutable source")
+    require(path.is_file() and not path.is_symlink(), f"{label} is unavailable")
+    require(
+        sha256_file(path) == ensure_sha256(pin.get("sha256"), f"{label} SHA-256"),
+        f"{label} hash drifted",
+    )
+    return path
+
+
+def validate_plan(args: argparse.Namespace) -> dict[str, Any]:
+    plan_path = Path(args.plan).resolve()
+    expected = ensure_sha256(args.plan_sha256, "plan SHA-256")
+    require(sha256_file(plan_path) == expected, "plan hash mismatch")
+    plan = read_json(plan_path, "supervisor plan")
+    require(
+        plan.get("schemaVersion") == 1
+        and plan.get("kind")
+        == "nexus-v2-private-alpha-pre-reset-rollback-supervisor-plan",
+        "supervisor plan kind mismatch",
+    )
+    operation_id = plan.get("operationId")
+    release_id = plan.get("releaseId")
+    site_release = plan.get("siteReleaseVersion")
+    source_commit = plan.get("sourceCommit")
+    require(isinstance(operation_id, str) and ID_RE.fullmatch(operation_id), "invalid operation ID")
+    require(isinstance(release_id, str) and ID_RE.fullmatch(release_id), "invalid chain release ID")
+    require(isinstance(site_release, str) and SITE_RELEASE_RE.fullmatch(site_release), "invalid site release version")
+    require(isinstance(source_commit, str) and COMMIT_RE.fullmatch(source_commit), "invalid source commit")
+    require(
+        os.environ.get("NEXUS_V2_PRE_RESET_CHAIN_RELEASE_ID") == release_id
+        and os.environ.get("NEXUS_V2_PRE_RESET_SITE_RELEASE_VERSION")
+        == site_release
+        and os.environ.get("NEXUS_V2_PRE_RESET_SOURCE_COMMIT") == source_commit
+        and os.environ.get("NEXUS_V2_PRE_RESET_PLAN_SHA256") == expected,
+        "supervisor environment identity mismatch",
+    )
+    sources = plan.get("sources")
+    require(isinstance(sources, dict) and set(sources) == {"chain", "media", "site"}, "source set mismatch")
+    roots = {name: immutable_root(name) for name in sources}
+    commits: dict[str, str] = {}
+    for name, pin in sources.items():
+        require(isinstance(pin, dict) and set(pin) == {"root", "expectedCommit"}, f"{name} source schema mismatch")
+        commit = pin.get("expectedCommit")
+        require(isinstance(commit, str) and COMMIT_RE.fullmatch(commit), f"invalid {name} source commit")
+        commits[name] = commit
+
+    components = plan.get("components")
+    require(isinstance(components, dict) and set(components) == {"chain-media", "site-indexer"}, "component set mismatch")
+    component = components[COMPONENT_ID]
+    require(
+        isinstance(component, dict)
+        and set(component)
+        == {"driver", "helperPins", "scriptPins", "requiredResetArchives"},
+        "chain-media component schema mismatch",
+    )
+    driver = resolve_pin(component["driver"], roots, "chain-media driver")
+    require(sha256_file(Path(__file__).resolve()) == sha256_file(driver), "executing driver differs from its immutable pin")
+    helpers = component.get("helperPins")
+    scripts = component.get("scriptPins")
+    require(isinstance(helpers, dict) and set(helpers) == {"hostAction"}, "helper role mismatch")
+    require(isinstance(scripts, dict) and set(scripts) == SCRIPT_ROLES, "script role mismatch")
+    resolved_helpers = {
+        role: resolve_pin(pin, roots, f"chain-media helper {role}")
+        for role, pin in helpers.items()
+    }
+    resolved_scripts = {
+        role: resolve_pin(pin, roots, f"chain-media script {role}")
+        for role, pin in scripts.items()
+    }
+    archives = component.get("requiredResetArchives")
+    require(isinstance(archives, dict) and set(archives) == ARCHIVE_ROLES, "reset archive role mismatch")
+    artifacts = plan.get("artifacts")
+    require(isinstance(artifacts, dict), "artifact pins are unavailable")
+    resolved_artifacts: dict[str, dict[str, Any]] = {}
+    for artifact_id, pin in artifacts.items():
+        require(isinstance(pin, dict) and set(pin) == {"path", "sha256"}, f"{artifact_id} artifact schema mismatch")
+        path = Path(str(pin.get("path"))).resolve()
+        require(path.is_file() and not path.is_symlink(), f"{artifact_id} artifact is unavailable")
+        artifact_hash = ensure_sha256(pin.get("sha256"), f"{artifact_id} artifact SHA-256")
+        require(sha256_file(path) == artifact_hash, f"{artifact_id} artifact drifted")
+        resolved_artifacts[artifact_id] = {"path": path, "sha256": artifact_hash}
+    required_artifacts = {
+        "backupManifest",
+        "restoreEvidence",
+        "resetReadiness",
+        "finalFreezeEvidence",
+        "migrationEvidence",
+    }
+    require(required_artifacts <= set(resolved_artifacts), "recovery artifact set is incomplete")
+    readiness_hash = resolved_artifacts["resetReadiness"]["sha256"]
+    for role, path_value in archives.items():
+        require(
+            isinstance(path_value, str)
+            and path_value
+            == f"/opt/eterra-alpha/archive/nexus-v2-fresh-reset/{readiness_hash}/{role}",
+            f"{role} reset archive is not readiness-bound",
+        )
+    bundle_root = Path(str(plan.get("bundleRoot"))).resolve()
+    require(bundle_root.is_dir() and not bundle_root.is_symlink(), "backup bundle root is unavailable")
+    return {
+        "path": plan_path,
+        "sha256": expected,
+        "raw": plan,
+        "operationId": operation_id,
+        "releaseId": release_id,
+        "siteReleaseVersion": site_release,
+        "sourceCommit": source_commit,
+        "backend": plan.get("backend"),
+        "fixtureOnly": plan.get("backend") == FIXTURE_BACKEND,
+        "fixtureRoot": plan.get("fixtureRoot"),
+        "commits": commits,
+        "component": component,
+        "archives": dict(archives),
+        "helpers": resolved_helpers,
+        "scripts": resolved_scripts,
+        "artifacts": resolved_artifacts,
+        "bundleRoot": bundle_root,
+    }
+
+
+def load_staging_library(path: Path) -> Any:
+    loader = importlib.machinery.SourceFileLoader("nexus_v2_rollback_staging", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    require(spec is not None, "cannot load rollback staging library")
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def validated_staging_hashes(context: Mapping[str, Any]) -> dict[str, str]:
+    """Re-hash every byte that could be restored on the protected host.
+
+    The supervisor pins and fully validates the final-backup manifest before
+    arming.  Recovery may happen later, so the adapter repeats the file-level
+    checks for the exact chain/media restore subset immediately before making
+    a staging directory.  A stable manifest alone is insufficient if a large
+    archive beneath the bundle root drifted after the arm was published.
+    """
+
+    manifest = read_json(
+        context["artifacts"]["backupManifest"]["path"], "final backup manifest"
+    )
+    require(
+        manifest.get("schemaVersion") == 1
+        and manifest.get("kind") == "nexus-v2-private-alpha-backup"
+        and manifest.get("releaseId") == context["releaseId"]
+        and manifest.get("sourceCommit") == context["sourceCommit"],
+        "final backup manifest identity mismatch",
+    )
+    entries = manifest.get("artifacts")
+    require(isinstance(entries, list), "final backup artifact list is unavailable")
+    mapped: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for entry in entries:
+        require(
+            isinstance(entry, dict)
+            and set(entry) == {"group", "name", "path", "bytes", "sha256"},
+            "final backup artifact schema mismatch",
+        )
+        key = (entry.get("group"), entry.get("name"))
+        require(
+            all(isinstance(item, str) and item for item in key)
+            and key not in mapped,
+            "final backup artifact identity is invalid or duplicated",
+        )
+        mapped[key] = entry
+    require(
+        set(STAGING_NAMES) <= set(mapped),
+        "final backup lacks the complete chain/media restore subset",
+    )
+    bundle_root = context["bundleRoot"].resolve()
+    staged: dict[str, str] = {}
+    for key, output_name in STAGING_NAMES.items():
+        entry = mapped[key]
+        relative = entry.get("path")
+        require(
+            isinstance(relative, str)
+            and relative
+            and not relative.startswith("/")
+            and ".." not in Path(relative).parts,
+            f"invalid final backup path: {key}",
+        )
+        source = (bundle_root / relative).resolve()
+        require(
+            bundle_root in source.parents
+            and source.is_file()
+            and not source.is_symlink(),
+            f"final backup artifact is unavailable: {key}",
+        )
+        byte_count = entry.get("bytes")
+        require(
+            isinstance(byte_count, int)
+            and not isinstance(byte_count, bool)
+            and byte_count >= 0
+            and source.stat().st_size == byte_count,
+            f"final backup byte count drifted: {key}",
+        )
+        expected = ensure_sha256(entry.get("sha256"), f"final backup {key} SHA-256")
+        require(sha256_file(source) == expected, f"final backup artifact drifted: {key}")
+        staged[output_name] = expected
+    return staged
+
+
+def write_new(path: Path, value: Mapping[str, Any], mode: int = 0o600) -> None:
+    require(not os.path.lexists(path), f"refusing to overwrite {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Supervisor inputs and results share one byte-level canonical JSON
+    # contract.  Keep the protected helper context canonical as well so the
+    # adapter never has to preserve or trust helper-specific serialization.
+    payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(path, mode)
+
+
+def protected_context(
+    context: Mapping[str, Any],
+    action: str,
+    mode: str,
+    staging: Path | None,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": 1,
+        "kind": "nexus-v2-private-alpha-protected-host-action-context",
+        "componentId": COMPONENT_ID,
+        "action": action,
+        "mode": mode,
+        "operationId": context["operationId"],
+        "planSha256": context["sha256"],
+        "releaseId": context["releaseId"],
+        "sourceCommit": context["sourceCommit"],
+        "componentSourceCommits": {
+            "chain": context["commits"]["chain"],
+            "media": context["commits"]["media"],
+        },
+        "requiredResetArchives": context["archives"],
+        "resetReadinessPath": str(
+            context["artifacts"]["resetReadiness"]["path"]
+        ),
+        "scripts": {
+            role: str(context["scripts"][role])
+            for role in ("restoreState", "deployNode", "deployMedia", "status")
+        },
+        "finalBackupManifestSha256": context["artifacts"]["backupManifest"]["sha256"],
+        "restoreEvidenceSha256": context["artifacts"]["restoreEvidence"]["sha256"],
+        # These are immutable pre-reset evidence identities, not V2 captures.
+        "postCutoverObservationSha256": context["artifacts"]["finalFreezeEvidence"]["sha256"],
+        "economicGatesSha256": context["artifacts"]["resetReadiness"]["sha256"],
+        "acceptanceInventorySha256": context["artifacts"]["migrationEvidence"]["sha256"],
+        "acceptanceAssetsExist": False,
+        "stagingPath": str(staging) if staging is not None else None,
+    }
+
+
+def validate_protected_result(
+    value: Mapping[str, Any],
+    context: Mapping[str, Any],
+    action: str,
+    mode: str,
+) -> dict[str, Any]:
+    require(set(value) == PROTECTED_RESULT_KEYS, f"protected {action} result schema mismatch")
+    require(
+        value.get("schemaVersion") == 1
+        and value.get("kind") == "nexus-v2-private-alpha-component-action-result"
+        and value.get("operationId") == context["operationId"]
+        and value.get("planSha256") == context["sha256"]
+        and value.get("releaseId") == context["releaseId"]
+        and value.get("sourceCommit") == context["sourceCommit"]
+        and value.get("componentSourceCommits")
+        == {"chain": context["commits"]["chain"], "media": context["commits"]["media"]}
+        and value.get("componentId") == COMPONENT_ID
+        and value.get("action") == action
+        and value.get("mode") == mode
+        and value.get("result") == "passed",
+        f"protected {action} result identity mismatch",
+    )
+    remote_actions = value.get("remoteActionsExecuted")
+    already_applied = value.get("alreadyApplied")
+    require(
+        isinstance(remote_actions, bool) and isinstance(already_applied, bool),
+        f"protected {action} mutation flags are invalid",
+    )
+    marker_hash = value.get("remoteIdempotencyMarkerSha256")
+    if mode == "dry-run":
+        require(
+            remote_actions is False
+            and already_applied is False
+            and marker_hash is None,
+            f"protected {action} preflight mutated or reused state",
+        )
+    elif already_applied:
+        require(remote_actions is False, f"protected {action} repeated an idempotent action")
+        ensure_sha256(marker_hash, f"protected {action} idempotency marker SHA-256")
+    else:
+        require(remote_actions is True, f"protected {action} reports no remote action")
+        ensure_sha256(marker_hash, f"protected {action} idempotency marker SHA-256")
+    archives = value.get("requiredResetArchives")
+    require(
+        isinstance(archives, dict)
+        and set(archives) == ARCHIVE_ROLES
+        and all(item is True for item in archives.values()),
+        f"protected {action} reset archives are incomplete",
+    )
+    failed_hash = value.get("failedV2RootArchiveSha256")
+    if mode == "execute" and action != "pause-v2-writes":
+        ensure_sha256(failed_hash, f"protected {action} failed-root SHA-256")
+    else:
+        require(failed_hash is None, f"protected {action} reports an unexpected failed root")
+    checks = value.get("checks")
+    if mode == "prepare":
+        expected_checks = PROTECTED_PREPARE_CHECKS
+    elif mode == "dry-run":
+        expected_checks = PROTECTED_DRY_CHECKS[action]
+    else:
+        expected_checks = PROTECTED_EXEC_CHECKS[action]
+    require(
+        isinstance(checks, dict)
+        and set(checks) == expected_checks
+        and all(item is True for item in checks.values()),
+        f"protected {action} checks did not all pass",
+    )
+    completed = value.get("completedAtUtc")
+    require(
+        isinstance(completed, str)
+        and re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+            completed,
+        )
+        is not None,
+        f"protected {action} completion time is invalid",
+    )
+    return dict(value)
+
+
+def stage_backup(context: Mapping[str, Any], destination: Path) -> None:
+    expected_hashes = validated_staging_hashes(context)
+    library = load_staging_library(context["scripts"]["rollbackStagingLibrary"])
+    require(
+        getattr(library, "STAGING_NAMES", None) == STAGING_NAMES,
+        "pinned rollback staging layout drifted",
+    )
+    stage_context = {
+        "plan": context["raw"],
+        "planSha256": context["sha256"],
+        "manifestPath": context["artifacts"]["backupManifest"]["path"],
+        "bundleRoot": context["bundleRoot"],
+        "manifestSha256": context["artifacts"]["backupManifest"]["sha256"],
+        "componentCommits": {
+            "chain": context["commits"]["chain"],
+            "media": context["commits"]["media"],
+        },
+    }
+    library.stage_final_backup(stage_context, destination)
+    for name, expected in expected_hashes.items():
+        staged = destination / name
+        require(
+            staged.is_file()
+            and not staged.is_symlink()
+            and sha256_file(staged) == expected,
+            f"restore staging bytes drifted: {name}",
+        )
+    staging_contract = read_json(
+        destination / "staging-contract.json", "restore staging contract"
+    )
+    require(
+        set(staging_contract) == STAGING_CONTRACT_KEYS
+        and staging_contract.get("schemaVersion") == 1
+        and staging_contract.get("kind")
+        == "nexus-v2-private-alpha-chain-media-restore-staging"
+        and staging_contract.get("releaseId") == context["releaseId"]
+        and staging_contract.get("sourceCommit") == context["sourceCommit"]
+        and staging_contract.get("componentSourceCommits")
+        == {"chain": context["commits"]["chain"], "media": context["commits"]["media"]}
+        and staging_contract.get("planSha256") == context["sha256"]
+        and staging_contract.get("backupManifestSha256")
+        == context["artifacts"]["backupManifest"]["sha256"]
+        and staging_contract.get("files") == expected_hashes,
+        "restore staging contract identity mismatch",
+    )
+    require(
+        isinstance(staging_contract.get("createdAtUtc"), str)
+        and re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+            staging_contract["createdAtUtc"],
+        )
+        is not None,
+        "restore staging completion time is invalid",
+    )
+
+
+def invoke_protected(
+    context: Mapping[str, Any], action: str, mode: str, root: Path
+) -> dict[str, Any]:
+    attempt = root / f"{mode}.{action}"
+    attempt.mkdir(mode=0o700)
+    staging: Path | None = None
+    if action == "restore-final-backup":
+        staging = attempt / "restore-staging"
+        stage_backup(context, staging)
+    input_path = attempt / "context.json"
+    result_path = attempt / "result.json"
+    write_new(input_path, protected_context(context, action, mode, staging), 0o400)
+    environment = os.environ.copy()
+    environment["NEXUS_V2_ROLLBACK_PROTECTED_CONFIRMATION"] = CONFIRMATION
+    completed = subprocess.run(
+        [
+            str(context["helpers"]["hostAction"]),
+            "--context",
+            str(input_path),
+            "--result",
+            str(result_path),
+        ],
+        env=environment,
+        check=False,
+    )
+    require(completed.returncode == 0, f"protected {action} helper failed")
+    value = read_json(result_path, f"protected {action} result")
+    return validate_protected_result(value, context, action, mode)
+
+
+def fixture_action(context: Mapping[str, Any], args: argparse.Namespace) -> str | None:
+    root = Path(str(context["fixtureRoot"])).resolve()
+    require(root.name.endswith(".NONDEPLOYABLE"), "fixture root is deployable")
+    contract = read_json(root / "fixture-contract.json", "NONDEPLOYABLE fixture contract")
+    require(contract.get("fixtureOnly") is True, "fixture flag is absent")
+    if args.mode == "preflight":
+        return None
+    marker_root = root / "pre-reset-markers" / context["operationId"] / COMPONENT_ID
+    marker_root.mkdir(parents=True, exist_ok=True)
+    marker = marker_root / f"{args.action}.json"
+    archive_hash = None
+    if args.mode == "execute" and args.action != "pause-v2-writes":
+        archive_hash = hashlib.sha256(
+            f"{context['sha256']}:{COMPONENT_ID}:failed-v2".encode()
+        ).hexdigest()
+    if not marker.exists():
+        write_new(
+            marker,
+            {"action": args.action, "failedV2RootArchiveSha256": archive_hash},
+            0o400,
+        )
+    return archive_hash
+
+
+def result_value(
+    context: Mapping[str, Any], args: argparse.Namespace, failed_hash: str | None
+) -> dict[str, Any]:
+    if args.mode == "prepare":
+        checks = PREPARATION_CHECKS
+    elif args.mode == "preflight":
+        checks = PREFLIGHT_CHECKS
+    else:
+        checks = ACTION_CHECKS[args.action]
+    return {
+        "schemaVersion": 1,
+        "kind": "nexus-v2-private-alpha-pre-reset-recovery-result",
+        "operationId": context["operationId"],
+        "releaseId": context["releaseId"],
+        "siteReleaseVersion": context["siteReleaseVersion"],
+        "planSha256": context["sha256"],
+        "componentId": COMPONENT_ID,
+        "mode": args.mode,
+        "action": args.action,
+        "result": "passed",
+        "fixtureOnly": context["fixtureOnly"],
+        "mutationPerformed": args.mode in {"prepare", "execute"},
+        "credentialsResolvable": True,
+        "requiredResetArchivesPresent": True,
+        "failedV2RootArchiveSha256": failed_hash,
+        "checks": {name: True for name in checks},
+        "completedAtUtc": dt.datetime.now(dt.timezone.utc)
+        .replace(microsecond=0)
+        .strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def run(args: argparse.Namespace) -> None:
+    result_path = Path(args.result).resolve()
+    # Refuse a colliding evidence target before any protected helper can run.
+    # Discovering the collision after a host mutation would make the action
+    # unauditable even though the remote recovery itself succeeded.
+    require(not os.path.lexists(result_path), "refusing to overwrite recovery result")
+    require(args.component == COMPONENT_ID, "driver supports only chain-media")
+    require(args.mode in {"prepare", "preflight", "execute"}, "unsupported driver mode")
+    require(args.action in ACTIONS, "unsupported driver action")
+    require(
+        (args.mode == "prepare" and args.action == "prepare-reset-archives")
+        or (args.mode == "preflight" and args.action == "preflight")
+        or (args.mode == "execute" and args.action in ACTION_CHECKS),
+        "driver mode/action mismatch",
+    )
+    context = validate_plan(args)
+    failed_hash: str | None = None
+    if context["fixtureOnly"]:
+        failed_hash = fixture_action(context, args)
+    else:
+        require(context["backend"] == PRODUCTION_BACKEND, "unsupported protected backend")
+        require(
+            os.environ.get("NEXUS_V2_PRE_RESET_PRODUCTION_CONFIRMATION")
+            == CONFIRMATION,
+            "protected chain-media action lacks PRIVATE_ALPHA_ROLLBACK_ONLY confirmation",
+        )
+        with tempfile.TemporaryDirectory(prefix="nexus-v2-pre-reset-chain-media-") as temp:
+            action_root = Path(temp)
+            os.chmod(action_root, 0o700)
+            if args.mode == "prepare":
+                # A prepared host archive is useful only when the exact final
+                # backup bytes it will restore are still complete and pinned.
+                validated_staging_hashes(context)
+                invoke_protected(
+                    context, "prepare-reset-archives", "prepare", action_root
+                )
+            elif args.mode == "preflight":
+                for action in PROTECTED_ACTIONS:
+                    invoke_protected(context, action, "dry-run", action_root)
+            else:
+                protected = invoke_protected(
+                    context, args.action, "execute", action_root
+                )
+                failed_hash = protected.get("failedV2RootArchiveSha256")
+    if args.mode == "execute" and args.action != "pause-v2-writes":
+        ensure_sha256(failed_hash, "failed V2 root archive SHA-256")
+    else:
+        require(failed_hash is None, "unexpected failed V2 root archive identity")
+    value = result_value(context, args, failed_hash)
+    require(set(value) == RESULT_KEYS, "internal result schema mismatch")
+    write_new(result_path, value, 0o400)
+
+
+def parser() -> argparse.ArgumentParser:
+    value = argparse.ArgumentParser(description=__doc__)
+    value.add_argument("--plan", required=True)
+    value.add_argument("--plan-sha256", required=True)
+    value.add_argument("--component", required=True)
+    value.add_argument("--mode", required=True)
+    value.add_argument("--action", required=True)
+    value.add_argument("--result", required=True)
+    return value
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    try:
+        run(parser().parse_args(argv))
+    except (DriverError, OSError, subprocess.SubprocessError) as exc:
+        print(f"nexus-v2-pre-reset-chain-media: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,5 +1,19 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
+# Closed union of every credential-bearing environment variable accepted by the
+# chain, site, or Unity private-alpha deployment lanes.  Preserve each shell
+# value for local use, but remove its export attribute before the first child.
+export -n DEPLOY_PASSWORD REMOTE_SUDO_PASSWORD AURA_SURI GRAN_SURI \
+	MEDIA_SIGNER_SEED MEDIA_ADMIN_API_KEY AUTHORITY_RELAY_MNEMONIC \
+	AUTHORITY_RELAY_DERIVATION_PASSWORD ETERRA_LEGENDS_SIGNER_MNEMONIC \
+	ETERRA_LEGENDS_SIGNER_DERIVATION_PASSWORD ETERRA_LEGENDS_PRIVATE_ALPHA_ACCESS_KEY \
+	ETERRA_ALPHA_SUDO_MNEMONIC ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD \
+	ADMIN_SESSION_SECRET ALPHA_ACCESS_SESSION_SECRET DISCORD_CLIENT_SECRET \
+	DISCORD_BOT_TOKEN MONGODB_URI ETERRA_LEGENDS_PLAYER_ACCESS_TOKEN \
+	NEXUS_V2_PRIVATE_ALPHA_ACCESS_KEY NEXUS_V2_SESSION_AUTHORIZATION_PROFILES_JSON \
+	ADMIN_API_KEY ETERRA_FPS_V2_OWNER_SECRET_PATH \
+	ETERRA_FPS_V2_PLAYER_GATEWAY_ACCESS_TOKEN ETERRA_FPS_V2_ROOT_SECRET_PATH \
+	ETERRA_FPS_V2_SUDO_SECRET_PATH 2>/dev/null || true
 
 SELF_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 NODE_BIN="${NODE_BIN:-${SELF_DIR}/solochain-eterra-node}"
@@ -68,16 +82,19 @@ args=(
 	--rpc-cors "${RPC_CORS}"
 )
 
-case "${NEXUS_V2_PHASE1_CLOSED,,}" in
-	1|true|yes|on)
+case "${NEXUS_V2_PHASE1_CLOSED}" in
+	1|true|TRUE|True|yes|YES|Yes|on|ON|On)
 		[[ "${RPC_BIND_HOST}" == "127.0.0.1" ]] || {
 			echo "[start-alpha-node] Phase-1 closed mode requires RPC_BIND_HOST=127.0.0.1" >&2
 			exit 1
 		}
 		# Substrate binds RPC to loopback by default.  Omission of both external
-		# flags is intentional and is verified after systemd starts the node.
+		# RPC flags is intentional. P2P is explicitly bound to loopback so the
+		# closed replacement cannot accept peer ingress even if host firewall
+		# policy is later misconfigured. Both listeners are verified after start.
+		args+=(--listen-addr "/ip4/127.0.0.1/tcp/${CHAIN_P2P_PORT}")
 		;;
-	0|false|no|off)
+	0|false|FALSE|False|no|NO|No|off|OFF|Off)
 		args+=(--unsafe-rpc-external)
 		if [[ -n "${MINI_LAN_IP}" ]]; then
 			args+=(--public-addr "/ip4/${MINI_LAN_IP}/tcp/${CHAIN_P2P_PORT}")
@@ -89,7 +106,7 @@ case "${NEXUS_V2_PHASE1_CLOSED,,}" in
 		;;
 esac
 
-if [[ "${NEXUS_V2_PHASE1_CLOSED,,}" =~ ^(1|true|yes|on)$ ]]; then
+if [[ "${NEXUS_V2_PHASE1_CLOSED}" =~ ^(1|true|TRUE|True|yes|YES|Yes|on|ON|On)$ ]]; then
 	echo "[start-alpha-node] phase1_closed=true rpc_bind=127.0.0.1 rpc=${CHAIN_RPC_PORT} p2p=${CHAIN_P2P_PORT} base_path=${BASE_PATH}"
 else
 	echo "[start-alpha-node] phase1_closed=false rpc_bind=external rpc=${CHAIN_RPC_PORT} p2p=${CHAIN_P2P_PORT} base_path=${BASE_PATH}"

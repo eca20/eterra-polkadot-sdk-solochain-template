@@ -8,6 +8,14 @@ for the disposable stopped-state copy created by the final-freeze driver.
 by the separately guarded deployment scripts; it accepts only the exact
 SHA-256-pinned pre-V16 frozen/fresh-genesis packet.
 
+The destructive replacement path is additionally guarded by the foreground
+`pre_reset_rollback_supervisor.py`. It first prepares and seals readiness-bound
+rollback archives without changing the running Alpha, preflights both recovery
+lanes, publishes an immutable automatic-restore arm, then owns the replacement
+workflow until the zero-current/zero-lifetime acceptance fence permanently
+retires restoration. See `PRE_RESET_AUTOMATIC_RESTORE.md` for the closed
+component, stage, recovery-owner, and failure-boundary contracts.
+
 ## Relationship to current Alpha scripts
 
 The final capture is coordinated by `final_freeze.py`; the older
@@ -28,7 +36,8 @@ Copy its output into a private bundle and supplement it with:
 - authority state and Caddy state/configuration;
 - all node, media, authority, site, and indexer configs and service definitions;
 - chain spec, write-barrier evidence, exact release identifiers, the generated
-  same-block pre-V16 economic gates, and zero V2 acceptance inventory.
+  same-block pre-V16 economic gates, and an evidence-bound acceptance
+  inventory with truthful legacy GameAuthority history and zero V2 state.
 
 The manifest records the SHA-256 of the current backup, restore, reset, and
 runtime-rehearsal scripts. This is coordination by identity only: the tool
@@ -59,9 +68,31 @@ The post-cutover boundary tool has six closed commands:
 
 The pre-cutover replacement lock is the only lock valid during final-freeze
 offline preflight. It intentionally contains neither a read-model manifest nor
-an acceptance receipt. The final release lock is created later, after the
-acceptance receipt exists, and requires the read-model manifest to bind that
-exact receipt:
+an acceptance receipt. It does bind the exact immutable Legends authority
+candidate. The final release lock is created later, after the acceptance
+receipt exists, and requires the read-model manifest to bind that exact
+receipt. Only that final lock accepts the post-acceptance Unity FPS dedicated-
+server candidate. The FPS candidate is built after the final chain target is
+known and Unity has been repinned, committed, tested, and built; requiring it
+in the replacement lock would create a false pre-cutover dependency.
+
+Before either lock is captured, derive the dedicated two-host trust file from
+an already trusted local `known_hosts`; the capture tool has no network or
+host-discovery mode. The source and both outputs must be absolute, user-owned,
+mode-`0600` regular files. Both lock kinds require the resulting dedicated file
+and manifest, and both selected deployment environments must name their exact
+paths and SHA-256 values.
+
+```bash
+./scripts/nexus-v2-private-alpha/capture_ssh_host_pins.py capture \
+  --source-known-hosts /ABS/TRUSTED/known_hosts \
+  --known-hosts-out /ABS/EVIDENCE/nexus-v2-alpha.known_hosts \
+  --manifest-out /ABS/EVIDENCE/nexus-v2-alpha.known_hosts.json
+./scripts/nexus-v2-private-alpha/capture_ssh_host_pins.py verify \
+  --known-hosts /ABS/EVIDENCE/nexus-v2-alpha.known_hosts \
+  --manifest /ABS/EVIDENCE/nexus-v2-alpha.known_hosts.json \
+  --source-known-hosts /ABS/TRUSTED/known_hosts
+```
 
 ```bash
 ./scripts/nexus-v2-private-alpha/release_lock.py capture-replacement --help
@@ -69,6 +100,31 @@ exact receipt:
 ./scripts/nexus-v2-private-alpha/release_lock.py capture --help
 ./scripts/nexus-v2-private-alpha/release_lock.py verify --help
 ```
+
+The Legends authority candidate is an immutable, relocatable, Legends-only
+bundle assembled from the already-published linux-x64 self-contained API and
+Operator trees. It contains the canonical SDK release manifest and public
+sr25519 identity, but never a mnemonic, access key, derivation password, or
+other secret. The reviewed SDK manifest SHA-256 is fixed at
+`f66cb5353df920468627206c41df7f8666b8fbee5f493f17041c1c0a9b75f033`;
+the verifier also proves that the network-42 SS58 address encodes the pinned
+sr25519 public key. Assembly requires clean exact chain and SDKGen commits;
+verify rehashes the complete closed tree and rejects extras, symlinks,
+executable-mode drift, or noncanonical metadata. The deployment command
+promotes that exact candidate without running `dotnet publish` and emits a
+create-once closed observation receipt:
+
+```bash
+./scripts/nexus-v2-private-alpha/authority_candidate.py assemble --help
+./scripts/nexus-v2-private-alpha/authority_candidate.py verify --help
+./scripts/nexus-v2-private-alpha/authority_candidate.py create-receipt --help
+```
+
+The later Unity FPS candidate carries and validates its own frozen Unity SDK
+manifest. That Unity SDK commit is intentionally distinct from the current
+SDKGen commit that produced the Legends authority release; neither identity
+may be substituted for the other. The authority candidate therefore never
+contains or claims an FPS release identity.
 
 `runtimeCodeSha256` and `runtimeMetadataScaleSha256` are SHA-256 digests with
 64 lowercase hexadecimal characters and no `0x` prefix. The release genesis
@@ -86,7 +142,13 @@ the production Wasm file SHA-256 used by this receipt.
 - `capture-legacy-source-inventory` is called by final freeze against only the
   isolated stopped-state loopback RPC. It enumerates every legacy `Cards` key,
   decodes and hashes its `Blake2_128Concat<u32>` ID, and captures V14
-  `StorageVersion` plus `NextCardId` at the exact frozen finalized block.
+  `StorageVersion` plus `NextCardId` at the exact frozen finalized block. The
+  same artifact also captures GameAuthority `NextGameId` and exact paged keys
+  for Games, active-player locks, eliminations, processed end commands, and
+  processed elimination events. The final-freeze inventory derives its legacy
+  counters only from this hash-pinned RPC evidence. This expanded closed
+  capture is legacy-source-inventory schema 2; the older TCG-only schema cannot
+  authorize a fresh reset.
 - `rehearse-migration` invokes a pinned try-runtime binary against the copied
   V14 snapshot, then a pinned verifier that drives the bounded migration to
   completion and emits the structured V14-to-V16 result. Its default block
@@ -95,22 +157,29 @@ the production Wasm file SHA-256 used by this receipt.
   accepts an undeployed V15 source for compatibility, but evidence for the
   current Alpha must record its observed V14 source truth.
 - `prepare-reset` requires passing restore/migration evidence, exact disabled
-  economy gates, and a zero-asset inventory from one finalized block. For the
+  economy gates, and one acceptance inventory from the same finalized block.
+  For the
   current pre-V16 Alpha it also accepts the distinct, fresh-reset-only
   `nexus-v2-private-alpha-pre-v16-fresh-reset-gates` contract after every write
-  ingress and block production path is stopped. It emits readiness evidence
-  and performs no reset or deploy.
+  ingress and block production path is stopped. Legacy GameAuthority counters
+  may truthfully be nonzero because the approved operation is a backed-up fresh
+  genesis replacement; every V2/GameResults acceptance counter must remain
+  zero. The schema-2 inventory binds the exact legacy-inventory, V14 metadata,
+  and TCG observation hashes. It emits readiness evidence and performs no reset
+  or deploy.
 - The Mac mini node/media deployment scripts retain their ordinary release
   reset prohibitions. Their sole exception is an explicit
   `--fresh-reset-readiness` packet whose SHA-256 matches
   `NEXUS_V2_RESET_READINESS_SHA256`; release media reset also requires
   immutable candidate promotion. `--dry-run` validates this local plan and
   exits before SSH.
-- `deploy-all.sh --fresh --phase1-closed` implies the legacy authority deploy,
-  precloses all RPC/P2P/authority UFW allows before either restart, launches
-  chain RPC and authority on loopback, and forbids authority authorization or
-  configuration seeding. The normal deployment mode retains its prior
-  external listener/firewall behavior.
+- `deploy-all.sh --fresh --phase1-closed` requires and promotes the exact
+  immutable Legends authority candidate, precloses all RPC/P2P/authority UFW
+  allows before either restart, launches chain RPC and authority on loopback,
+  and forbids local publish, authority authorization, configuration seeding,
+  or chain writes. It emits the closed authority deployment receipt. The
+  normal deployment mode retains its prior external listener/firewall
+  behavior.
 - `build-linux-amd64-node.sh` builds the deployment ELF with Rust 1.89, locked
   dependencies, a digest-pinned bookworm image, BuildKit `linux/amd64`, and the
   source commit's `SOURCE_DATE_EPOCH`; it emits a closed build attestation and
@@ -124,8 +193,10 @@ the production Wasm file SHA-256 used by this receipt.
   required beside every final-freeze try-runtime snapshot.
 - `final_freeze.py validate|dry-run|execute` owns the cross-host stop/snapshot
   order. Every component driver and plan is SHA-256 pinned. Execute creates the
-  same-block pre-V16 gates and zero inventory only after the stable write
-  barrier, then emits the complete backup manifest.
+  same-block pre-V16 gates and evidence-derived inventory only after the stable
+  write barrier, then emits the complete backup manifest. It never synthesizes
+  zero legacy counters; only structurally absent V2/GameResults counters are
+  zero.
 - `automatic-rollback` invokes a separately reviewed, approval-hash-pinned
   driver only while a fresh finalized replacement-chain inventory still
   contains no V2 or legacy game-authority acceptance write. Monotonic lifetime
@@ -163,12 +234,22 @@ the production Wasm file SHA-256 used by this receipt.
   coordinator. Neither command contacts a host.
 - `release_lock.py` pins the clean HEAD and tree of chain, web, SDKGen, Unity,
   media, IP, AI, Blockchainia Flow, and the Blockchainia site. The distinct
-  pre-cutover replacement kind binds node/media candidates, target identity,
-  runtime/snapshot manifests, full EditMode/PlayMode XML, and exactly selected
-  chain/site environments without claiming post-cutover state. The final kind
-  additionally validates the canonical acceptance receipt against release,
-  chain commit, genesis, production Wasm, and metadata, then requires an exact
-  receipt/read-model binding. Neither verifier accepts the other lock kind.
+  pre-cutover replacement kind binds node/media/Legends-authority candidates,
+  target identity, runtime/snapshot manifests, full EditMode/PlayMode XML, and
+  exactly selected chain/site environments without claiming post-cutover
+  state. The final kind additionally validates the canonical acceptance
+  receipt against release, chain commit, genesis, production Wasm, and
+  metadata, requires an exact receipt/read-model binding, and invokes the
+  exact Unity-source verifier for the final-only FPS candidate. Neither
+  verifier accepts the other lock kind.
+  The two lock kinds also share the exact dedicated SSH `known_hosts` and
+  canonical host-pin manifest. Selected chain/site environments must bind
+  `NEXUS_V2_SSH_KNOWN_HOSTS_FILE`,
+  `NEXUS_V2_SSH_KNOWN_HOSTS_SHA256`,
+  `NEXUS_V2_SSH_HOST_PIN_MANIFEST`, and
+  `NEXUS_V2_SSH_HOST_PIN_MANIFEST_SHA256` to those artifacts; protected
+  deployment libraries reject `SSH_OPTS` and any ambient or first-contact SSH
+  trust path.
 - Post-reset validation is two-phase with access closed. First, perform only
   base-stack read-only smoke with fresh post-V16 disabled gates and zero
   current/lifetime acceptance inventory. Issue the acceptance-boundary receipt

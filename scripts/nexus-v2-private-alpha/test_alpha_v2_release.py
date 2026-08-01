@@ -17,6 +17,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import alpha_v2_release as tool  # noqa: E402
+import acceptance_boundary as boundary  # noqa: E402
 
 
 RELEASE_ID = "nexus-v2-private-alpha-test"
@@ -90,6 +91,7 @@ def economic_gates(block_number: int = 100, block_hash: str = BLOCK_HASH) -> dic
 
 def pre_v16_fresh_reset_gates(
     runtime_v14_wasm_sha256: str,
+    runtime_metadata_scale_sha256: str,
     tcg_observation_sha256: str,
     legacy_source_inventory_sha256: str,
     block_number: int = 100,
@@ -115,7 +117,7 @@ def pre_v16_fresh_reset_gates(
             "tcgStorageVersion": 14,
             "flowPalletIndex": 29,
             "runtimeV14WasmSha256": runtime_v14_wasm_sha256,
-            "runtimeMetadataScaleSha256": "c" * 64,
+            "runtimeMetadataScaleSha256": runtime_metadata_scale_sha256,
             "tcgStorageVersionObservationSha256": tcg_observation_sha256,
             "legacySourceInventorySha256": legacy_source_inventory_sha256,
         },
@@ -210,7 +212,16 @@ def legacy_source_inventory(
     card_ids: tuple[int, ...] = (1, 4, 7, 10),
     block_number: int = 100,
     block_hash: str = BLOCK_HASH,
+    next_game_id: int = 0,
+    authority_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
+    authority_counts = authority_counts or {
+        "games": 0,
+        "activeGameByPlayer": 0,
+        "eliminations": 0,
+        "processedEndCommands": 0,
+        "processedEliminationEvents": 0,
+    }
     keys = sorted(legacy_card_storage_key(card_id) for card_id in card_ids)
     card_ids_hash = hashlib.sha256(
         b"".join(card_id.to_bytes(4, "little") for card_id in sorted(card_ids))
@@ -221,7 +232,7 @@ def legacy_source_inventory(
         "result": result,
     }
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "kind": tool.LEGACY_SOURCE_INVENTORY_KIND,
         "releaseId": RELEASE_ID,
         "sourceCommit": SOURCE_COMMIT,
@@ -259,6 +270,42 @@ def legacy_source_inventory(
                     "0x" + next_card_id.to_bytes(4, "little").hex(),
                 ),
             },
+            "gameAuthority": {
+                "nextGameId": {
+                    "pallet": "EterraGameAuthority",
+                    "storage": "NextGameId",
+                    "key": tool.LEGACY_GAME_AUTHORITY_STORAGE["nextGameId"]["key"],
+                    "query": query(
+                        "state_getStorage",
+                        [
+                            tool.LEGACY_GAME_AUTHORITY_STORAGE["nextGameId"]["key"],
+                            block_hash,
+                        ],
+                        "0x" + next_game_id.to_bytes(8, "little").hex(),
+                    ),
+                },
+                **{
+                    alias: {
+                        "pallet": "EterraGameAuthority",
+                        "storage": config["storage"],
+                        "prefix": config["prefix"],
+                        "method": "state_getKeysPaged",
+                        "at": block_hash,
+                        "pageSize": tool.LEGACY_AUTHORITY_KEY_PAGE_SIZE,
+                        "pages": [
+                            {
+                                "startKey": None,
+                                "keys": [
+                                    config["prefix"] + index.to_bytes(4, "big").hex()
+                                    for index in range(authority_counts[alias])
+                                ],
+                            }
+                        ],
+                    }
+                    for alias, config in tool.LEGACY_GAME_AUTHORITY_STORAGE.items()
+                    if alias != "nextGameId"
+                },
+            },
             "cards": {
                 "pallet": "EterraTCG",
                 "storage": "Cards",
@@ -275,6 +322,14 @@ def legacy_source_inventory(
             "maxCardId": max(card_ids) if card_ids else None,
             "minimumMigrationBlocks": tool.minimum_v16_migration_blocks(next_card_id),
             "nextCardId": next_card_id,
+            "gameAuthorityActivePlayerLocks": authority_counts["activeGameByPlayer"],
+            "gameAuthorityEliminationRecords": authority_counts["eliminations"],
+            "gameAuthorityEndCommandsProcessed": authority_counts["processedEndCommands"],
+            "gameAuthorityEliminationEventsProcessed": authority_counts[
+                "processedEliminationEvents"
+            ],
+            "gameAuthorityGames": authority_counts["games"],
+            "gameAuthorityNextGameId": next_game_id,
             "tcgStorageVersion": 14,
             "v16MigrationBatchSize": tool.V16_MIGRATION_BATCH_SIZE,
         },
@@ -588,10 +643,13 @@ class ReleaseSafetyTests(unittest.TestCase):
         )
         return readiness, gates, inventory
 
-    def make_pre_v16_bundle(self) -> tuple[Path, Path]:
+    def make_pre_v16_bundle(
+        self, source_inventory: dict[str, Any] | None = None
+    ) -> tuple[Path, Path]:
         runtime_payload = b"captured-v14-runtime-wasm\n"
+        metadata_payload = b"captured-v14-runtime-metadata\n"
         observation = tcg_storage_version_observation()
-        source_inventory = legacy_source_inventory()
+        source_inventory = source_inventory or legacy_source_inventory()
         observation_payload = (
             json.dumps(observation, indent=2, sort_keys=True) + "\n"
         ).encode("utf-8")
@@ -600,6 +658,7 @@ class ReleaseSafetyTests(unittest.TestCase):
         ).encode("utf-8")
         gates = pre_v16_fresh_reset_gates(
             hashlib.sha256(runtime_payload).hexdigest(),
+            hashlib.sha256(metadata_payload).hexdigest(),
             hashlib.sha256(observation_payload).hexdigest(),
             hashlib.sha256(source_inventory_payload).hexdigest(),
         )
@@ -607,18 +666,73 @@ class ReleaseSafetyTests(unittest.TestCase):
             gates_value=gates,
             artifact_payloads={
                 ("node", "runtime-v14-wasm"): runtime_payload,
+                ("node", "runtime-v14-metadata"): metadata_payload,
                 ("node", "tcg-storage-version-observation"): observation,
                 ("node", "legacy-source-inventory"): source_inventory,
             },
         )
 
     def make_pre_v16_readiness(self, **inventory_overrides: int) -> tuple[Path, Path, Path]:
-        bundle, manifest = self.make_pre_v16_bundle()
+        source_inventory_value = legacy_source_inventory(
+            next_game_id=inventory_overrides.get(
+                "lifetimeLegacyAuthorityGamesCreated", 0
+            ),
+            authority_counts={
+                "games": inventory_overrides.get("currentLegacyAuthorityGames", 0),
+                "activeGameByPlayer": inventory_overrides.get(
+                    "currentLegacyAuthorityActivePlayerLocks", 0
+                ),
+                "eliminations": inventory_overrides.get(
+                    "currentLegacyAuthorityEliminationRecords", 0
+                ),
+                "processedEndCommands": inventory_overrides.get(
+                    "lifetimeLegacyAuthorityEndCommandsProcessed", 0
+                ),
+                "processedEliminationEvents": inventory_overrides.get(
+                    "lifetimeLegacyAuthorityEliminationEventsProcessed", 0
+                ),
+            },
+        )
+        bundle, manifest = self.make_pre_v16_bundle(source_inventory_value)
         restore = self.make_restore_evidence(bundle, manifest)
         migration = self.make_migration_evidence(bundle, manifest)
         gates = bundle / "artifacts/config/economic-gates.bin"
         inventory = self.root / "pre-v16-inventory.json"
-        write_json(inventory, acceptance_inventory(**inventory_overrides))
+        gates_value = tool.validate_pre_v16_fresh_reset_gates(
+            gates, RELEASE_ID, SOURCE_COMMIT
+        )
+        source_inventory = tool.validate_legacy_source_inventory(
+            bundle / "artifacts/node/legacy-source-inventory.bin",
+            RELEASE_ID,
+            SOURCE_COMMIT,
+        )
+        counts = {name: 0 for name in tool.ACCEPTANCE_COUNT_FIELDS}
+        counts.update(inventory_overrides)
+        write_json(
+            inventory,
+            {
+                "schemaVersion": 2,
+                "kind": "nexus-v2-acceptance-inventory",
+                "releaseId": RELEASE_ID,
+                "sourceCommit": SOURCE_COMMIT,
+                "observedAtFinalizedBlock": {
+                    "number": gates_value["blockNumber"],
+                    "hash": gates_value["blockHash"],
+                },
+                "observationEvidence": {
+                    "captureMode": "isolated-frozen-copy-read-only",
+                    "legacySourceInventorySha256": source_inventory["sha256"],
+                    "runtimeMetadataScaleSha256": gates_value[
+                        "runtimeMetadataScaleSha256"
+                    ],
+                    "tcgStorageVersionObservationSha256": gates_value[
+                        "tcgStorageVersionObservationSha256"
+                    ],
+                    "v2CountersDerivedFromStructuralAbsence": True,
+                },
+                "counts": counts,
+            },
+        )
         readiness = self.root / "pre-v16-readiness.json"
         self.assertEqual(
             tool.main(
@@ -945,6 +1059,163 @@ class ReleaseSafetyTests(unittest.TestCase):
         with self.assertRaises(tool.SafetyError):
             tool.validate_legacy_source_inventory_value(tampered)
 
+    def test_legacy_inventory_derives_game_authority_counts_from_rpc_pages(self) -> None:
+        for alias, config in tool.LEGACY_GAME_AUTHORITY_STORAGE.items():
+            expected = "0x" + boundary.storage_prefix(
+                "EterraGameAuthority", str(config["storage"])
+            ).hex()
+            self.assertEqual(config.get("key", config.get("prefix")), expected, alias)
+        valid = legacy_source_inventory(
+            next_game_id=4,
+            authority_counts={
+                "games": 2,
+                "activeGameByPlayer": 1,
+                "eliminations": 3,
+                "processedEndCommands": 2,
+                "processedEliminationEvents": 5,
+            },
+        )
+        observed = tool.validate_legacy_source_inventory_value(valid)
+        self.assertEqual(observed["gameAuthorityNextGameId"], 4)
+        self.assertEqual(observed["gameAuthorityGames"], 2)
+        self.assertEqual(observed["gameAuthorityEliminationRecords"], 3)
+        self.assertEqual(observed["gameAuthorityEndCommandsProcessed"], 2)
+        self.assertEqual(observed["gameAuthorityEliminationEventsProcessed"], 5)
+
+        obsolete_schema = copy.deepcopy(valid)
+        obsolete_schema["schemaVersion"] = 1
+        with self.assertRaisesRegex(tool.SafetyError, "schema mismatch"):
+            tool.validate_legacy_source_inventory_value(obsolete_schema)
+
+        fabricated_summary = copy.deepcopy(valid)
+        fabricated_summary["summary"]["gameAuthorityGames"] = 0
+        with self.assertRaisesRegex(tool.SafetyError, "not derived"):
+            tool.validate_legacy_source_inventory_value(fabricated_summary)
+
+        wrong_block = copy.deepcopy(valid)
+        wrong_block["storage"]["gameAuthority"]["games"]["at"] = "0x" + "9" * 64
+        with self.assertRaisesRegex(tool.SafetyError, "query block mismatch"):
+            tool.validate_legacy_source_inventory_value(wrong_block)
+
+        impossible_counter = legacy_source_inventory(
+            next_game_id=1,
+            authority_counts={
+                "games": 2,
+                "activeGameByPlayer": 0,
+                "eliminations": 0,
+                "processedEndCommands": 0,
+                "processedEliminationEvents": 0,
+            },
+        )
+        with self.assertRaisesRegex(tool.SafetyError, "exceeds NextGameId"):
+            tool.validate_legacy_source_inventory_value(impossible_counter)
+
+    def test_legacy_collector_queries_every_authority_prefix_at_frozen_block(self) -> None:
+        case = self
+        authority_keys = {
+            alias: [str(config["prefix"]) + "00000000"]
+            for alias, config in tool.LEGACY_GAME_AUTHORITY_STORAGE.items()
+            if alias != "nextGameId"
+        }
+
+        class Rpc:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, list[Any]]] = []
+
+            def call(self, method: str, params: list[Any]) -> Any:
+                self.calls.append((method, params))
+                if method == "chain_getFinalizedHead":
+                    return BLOCK_HASH
+                if method == "chain_getBlockHash":
+                    return BLOCK_HASH
+                if method == "chain_getHeader":
+                    return {"number": hex(100)}
+                if method == "state_getStorage":
+                    key = params[0]
+                    if key == tool.LEGACY_TCG_STORAGE_VERSION_KEY:
+                        return "0x0e00"
+                    if key == tool.LEGACY_NEXT_CARD_ID_KEY:
+                        return None
+                    if key == tool.LEGACY_GAME_AUTHORITY_STORAGE["nextGameId"]["key"]:
+                        return "0x0500000000000000"
+                    raise AssertionError(key)
+                if method == "state_getKeysPaged":
+                    prefix, _, start, at = params
+                    case.assertEqual(at, BLOCK_HASH)
+                    case.assertIsNone(start)
+                    if prefix == tool.LEGACY_CARDS_PREFIX:
+                        return []
+                    for alias, config in tool.LEGACY_GAME_AUTHORITY_STORAGE.items():
+                        if alias != "nextGameId" and prefix == config["prefix"]:
+                            return authority_keys[alias]
+                    raise AssertionError(prefix)
+                raise AssertionError(method)
+
+        rpc = Rpc()
+        observed = tool.collect_legacy_source_inventory(
+            rpc,
+            release_id=RELEASE_ID,
+            source_commit=SOURCE_COMMIT,
+            deployed_source_commit=DEPLOYED_SOURCE_COMMIT,
+            block_number=100,
+            block_hash=BLOCK_HASH,
+            observed_at=CREATED_AT,
+        )
+        self.assertEqual(observed["summary"]["gameAuthorityNextGameId"], 5)
+        self.assertEqual(observed["summary"]["gameAuthorityGames"], 1)
+        queried_prefixes = {
+            params[0]
+            for method, params in rpc.calls
+            if method == "state_getKeysPaged"
+        }
+        self.assertEqual(
+            queried_prefixes,
+            {tool.LEGACY_CARDS_PREFIX}
+            | {
+                str(config["prefix"])
+                for alias, config in tool.LEGACY_GAME_AUTHORITY_STORAGE.items()
+                if alias != "nextGameId"
+            },
+        )
+
+    def test_pre_v16_binding_rejects_fabricated_zero_legacy_inventory(self) -> None:
+        source = legacy_source_inventory(
+            next_game_id=3,
+            authority_counts={
+                "games": 1,
+                "activeGameByPlayer": 1,
+                "eliminations": 0,
+                "processedEndCommands": 2,
+                "processedEliminationEvents": 1,
+            },
+        )
+        with tempfile.TemporaryDirectory() as context:
+            source_path = Path(context) / "source.json"
+            write_json(source_path, source)
+            validated_source = tool.validate_legacy_source_inventory(source_path)
+        gates = {
+            "legacySourceInventorySha256": validated_source["sha256"],
+            "runtimeMetadataScaleSha256": "b" * 64,
+            "tcgStorageVersionObservationSha256": "c" * 64,
+        }
+        fabricated = acceptance_inventory()
+        fabricated["schemaVersion"] = 2
+        fabricated["observationEvidence"] = {
+            "captureMode": "isolated-frozen-copy-read-only",
+            "legacySourceInventorySha256": validated_source["sha256"],
+            "runtimeMetadataScaleSha256": "b" * 64,
+            "tcgStorageVersionObservationSha256": "c" * 64,
+            "v2CountersDerivedFromStructuralAbsence": True,
+        }
+        with tempfile.TemporaryDirectory() as context:
+            inventory_path = Path(context) / "inventory.json"
+            write_json(inventory_path, fabricated)
+            validated_inventory = tool.validate_acceptance_inventory(inventory_path)
+        with self.assertRaisesRegex(tool.SafetyError, "not derived"):
+            tool.validate_pre_v16_acceptance_inventory_binding(
+                validated_inventory, gates, validated_source
+            )
+
     def test_every_exact_economic_gate_is_fail_closed(self) -> None:
         base = economic_gates()
         unsafe_mutations = [
@@ -1014,7 +1285,9 @@ class ReleaseSafetyTests(unittest.TestCase):
             tool.validate_economic_gates(unknown_path)
 
     def test_pre_v16_fresh_reset_gate_is_distinct_strict_and_fresh_only(self) -> None:
-        base = pre_v16_fresh_reset_gates("a" * 64, "b" * 64, "c" * 64)
+        base = pre_v16_fresh_reset_gates(
+            "a" * 64, "b" * 64, "c" * 64, "d" * 64
+        )
         path = self.root / "pre-v16-gates.json"
         write_json(path, base)
         with self.assertRaises(tool.SafetyError):
@@ -1087,6 +1360,7 @@ class ReleaseSafetyTests(unittest.TestCase):
         ).encode("utf-8")
         gates = pre_v16_fresh_reset_gates(
             "0" * 64,
+            hashlib.sha256(b"node:runtime-v14-metadata\n").hexdigest(),
             hashlib.sha256(observation_payload).hexdigest(),
             hashlib.sha256(
                 (json.dumps(legacy_source_inventory(), indent=2, sort_keys=True) + "\n").encode()
@@ -1142,6 +1416,7 @@ class ReleaseSafetyTests(unittest.TestCase):
         ).encode("utf-8")
         gates = pre_v16_fresh_reset_gates(
             hashlib.sha256(runtime_payload).hexdigest(),
+            hashlib.sha256(b"node:runtime-v14-metadata\n").hexdigest(),
             hashlib.sha256(observation_payload).hexdigest(),
             hashlib.sha256(
                 (json.dumps(source_inventory, indent=2, sort_keys=True) + "\n").encode()
@@ -1412,7 +1687,7 @@ class ReleaseSafetyTests(unittest.TestCase):
         )
         self.assertFalse(evidence.exists())
 
-    def test_only_evidence_and_command_free_coordinators_are_bundled(self) -> None:
+    def test_only_closed_release_coordinators_are_bundled(self) -> None:
         directory = Path(__file__).resolve().parent
         executables = {
             path.name
@@ -1424,9 +1699,18 @@ class ReleaseSafetyTests(unittest.TestCase):
             {
                 "alpha_v2_release.py",
                 "acceptance_boundary.py",
+                "authority_candidate.py",
+                "capture_ssh_host_pins.py",
                 "final_freeze.py",
                 "frozen_snapshot_proof.py",
                 "node_candidate.py",
+                "phase2_internal_transport.py",
+                "pre_reset_chain_workflow_stage.py",
+                "pre_reset_closure.py",
+                "pre_reset_replacement_workflow.py",
+                "pre_reset_rollback_supervisor.py",
+                "pre_reset_site_workflow_stage.py",
+                "pre_reset_zero_asset_fence_stage.py",
                 "release_lock.py",
             },
         )
@@ -1441,6 +1725,18 @@ class ReleaseSafetyTests(unittest.TestCase):
         self.assertNotIn("shell=True", boundary)
         for command in ('"ssh"', '"docker"', '"systemctl"'):
             self.assertNotIn(command, boundary)
+        for name in (
+            "pre_reset_chain_workflow_stage.py",
+            "pre_reset_closure.py",
+            "pre_reset_replacement_workflow.py",
+            "pre_reset_rollback_supervisor.py",
+            "pre_reset_site_workflow_stage.py",
+            "pre_reset_zero_asset_fence_stage.py",
+        ):
+            source = (directory / name).read_text(encoding="utf-8")
+            self.assertNotIn("shell=True", source)
+            for command in ('"ssh"', '"docker"', '"systemctl"'):
+                self.assertNotIn(command, source)
 
     def test_documented_operator_inputs_match_the_validators(self) -> None:
         docs = tool.REPO_ROOT / "docs/nexus-v2-private-alpha"

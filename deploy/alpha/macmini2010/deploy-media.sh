@@ -1,5 +1,19 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
+# Closed union of every credential-bearing environment variable accepted by the
+# chain, site, or Unity private-alpha deployment lanes.  Preserve each shell
+# value for local use, but remove its export attribute before the first child.
+export -n DEPLOY_PASSWORD REMOTE_SUDO_PASSWORD AURA_SURI GRAN_SURI \
+	MEDIA_SIGNER_SEED MEDIA_ADMIN_API_KEY AUTHORITY_RELAY_MNEMONIC \
+	AUTHORITY_RELAY_DERIVATION_PASSWORD ETERRA_LEGENDS_SIGNER_MNEMONIC \
+	ETERRA_LEGENDS_SIGNER_DERIVATION_PASSWORD ETERRA_LEGENDS_PRIVATE_ALPHA_ACCESS_KEY \
+	ETERRA_ALPHA_SUDO_MNEMONIC ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD \
+	ADMIN_SESSION_SECRET ALPHA_ACCESS_SESSION_SECRET DISCORD_CLIENT_SECRET \
+	DISCORD_BOT_TOKEN MONGODB_URI ETERRA_LEGENDS_PLAYER_ACCESS_TOKEN \
+	NEXUS_V2_PRIVATE_ALPHA_ACCESS_KEY NEXUS_V2_SESSION_AUTHORIZATION_PROFILES_JSON \
+	ADMIN_API_KEY ETERRA_FPS_V2_OWNER_SECRET_PATH \
+	ETERRA_FPS_V2_PLAYER_GATEWAY_ACCESS_TOKEN ETERRA_FPS_V2_ROOT_SECRET_PATH \
+	ETERRA_FPS_V2_SUDO_SECRET_PATH 2>/dev/null || true
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib.sh
@@ -10,6 +24,8 @@ candidate_output=""
 promotion_manifest=""
 evidence_output=""
 fresh_reset_readiness=""
+pre_reset_closure_handoff=""
+pre_reset_closure_handoff_sha256=""
 dry_run=false
 verify_restored_final_backup=""
 phase1_closed=false
@@ -39,6 +55,16 @@ while [[ $# -gt 0 ]]; do
 			fresh_reset_readiness="$2"
 			shift
 			;;
+		--pre-reset-closure-handoff)
+			[[ $# -ge 2 ]] || die "--pre-reset-closure-handoff requires a receipt path"
+			pre_reset_closure_handoff="$2"
+			shift
+			;;
+		--pre-reset-closure-handoff-sha256)
+			[[ $# -ge 2 ]] || die "--pre-reset-closure-handoff-sha256 requires a SHA-256"
+			pre_reset_closure_handoff_sha256="$2"
+			shift
+			;;
 		--dry-run)
 			dry_run=true
 			;;
@@ -56,6 +82,7 @@ Usage: deploy-media.sh [--fresh] [--phase1-closed]
        deploy-media.sh --build-candidate OUTPUT.json
        deploy-media.sh --promote-candidate CANDIDATE.json --evidence OUTPUT.json
        deploy-media.sh --fresh --fresh-reset-readiness READINESS.json \
+         --pre-reset-closure-handoff HANDOFF.json --pre-reset-closure-handoff-sha256 SHA256 \
          --promote-candidate CANDIDATE.json --evidence OUTPUT.json [--dry-run]
        deploy-media.sh --verify-restored-final-backup STAGING_DIR
 
@@ -69,6 +96,8 @@ validation and exits before SSH.
 --phase1-closed is valid only for the guarded fresh replacement. It validates
 media readiness and representative IPFS content over SSH loopback without
 using the externally closed Caddy ingress.
+The immutable closure receipt is identity-verified and must match the receipt
+consumed by the node reset.
 The restore-verification mode is read-only. It verifies the exact restored
 compose definitions, image IDs, environment, service health, IPFS health, and
 blocked public-upload surface without building, pulling, restarting, or
@@ -85,7 +114,6 @@ done
 
 load_env
 require_cmd curl
-require_cmd expect
 require_cmd git
 require_cmd jq
 require_cmd python3
@@ -95,7 +123,7 @@ require_cmd ssh
 
 if [[ -n "${verify_restored_final_backup}" ]]; then
 	! $fresh && ! $dry_run &&
-		[[ -z "${candidate_output}" && -z "${promotion_manifest}" && -z "${evidence_output}" && -z "${fresh_reset_readiness}" ]] ||
+		[[ -z "${candidate_output}" && -z "${promotion_manifest}" && -z "${evidence_output}" && -z "${fresh_reset_readiness}" && -z "${pre_reset_closure_handoff}" && -z "${pre_reset_closure_handoff_sha256}" ]] ||
 		die "--verify-restored-final-backup cannot be combined with deploy/reset options"
 	staging_dir="$(cd -- "${verify_restored_final_backup}" 2>/dev/null && pwd)" ||
 		die "restore staging directory not found: ${verify_restored_final_backup}"
@@ -184,8 +212,29 @@ fi
 if $phase1_closed && ! $fresh; then
 	die "--phase1-closed requires --fresh"
 fi
+if $phase1_closed && [[ "${ETERRA_RELEASE_VERSION}" == "dev" ]]; then
+	die "--phase1-closed is valid only for a release replacement"
+fi
 if $phase1_closed && [[ -n "$candidate_output" ]]; then
 	die "--phase1-closed cannot be used while building a candidate"
+fi
+if $phase1_closed; then
+	[[ -n "${pre_reset_closure_handoff}" && -n "${pre_reset_closure_handoff_sha256}" ]] ||
+		die "--phase1-closed requires the pre-reset closure handoff and SHA-256"
+	[[ "${RUNTIME_SPEC_VERSION}" == "106" ]] || die "--phase1-closed requires runtime spec 106"
+	[[ "${CHAIN_RPC_PORT}" == "9944" && "${MEDIA_PORT}" == "4000" ]] ||
+		die "--phase1-closed requires the sealed chain/media ports"
+	[[ "${IPFS_API_PORT}" == "5001" && "${IPFS_GATEWAY_PORT}" == "8080" ]] ||
+		die "--phase1-closed requires the sealed IPFS ports"
+	[[ -f "${MEDIA_REPO_DIR}/docker-compose.phase1-closed.yaml" ]] ||
+		die "--phase1-closed media Compose override is missing"
+	NEXUS_V2_PHASE1_CLOSED=1
+	RPC_BIND_HOST=127.0.0.1
+	MEDIA_BIND_HOST=127.0.0.1
+	REMOTE_DOCKER_COMPOSE_CMD="${REMOTE_DOCKER_COMPOSE_PHASE1_CMD}"
+	export NEXUS_V2_PHASE1_CLOSED RPC_BIND_HOST MEDIA_BIND_HOST REMOTE_DOCKER_COMPOSE_CMD
+elif [[ -n "${pre_reset_closure_handoff}" || -n "${pre_reset_closure_handoff_sha256}" ]]; then
+	die "pre-reset closure handoff options are valid only with --phase1-closed"
 fi
 if [[ -n "$fresh_reset_readiness" ]] && ! $fresh; then
 	die "--fresh-reset-readiness requires --fresh"
@@ -221,9 +270,16 @@ fi
 CHAIN_SOURCE_COMMIT="$(require_release_source "${REPO_ROOT}" "alpha deploy tooling" "${ETERRA_EXPECTED_CHAIN_COMMIT}")"
 MEDIA_SOURCE_COMMIT="$(require_release_source "${MEDIA_REPO_DIR}" "media service" "${ETERRA_EXPECTED_MEDIA_COMMIT}")"
 export CHAIN_SOURCE_COMMIT MEDIA_SOURCE_COMMIT
+if $phase1_closed; then
+	verify_pre_reset_closure_handoff \
+		"${pre_reset_closure_handoff}" \
+		"${pre_reset_closure_handoff_sha256}" \
+		0
+fi
 
 bundle_dir="$(make_temp_dir)"
 render_runtime_env_bundle "$bundle_dir"
+media_env_sha256="$(shasum -a 256 "${bundle_dir}/media.env" | awk '{print $1}')"
 if [[ -n "$fresh_reset_readiness" ]]; then
 	stage_fresh_reset_readiness \
 		"$fresh_reset_readiness" \
@@ -237,6 +293,8 @@ remote_tmp_dir="${DEPLOY_ROOT}/tmp/media-deploy"
 promote_candidate=false
 candidate_media_image_id=""
 candidate_kubo_image_id=""
+phase1_guard_sha256=""
+phase1_compose_sha256=""
 if [[ -n "$promotion_manifest" ]]; then
 	[[ -f "$promotion_manifest" ]] || die "candidate manifest not found: $promotion_manifest"
 	[[ "$(jq -r '.schemaVersion' "$promotion_manifest")" == "1" ]] || die "unsupported candidate manifest schema"
@@ -251,10 +309,59 @@ if [[ -n "$promotion_manifest" ]]; then
 	[[ "$candidate_media_image_id" == sha256:* && "$candidate_kubo_image_id" == sha256:* ]] || die "candidate image IDs are invalid"
 	promote_candidate=true
 fi
+if $phase1_closed; then
+	phase1_guard_sha256="$(shasum -a 256 "${SCRIPT_DIR}/nexus-v2-phase1-closed-ingress.sh" | awk '{print $1}')"
+	phase1_compose_sha256="$(shasum -a 256 "${MEDIA_REPO_DIR}/docker-compose.phase1-closed.yaml" | awk '{print $1}')"
+fi
 if $dry_run; then
 	log "dry-run: guarded media/IPFS reset and immutable candidate promotion validated; no SSH or live mutation performed"
-	log "dry-run: release=${ETERRA_RELEASE_VERSION} chain_source=${CHAIN_SOURCE_COMMIT} media_source=${MEDIA_SOURCE_COMMIT} readiness_sha256=${FRESH_RESET_READINESS_SHA256:-none}"
+	log "dry-run: release=${ETERRA_RELEASE_VERSION} chain_source=${CHAIN_SOURCE_COMMIT} media_source=${MEDIA_SOURCE_COMMIT} readiness_sha256=${FRESH_RESET_READINESS_SHA256:-none} pre_reset_closure_sha256=${PRE_RESET_CLOSURE_HANDOFF_SHA256:-none} phase1_compose_sha256=${phase1_compose_sha256:-none}"
 	exit 0
+fi
+
+# Phase-1 closure is reasserted as the first remote operation. The node's
+# closed-start marker proves this media transition is part of the same exact
+# replacement, and all Docker-capable ports are protected before any staging
+# or volume action occurs.
+if $phase1_closed; then
+	phase1_guard_base64="$(base64 <"${SCRIPT_DIR}/nexus-v2-phase1-closed-ingress.sh" | tr -d '\r\n')"
+	remote_root_bash <<EOF
+set -euo pipefail
+test -f "${REMOTE_PHASE1_CLOSED_STATE_FILE}"
+test "\$(jq -r '.releaseId' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "${ETERRA_RELEASE_VERSION}"
+test "\$(jq -r '.sourceCommit' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "${ETERRA_EXPECTED_CHAIN_COMMIT}"
+test "\$(jq -r '.preResetClosureHandoffSha256' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "${PRE_RESET_CLOSURE_HANDOFF_SHA256}"
+test "\$(jq -r '.nodeRpcLoopbackOnly' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "true"
+test "\$(jq -r '.nodeP2pLoopbackOnly' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "true"
+test "\$(jq -r '.mediaLoopbackOnly' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "false"
+test "\$(jq -r '.ipfsApiLoopbackOnly' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "false"
+test "\$(jq -r '.ipfsGatewayLoopbackOnly' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "false"
+test "\$(jq -r '.mediaChainLoopbackConnected' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "false"
+guard="\$(mktemp /tmp/nexus-v2-phase1-closed-ingress.XXXXXX)"
+trap 'rm -f "\${guard}"' EXIT
+printf '%s' '${phase1_guard_base64}' | base64 -d >"\${guard}"
+test "\$(shasum -a 256 "\${guard}" | awk '{print \$1}')" = "${phase1_guard_sha256}"
+chmod 0700 "\${guard}"
+CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+	MEDIA_PORT="${MEDIA_PORT}" IPFS_API_PORT="${IPFS_API_PORT}" IPFS_GATEWAY_PORT="${IPFS_GATEWAY_PORT}" \
+	"\${guard}" preclose
+EOF
+	remote_root_bash <<'EOF'
+set -euo pipefail
+version="$(docker compose version --short)"
+version="${version#v}"
+[[ "${version}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)([-+].*)?$ ]] || {
+	echo "unrecognized Docker Compose version: ${version}" >&2
+	exit 1
+}
+major="${BASH_REMATCH[1]}"
+minor="${BASH_REMATCH[2]}"
+patch="${BASH_REMATCH[3]}"
+(( major > 2 || (major == 2 && minor > 24) || (major == 2 && minor == 24 && patch >= 4) )) || {
+	echo "Nexus V2 Phase1 requires Docker Compose >= 2.24.4; found ${version}" >&2
+	exit 1
+}
+EOF
 fi
 
 if [[ -n "$candidate_output" ]]; then
@@ -340,8 +447,12 @@ if [[ "$ETERRA_RELEASE_VERSION" != "dev" && "$fresh" == "true" ]]; then
 	rsync_to_remote_no_delete \
 		"${FRESH_RESET_READINESS_STAGED_PATH}" \
 		"${remote_tmp_dir}/reset-readiness.json"
+	rsync_to_remote_no_delete \
+		"${pre_reset_closure_handoff}" \
+		"${remote_tmp_dir}/pre-reset-closure-handoff.json"
 	remote_root_bash <<EOF
 set -euo pipefail
+test "\$(shasum -a 256 "${remote_tmp_dir}/pre-reset-closure-handoff.json" | awk '{print \$1}')" = "${PRE_RESET_CLOSURE_HANDOFF_SHA256}"
 archive_root="${DEPLOY_ROOT}/archive/nexus-v2-fresh-reset/${FRESH_RESET_READINESS_SHA256}"
 component_dir="\${archive_root}/media"
 applied_marker="\${component_dir}/reset-applied.marker"
@@ -350,8 +461,29 @@ applied_marker="\${component_dir}/reset-applied.marker"
 	exit 1
 }
 mkdir -p "\${component_dir}"
+test -f "\${component_dir}/prepared.marker.json"
+test -f "\${component_dir}/file-sha256.prepared"
+test -z "\$(find "\${component_dir}" -perm /222 -print -quit)"
+(cd "\${component_dir}" && shasum -a 256 -c file-sha256.prepared >/dev/null)
+jq -e \
+	--arg readinessSha256 "${FRESH_RESET_READINESS_SHA256}" \
+	--arg releaseId "${FRESH_RESET_RELEASE_ID}" \
+	--arg sourceCommit "${FRESH_RESET_SOURCE_COMMIT}" \
+	--arg mediaSourceCommit "${MEDIA_SOURCE_COMMIT}" \
+	'.schemaVersion == 1 and
+	 .kind == "nexus-v2-private-alpha-prepared-reset-archive" and
+	 .componentId == "media" and
+	 .resetReadinessSha256 == \$readinessSha256 and
+	 .releaseId == \$releaseId and
+	 .sourceCommit == \$sourceCommit and
+	 .mediaSourceCommit == \$mediaSourceCommit and
+	 .currentAlphaStatePreserved == true and
+	 .resetApplied == false' \
+	"\${component_dir}/prepared.marker.json" >/dev/null
+chmod u+w "\${component_dir}"
 if [[ ! -e "\${component_dir}/deployment-identifiers.before" ]]; then
 	install -m 0400 "${remote_tmp_dir}/reset-readiness.json" "\${component_dir}/reset-readiness.json"
+	install -m 0400 "${remote_tmp_dir}/pre-reset-closure-handoff.json" "\${component_dir}/pre-reset-closure-handoff.json"
 	mkdir -p "\${component_dir}/shared-state.before"
 	if [[ -d "${REMOTE_STATE_DIR}" ]]; then
 		cp -a "${REMOTE_STATE_DIR}/." "\${component_dir}/shared-state.before/"
@@ -363,6 +495,7 @@ if [[ ! -e "\${component_dir}/deployment-identifiers.before" ]]; then
 		printf 'ipfs_data_volume=%s\n' "${REMOTE_IPFS_DATA_VOLUME}"
 		printf 'ipfs_staging_volume=%s\n' "${REMOTE_IPFS_STAGING_VOLUME}"
 		printf 'readiness_sha256=%s\n' "${FRESH_RESET_READINESS_SHA256}"
+		printf 'pre_reset_closure_handoff_sha256=%s\n' "${PRE_RESET_CLOSURE_HANDOFF_SHA256}"
 		printf 'readiness_release_id=%s\n' "${FRESH_RESET_RELEASE_ID}"
 		printf 'frozen_chain_source_commit=%s\n' "${FRESH_RESET_SOURCE_COMMIT}"
 		printf 'replacement_chain_source_commit=%s\n' "${CHAIN_SOURCE_COMMIT}"
@@ -374,7 +507,8 @@ if [[ ! -e "\${component_dir}/deployment-identifiers.before" ]]; then
 	for path in \
 		"${REMOTE_MEDIA_ENV_FILE}" \
 		"${REMOTE_MEDIA_COMPOSE_BASE}" \
-		"${REMOTE_MEDIA_COMPOSE_OVERRIDE}"
+		"${REMOTE_MEDIA_COMPOSE_OVERRIDE}" \
+		"${REMOTE_MEDIA_COMPOSE_PHASE1}"
 	do
 		if [[ -f "\${path}" ]]; then
 			shasum -a 256 "\${path}" >>"\${component_dir}/file-sha256.before"
@@ -385,12 +519,28 @@ if [[ ! -e "\${component_dir}/deployment-identifiers.before" ]]; then
 		"${REMOTE_IPFS_STAGING_VOLUME}" \
 		>"\${component_dir}/volume-identities.before.json" 2>/dev/null || printf '[]\n' >"\${component_dir}/volume-identities.before.json"
 	if [[ -f "${REMOTE_MEDIA_COMPOSE_BASE}" && -f "${REMOTE_MEDIA_ENV_FILE}" ]]; then
-		${REMOTE_DOCKER_COMPOSE_CMD} ps --format json \
+		${REMOTE_DOCKER_COMPOSE_NORMAL_CMD} ps --format json \
 			>"\${component_dir}/compose-services.before.json" 2>/dev/null || true
 	fi
 	chmod -R a-w "\${component_dir}"
 	chmod u+w "\${component_dir}"
 fi
+install -m 0400 "${remote_tmp_dir}/pre-reset-closure-handoff.json" \
+	"\${component_dir}/pre-reset-closure-handoff.json"
+jq -cn \
+	--arg preResetClosureHandoffSha256 "${PRE_RESET_CLOSURE_HANDOFF_SHA256}" \
+	--arg replacementMediaSourceCommit "${MEDIA_SOURCE_COMMIT}" \
+	--arg boundAtUtc "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+	'{schemaVersion:1,kind:"nexus-v2-private-alpha-destructive-reset-binding",
+	  componentId:"media",
+	  preResetClosureHandoffSha256:\$preResetClosureHandoffSha256,
+	  replacementMediaSourceCommit:\$replacementMediaSourceCommit,
+	  boundAtUtc:\$boundAtUtc}' >"\${component_dir}/destructive-reset-binding.json.pending"
+chmod 0400 "\${component_dir}/destructive-reset-binding.json.pending"
+mv "\${component_dir}/destructive-reset-binding.json.pending" \
+	"\${component_dir}/destructive-reset-binding.json"
+chmod -R a-w "\${component_dir}"
+rm -f "${remote_tmp_dir}/reset-readiness.json" "${remote_tmp_dir}/pre-reset-closure-handoff.json"
 EOF
 fi
 
@@ -409,14 +559,67 @@ rsync_with_remote \
 	"${MEDIA_REPO_DIR}/" "${SSH_TARGET}:${REMOTE_MEDIA_DIR}/"
 
 rsync_to_remote_no_delete "${bundle_dir}/media.env" "${remote_tmp_dir}/media.env"
+if $phase1_closed; then
+	rsync_to_remote_no_delete "${SCRIPT_DIR}/nexus-v2-phase1-closed-ingress.sh" "${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh"
+fi
 
 log "cutting over media stack and starting alpha media compose project"
 remote_root_bash <<EOF
 set -euo pipefail
 
-mkdir -p "${REMOTE_SHARED_ENV_DIR}" "${remote_tmp_dir}" "${REMOTE_STATE_DIR}"
-install -m 0644 "${remote_tmp_dir}/media.env" "${REMOTE_MEDIA_ENV_FILE}"
-chown root:root "${REMOTE_MEDIA_ENV_FILE}"
+install -d -m 0755 -o root -g root "${REMOTE_SHARED_ENV_DIR}"
+mkdir -p "${remote_tmp_dir}" "${REMOTE_STATE_DIR}"
+if $phase1_closed; then
+	test "\$(shasum -a 256 "${REMOTE_MEDIA_COMPOSE_PHASE1}" | awk '{print \$1}')" = "${phase1_compose_sha256}"
+	test "\$(shasum -a 256 "${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" | awk '{print \$1}')" = "${phase1_guard_sha256}"
+	chmod 0755 "${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh"
+	CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+		MEDIA_PORT="${MEDIA_PORT}" IPFS_API_PORT="${IPFS_API_PORT}" IPFS_GATEWAY_PORT="${IPFS_GATEWAY_PORT}" \
+		"${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" preclose
+	MEDIA_IMAGE_REF='${media_image_ref}' docker compose --project-name '${REMOTE_MEDIA_PROJECT_NAME}' \
+		-f '${REMOTE_MEDIA_COMPOSE_BASE}' -f '${REMOTE_MEDIA_COMPOSE_OVERRIDE}' \
+		-f '${REMOTE_MEDIA_COMPOSE_PHASE1}' --env-file "${remote_tmp_dir}/media.env" config --quiet
+	MEDIA_IMAGE_REF='${media_image_ref}' docker compose --project-name '${REMOTE_MEDIA_PROJECT_NAME}' \
+		-f '${REMOTE_MEDIA_COMPOSE_BASE}' -f '${REMOTE_MEDIA_COMPOSE_OVERRIDE}' \
+		-f '${REMOTE_MEDIA_COMPOSE_PHASE1}' --env-file "${remote_tmp_dir}/media.env" \
+		config --format json | python3 -c '
+import json
+import sys
+
+value = json.load(sys.stdin)
+services = value.get("services")
+if not isinstance(services, dict) or set(services) != {"ipfs", "media-service"}:
+    raise SystemExit("Phase1 resolved Compose service set mismatch")
+media = services["media-service"]
+environment = media.get("environment", {})
+expected_environment = {
+    "BIND_HOST": "127.0.0.1",
+    "PORT": "4000",
+    "NEXUS_V2_PHASE1_CLOSED": "1",
+    "CHAIN_WS": "ws://127.0.0.1:9944",
+    "IPFS_API": "http://127.0.0.1:5001",
+    "IPFS_GATEWAY": "http://127.0.0.1:8080",
+    "PUBLIC_MEDIA_UPLOAD_ENABLED": "false",
+    "ALLOW_DEV_ADMIN_RESET": "false",
+}
+if media.get("network_mode") != "host" or media.get("ports") not in (None, []):
+    raise SystemExit("Phase1 media service is not host-networked without published ports")
+for name, expected in expected_environment.items():
+    if str(environment.get(name)) != expected:
+        raise SystemExit(f"Phase1 resolved media environment mismatch: {name}")
+ports = services["ipfs"].get("ports")
+actual = sorted(
+    (str(item.get("host_ip")), str(item.get("published")), str(item.get("target")))
+    for item in (ports if isinstance(ports, list) else [])
+)
+expected = [("127.0.0.1", "5001", "5001"), ("127.0.0.1", "8080", "8080")]
+if actual != expected:
+    raise SystemExit("Phase1 resolved IPFS port bindings mismatch")
+'
+fi
+install -m 0600 -o root -g root "${remote_tmp_dir}/media.env" "${REMOTE_MEDIA_ENV_FILE}"
+test "\$(shasum -a 256 "${REMOTE_MEDIA_ENV_FILE}" | awk '{print \$1}')" = "${media_env_sha256}"
+test "\$(stat -c '%a %U:%G' "${REMOTE_MEDIA_ENV_FILE}")" = "600 root:root"
 rm -f "${remote_tmp_dir}/media.env"
 
 if [[ -f "${LEGACY_MEDIA_COMPOSE_BASE}" && -f "${LEGACY_MEDIA_ENV_FILE}" ]]; then
@@ -431,16 +634,23 @@ if $fresh; then
 			echo "[alpha-macmini2010] readiness packet was already consumed for the media reset" >&2
 			exit 1
 		}
+		test -f "\${archive_component_dir}/prepared.marker.json"
+		test -f "\${archive_component_dir}/destructive-reset-binding.json"
+		test -z "\$(find "\${archive_component_dir}" -perm /222 -print -quit)"
+		chmod u+w "\${archive_component_dir}"
 	fi
 	echo "[alpha-macmini2010] fresh deploy: removing media/IPFS volumes and cached deploy hashes"
 	${REMOTE_DOCKER_COMPOSE_CMD} down --volumes --remove-orphans >/dev/null 2>&1 || true
 	rm -f "${REMOTE_MEDIA_BUILD_HASH_FILE}" "${REMOTE_MEDIA_RUNTIME_HASH_FILE}"
 	if [[ "${ETERRA_RELEASE_VERSION}" != "dev" ]]; then
-		printf 'component=media\nreset_applied_at_utc=%s\nreplacement_source_commit=%s\n' \
+		printf 'component=media\nreset_applied_at_utc=%s\nreplacement_source_commit=%s\nprepared_marker_sha256=%s\ndestructive_reset_binding_sha256=%s\n' \
 			"\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 			"${MEDIA_SOURCE_COMMIT}" \
+			"\$(shasum -a 256 "\${archive_component_dir}/prepared.marker.json" | awk '{print \$1}')" \
+			"\$(shasum -a 256 "\${archive_component_dir}/destructive-reset-binding.json" | awk '{print \$1}')" \
 			>"\${archive_component_dir}/reset-applied.marker"
 		chmod 0440 "\${archive_component_dir}/reset-applied.marker"
+		chmod a-w "\${archive_component_dir}"
 	fi
 fi
 if $promote_candidate; then
@@ -486,6 +696,35 @@ media_container_id="\$(${REMOTE_DOCKER_COMPOSE_CMD} ps -q media-service)"
 [[ -n "\${media_container_id}" ]] || { echo "media-service container id unavailable" >&2; exit 1; }
 media_image_digest="\$(docker inspect --format '{{.Image}}' "\${media_container_id}")"
 [[ "\${media_image_digest}" == sha256:* ]] || { echo "media-service image digest unavailable" >&2; exit 1; }
+python3 -I -S - "${REMOTE_MEDIA_ENV_FILE}" "\${media_container_id}" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+
+environment_path, container_id = sys.argv[1:]
+expected = {}
+for line in pathlib.Path(environment_path).read_text(encoding="utf-8").splitlines():
+    key, value = line.split("=", 1)
+    if key in expected:
+        raise SystemExit("duplicate installed media environment key")
+    expected[key] = value
+completed = subprocess.run(
+    ["docker", "inspect", "--format", "{{json .Config.Env}}", container_id],
+    check=True,
+    capture_output=True,
+    text=True,
+)
+observed = {}
+for assignment in json.loads(completed.stdout):
+    key, value = assignment.split("=", 1)
+    if key in observed:
+        raise SystemExit("duplicate live media environment key")
+    observed[key] = value
+for key, value in expected.items():
+    if observed.get(key) != value:
+        raise SystemExit(f"live media environment drifted: {key}")
+PY
 printf '%s\n' "${media_build_hash}" >"${REMOTE_MEDIA_BUILD_HASH_FILE}"
 printf '%s\n' "${media_runtime_hash}" >"${REMOTE_MEDIA_RUNTIME_HASH_FILE}"
 printf '%s\n' "\${media_image_digest}" >"${REMOTE_MEDIA_IMAGE_DIGEST_FILE}"
@@ -493,7 +732,13 @@ printf '%s\n' "${ETERRA_RELEASE_VERSION}" >"${REMOTE_RELEASE_VERSION_FILE}"
 printf '%s\n' "${MEDIA_SOURCE_COMMIT}" >"${REMOTE_MEDIA_SOURCE_COMMIT_FILE}"
 chown root:root "${REMOTE_MEDIA_BUILD_HASH_FILE}" "${REMOTE_MEDIA_RUNTIME_HASH_FILE}" "${REMOTE_MEDIA_IMAGE_DIGEST_FILE}" \
 	"${REMOTE_RELEASE_VERSION_FILE}" "${REMOTE_MEDIA_SOURCE_COMMIT_FILE}"
-rmdir "${remote_tmp_dir}" >/dev/null 2>&1 || true
+if $phase1_closed; then
+	CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+		MEDIA_PORT="${MEDIA_PORT}" IPFS_API_PORT="${IPFS_API_PORT}" IPFS_GATEWAY_PORT="${IPFS_GATEWAY_PORT}" \
+		"${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" verify-media
+else
+	rmdir "${remote_tmp_dir}" >/dev/null 2>&1 || true
+fi
 EOF
 
 remote_media_image_digest="$(ssh_to_remote "cat $(shell_escape "${REMOTE_MEDIA_IMAGE_DIGEST_FILE}")")"
@@ -585,7 +830,7 @@ EOF
 	[[ -s "$content_file" ]] || die "representative media content response is empty"
 
 	mkdir -p "$(dirname "$evidence_output")"
-	python3 - "$evidence_output" "$ETERRA_RELEASE_VERSION" "$CHAIN_SOURCE_COMMIT" "$MEDIA_SOURCE_COMMIT" "$media_build_hash" "$media_runtime_hash" "$remote_media_image_digest" "$KUBO_IMAGE" "$health_url" "$content_url" "$health_file" "$content_file" "${promotion_manifest:-}" "$validation_transport" "$phase1_closed" <<'PY'
+	python3 - "$evidence_output" "$ETERRA_RELEASE_VERSION" "$CHAIN_SOURCE_COMMIT" "$MEDIA_SOURCE_COMMIT" "$media_build_hash" "$media_runtime_hash" "$remote_media_image_digest" "$KUBO_IMAGE" "$health_url" "$content_url" "$health_file" "$content_file" "${promotion_manifest:-}" "$validation_transport" "$phase1_closed" "${PRE_RESET_CLOSURE_HANDOFF_SHA256:-}" "$media_env_sha256" <<'PY'
 import datetime
 import hashlib
 import json
@@ -594,7 +839,8 @@ import sys
 
 (output, release, chain_commit, media_commit, build_hash, runtime_hash,
  image_id, kubo_ref, health_url, content_url, health_file, content_file,
- candidate_file, validation_transport, phase1_closed) = sys.argv[1:]
+ candidate_file, validation_transport, phase1_closed,
+ pre_reset_closure_handoff_sha256, media_env_sha256) = sys.argv[1:]
 
 def digest(path):
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
@@ -606,6 +852,13 @@ evidence = {
     "mediaSourceCommit": media_commit,
     "mediaBuildHash": build_hash,
     "mediaRuntimeHash": runtime_hash,
+    "mediaEnvironment": {
+        "path": "/opt/eterra-alpha/shared/env/media.env",
+        "sha256": media_env_sha256,
+        "mode": "0600",
+        "owner": "root:root",
+        "liveContainerMatched": True,
+    },
     "mediaImageId": image_id,
     "kuboImageRef": kubo_ref,
     "candidateManifestSha256": digest(candidate_file) if candidate_file else None,
@@ -615,10 +868,47 @@ evidence = {
     "contentResponseSha256": digest(content_file),
     "validationTransport": validation_transport,
     "phase1Closed": phase1_closed == "true",
+    "preResetClosureHandoffSha256": pre_reset_closure_handoff_sha256 or None,
     "verifiedAtUtc": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat(),
 }
 pathlib.Path(output).write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
+	if $phase1_closed; then
+		remote_root_bash <<EOF
+set -euo pipefail
+CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+	MEDIA_PORT="${MEDIA_PORT}" IPFS_API_PORT="${IPFS_API_PORT}" IPFS_GATEWAY_PORT="${IPFS_GATEWAY_PORT}" \
+	"${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" verify-media
+python3 - "${REMOTE_PHASE1_CLOSED_STATE_FILE}" <<'PY'
+import datetime
+import json
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text(encoding="utf-8"))
+if value.get("releaseId") != "${ETERRA_RELEASE_VERSION}" or value.get("sourceCommit") != "${CHAIN_SOURCE_COMMIT}":
+    raise SystemExit("Phase-1 closed-start marker identity mismatch")
+if value.get("preResetClosureHandoffSha256") != "${PRE_RESET_CLOSURE_HANDOFF_SHA256}":
+    raise SystemExit("Phase-1 closed-start marker closure handoff mismatch")
+value["mediaLoopbackOnly"] = True
+value["ipfsApiLoopbackOnly"] = True
+value["ipfsGatewayLoopbackOnly"] = True
+value["mediaChainLoopbackConnected"] = True
+value["mediaSourceCommit"] = "${MEDIA_SOURCE_COMMIT}"
+value["protectedFirewallRulesClosedBeforeMediaStart"] = True
+value["phase1IngressGuardSha256"] = "${phase1_guard_sha256}"
+value["updatedAtUtc"] = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+temporary = path.with_suffix(".tmp")
+temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+os.chmod(temporary, 0o440)
+os.replace(temporary, path)
+PY
+rm -f "${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh"
+rmdir "${remote_tmp_dir}" >/dev/null 2>&1 || true
+EOF
+	fi
 fi
 
 log "alpha media deploy complete release=${ETERRA_RELEASE_VERSION} source=${MEDIA_SOURCE_COMMIT} build_sha256=${media_build_hash} runtime_env_sha256=${media_runtime_hash} image_digest=${remote_media_image_digest}"

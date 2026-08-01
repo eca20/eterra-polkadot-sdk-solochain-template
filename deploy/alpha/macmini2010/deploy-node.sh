@@ -1,5 +1,19 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
+# Closed union of every credential-bearing environment variable accepted by the
+# chain, site, or Unity private-alpha deployment lanes.  Preserve each shell
+# value for local use, but remove its export attribute before the first child.
+export -n DEPLOY_PASSWORD REMOTE_SUDO_PASSWORD AURA_SURI GRAN_SURI \
+	MEDIA_SIGNER_SEED MEDIA_ADMIN_API_KEY AUTHORITY_RELAY_MNEMONIC \
+	AUTHORITY_RELAY_DERIVATION_PASSWORD ETERRA_LEGENDS_SIGNER_MNEMONIC \
+	ETERRA_LEGENDS_SIGNER_DERIVATION_PASSWORD ETERRA_LEGENDS_PRIVATE_ALPHA_ACCESS_KEY \
+	ETERRA_ALPHA_SUDO_MNEMONIC ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD \
+	ADMIN_SESSION_SECRET ALPHA_ACCESS_SESSION_SECRET DISCORD_CLIENT_SECRET \
+	DISCORD_BOT_TOKEN MONGODB_URI ETERRA_LEGENDS_PLAYER_ACCESS_TOKEN \
+	NEXUS_V2_PRIVATE_ALPHA_ACCESS_KEY NEXUS_V2_SESSION_AUTHORIZATION_PROFILES_JSON \
+	ADMIN_API_KEY ETERRA_FPS_V2_OWNER_SECRET_PATH \
+	ETERRA_FPS_V2_PLAYER_GATEWAY_ACCESS_TOKEN ETERRA_FPS_V2_ROOT_SECRET_PATH \
+	ETERRA_FPS_V2_SUDO_SECRET_PATH 2>/dev/null || true
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib.sh
@@ -8,6 +22,8 @@ source "${SCRIPT_DIR}/lib.sh"
 purge_state=0
 dry_run=0
 fresh_reset_readiness=""
+pre_reset_closure_handoff=""
+pre_reset_closure_handoff_sha256=""
 verify_restored_final_backup=""
 promotion_manifest=""
 target_identity=""
@@ -21,6 +37,16 @@ while [[ $# -gt 0 ]]; do
 		--fresh-reset-readiness)
 			[[ $# -ge 2 ]] || die "--fresh-reset-readiness requires a packet path"
 			fresh_reset_readiness="$2"
+			shift
+			;;
+		--pre-reset-closure-handoff)
+			[[ $# -ge 2 ]] || die "--pre-reset-closure-handoff requires a receipt path"
+			pre_reset_closure_handoff="$2"
+			shift
+			;;
+		--pre-reset-closure-handoff-sha256)
+			[[ $# -ge 2 ]] || die "--pre-reset-closure-handoff-sha256 requires a SHA-256"
+			pre_reset_closure_handoff_sha256="$2"
 			shift
 			;;
 		--dry-run)
@@ -53,6 +79,7 @@ while [[ $# -gt 0 ]]; do
 			cat <<'EOF'
 Usage: deploy-node.sh [--purge-state]
        deploy-node.sh --purge-state --fresh-reset-readiness READINESS.json \
+         --pre-reset-closure-handoff HANDOFF.json --pre-reset-closure-handoff-sha256 SHA256 \
          --promote-candidate /path/to/node-candidate.json \
          --target-identity /path/to/eterra-spec106-target-identity.v2.json \
          [--evidence OUTPUT.json] [--phase1-closed] [--dry-run]
@@ -75,6 +102,8 @@ Alpha spec/genesis changes are only applied when --purge-state is set.
 precloses protected UFW ports before restart and installs the exact launcher
 from this clean deployment commit so RPC starts on loopback without an
 externally writable interval.
+The short-lived pre-reset closure handoff is hash- and identity-verified at a
+maximum age of 300 seconds immediately before the first remote mutation.
 EOF
 			exit 0
 			;;
@@ -86,7 +115,6 @@ EOF
 done
 
 load_env
-require_cmd expect
 require_cmd base64
 require_cmd git
 require_cmd jq
@@ -102,7 +130,7 @@ if [[ "${phase1_closed}" -eq 1 ]]; then
 fi
 
 if [[ -n "${verify_restored_final_backup}" ]]; then
-	[[ "${purge_state}" -eq 0 && "${dry_run}" -eq 0 && -z "${fresh_reset_readiness}" && -z "${promotion_manifest}" && -z "${target_identity}" && -z "${evidence_output}" ]] ||
+	[[ "${purge_state}" -eq 0 && "${dry_run}" -eq 0 && -z "${fresh_reset_readiness}" && -z "${pre_reset_closure_handoff}" && -z "${pre_reset_closure_handoff_sha256}" && -z "${promotion_manifest}" && -z "${target_identity}" && -z "${evidence_output}" ]] ||
 		die "--verify-restored-final-backup cannot be combined with deploy/reset options"
 	staging_dir="$(cd -- "${verify_restored_final_backup}" 2>/dev/null && pwd)" ||
 		die "restore staging directory not found: ${verify_restored_final_backup}"
@@ -181,6 +209,10 @@ if [[ "${phase1_closed}" -eq 1 ]]; then
 		die "--phase1-closed requires immutable candidate promotion and target identity"
 	[[ "${ETERRA_RELEASE_VERSION}" != "dev" ]] ||
 		die "--phase1-closed is valid only for a non-dev private-alpha release"
+	[[ -n "${pre_reset_closure_handoff}" && -n "${pre_reset_closure_handoff_sha256}" ]] ||
+		die "--phase1-closed requires the pre-reset closure handoff and SHA-256"
+elif [[ -n "${pre_reset_closure_handoff}" || -n "${pre_reset_closure_handoff_sha256}" ]]; then
+	die "pre-reset closure handoff options are valid only with --phase1-closed"
 fi
 if [[ "${dry_run}" -eq 1 && "${purge_state}" -ne 1 ]]; then
 	die "--dry-run is supported only for the guarded purge plan"
@@ -283,6 +315,12 @@ fi
 if [[ "${phase1_closed}" -eq 1 ]]; then
 	phase1_launcher_sha256="$(shasum -a 256 "${SCRIPT_DIR}/start-alpha-node.sh" | awk '{print $1}')"
 	phase1_guard_sha256="$(shasum -a 256 "${SCRIPT_DIR}/nexus-v2-phase1-closed-ingress.sh" | awk '{print $1}')"
+	# This is deliberately the last local gate before the first protected-host
+	# mutation. A receipt older than five minutes cannot begin a reset.
+	verify_pre_reset_closure_handoff \
+		"${pre_reset_closure_handoff}" \
+		"${pre_reset_closure_handoff_sha256}" \
+		300
 fi
 
 # This is deliberately the first remote operation in the protected path.  A
@@ -298,6 +336,7 @@ printf '%s' '${phase1_guard_base64}' | base64 -d >"\${guard}"
 test "\$(shasum -a 256 "\${guard}" | awk '{print \$1}')" = "${phase1_guard_sha256}"
 chmod 0700 "\${guard}"
 CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+	MEDIA_PORT="${MEDIA_PORT}" IPFS_API_PORT="${IPFS_API_PORT}" IPFS_GATEWAY_PORT="${IPFS_GATEWAY_PORT}" \
 	"\${guard}" preclose
 EOF
 fi
@@ -320,6 +359,7 @@ fi
 bundle_dir="$(make_temp_dir)"
 remote_tmp_dir="${DEPLOY_ROOT}/tmp/node-deploy"
 render_runtime_env_bundle "${bundle_dir}"
+node_env_sha256="$(shasum -a 256 "${bundle_dir}/node.env" | awk '{print $1}')"
 ensure_local_artifacts_dir
 if [[ -n "${fresh_reset_readiness}" ]]; then
 	stage_fresh_reset_readiness \
@@ -332,7 +372,7 @@ if [[ "${ETERRA_RELEASE_VERSION}" != "dev" && "${purge_state}" -eq 1 ]]; then
 fi
 if [[ "${dry_run}" -eq 1 ]]; then
 	log "dry-run: guarded node purge and immutable candidate promotion validated; no SSH or live mutation performed"
-	log "dry-run: release=${ETERRA_RELEASE_VERSION} replacement_source=${CHAIN_SOURCE_COMMIT} runtime_source=${candidate_runtime_source_commit:-none} candidate_sha256=${candidate_manifest_sha256:-none} genesis=${candidate_genesis_hash:-none} readiness_sha256=${FRESH_RESET_READINESS_SHA256:-none} phase1_closed=${phase1_closed} phase1_launcher_sha256=${phase1_launcher_sha256:-none} phase1_guard_sha256=${phase1_guard_sha256:-none}"
+	log "dry-run: release=${ETERRA_RELEASE_VERSION} replacement_source=${CHAIN_SOURCE_COMMIT} runtime_source=${candidate_runtime_source_commit:-none} candidate_sha256=${candidate_manifest_sha256:-none} genesis=${candidate_genesis_hash:-none} readiness_sha256=${FRESH_RESET_READINESS_SHA256:-none} pre_reset_closure_sha256=${PRE_RESET_CLOSURE_HANDOFF_SHA256:-none} phase1_closed=${phase1_closed} phase1_launcher_sha256=${phase1_launcher_sha256:-none} phase1_guard_sha256=${phase1_guard_sha256:-none}"
 	exit 0
 fi
 
@@ -400,8 +440,12 @@ if [[ "${ETERRA_RELEASE_VERSION}" != "dev" && "${purge_state}" -eq 1 ]]; then
 	rsync_to_remote_no_delete \
 		"${FRESH_RESET_READINESS_STAGED_PATH}" \
 		"${remote_tmp_dir}/reset-readiness.json"
+	rsync_to_remote_no_delete \
+		"${pre_reset_closure_handoff}" \
+		"${remote_tmp_dir}/pre-reset-closure-handoff.json"
 	remote_root_bash <<EOF
 set -euo pipefail
+test "\$(shasum -a 256 "${remote_tmp_dir}/pre-reset-closure-handoff.json" | awk '{print \$1}')" = "${PRE_RESET_CLOSURE_HANDOFF_SHA256}"
 archive_root="${DEPLOY_ROOT}/archive/nexus-v2-fresh-reset/${FRESH_RESET_READINESS_SHA256}"
 component_dir="\${archive_root}/node"
 applied_marker="\${component_dir}/reset-applied.marker"
@@ -410,8 +454,27 @@ applied_marker="\${component_dir}/reset-applied.marker"
 	exit 1
 }
 mkdir -p "\${component_dir}"
+test -f "\${component_dir}/prepared.marker.json"
+test -f "\${component_dir}/file-sha256.prepared"
+test -z "\$(find "\${component_dir}" -perm /222 -print -quit)"
+(cd "\${component_dir}" && shasum -a 256 -c file-sha256.prepared >/dev/null)
+jq -e \
+	--arg readinessSha256 "${FRESH_RESET_READINESS_SHA256}" \
+	--arg releaseId "${FRESH_RESET_RELEASE_ID}" \
+	--arg sourceCommit "${FRESH_RESET_SOURCE_COMMIT}" \
+	'.schemaVersion == 1 and
+	 .kind == "nexus-v2-private-alpha-prepared-reset-archive" and
+	 .componentId == "node" and
+	 .resetReadinessSha256 == \$readinessSha256 and
+	 .releaseId == \$releaseId and
+	 .sourceCommit == \$sourceCommit and
+	 .currentAlphaStatePreserved == true and
+	 .resetApplied == false' \
+	"\${component_dir}/prepared.marker.json" >/dev/null
+chmod u+w "\${component_dir}"
 if [[ ! -e "\${component_dir}/deployment-identifiers.before" ]]; then
 	install -m 0400 "${remote_tmp_dir}/reset-readiness.json" "\${component_dir}/reset-readiness.json"
+	install -m 0400 "${remote_tmp_dir}/pre-reset-closure-handoff.json" "\${component_dir}/pre-reset-closure-handoff.json"
 	mkdir -p "\${component_dir}/shared-state.before"
 	if [[ -d "${REMOTE_STATE_DIR}" ]]; then
 		cp -a "${REMOTE_STATE_DIR}/." "\${component_dir}/shared-state.before/"
@@ -422,6 +485,7 @@ if [[ ! -e "\${component_dir}/deployment-identifiers.before" ]]; then
 		printf 'node_service=%s\n' "${REMOTE_NODE_SERVICE_NAME}.service"
 		printf 'node_dir=%s\n' "${REMOTE_NODE_DIR}"
 		printf 'readiness_sha256=%s\n' "${FRESH_RESET_READINESS_SHA256}"
+		printf 'pre_reset_closure_handoff_sha256=%s\n' "${PRE_RESET_CLOSURE_HANDOFF_SHA256}"
 		printf 'readiness_release_id=%s\n' "${FRESH_RESET_RELEASE_ID}"
 		printf 'frozen_chain_source_commit=%s\n' "${FRESH_RESET_SOURCE_COMMIT}"
 		printf 'replacement_chain_source_commit=%s\n' "${CHAIN_SOURCE_COMMIT}"
@@ -451,6 +515,25 @@ if [[ ! -e "\${component_dir}/deployment-identifiers.before" ]]; then
 	chmod -R a-w "\${component_dir}"
 	chmod u+w "\${component_dir}"
 fi
+install -m 0400 "${remote_tmp_dir}/pre-reset-closure-handoff.json" \
+	"\${component_dir}/pre-reset-closure-handoff.json"
+jq -cn \
+	--arg preResetClosureHandoffSha256 "${PRE_RESET_CLOSURE_HANDOFF_SHA256}" \
+	--arg nodeCandidateManifestSha256 "${candidate_manifest_sha256:-none}" \
+	--arg targetIdentitySha256 "${target_identity_sha256:-none}" \
+	--arg replacementGenesisHash "${candidate_genesis_hash:-none}" \
+	--arg boundAtUtc "\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+	'{schemaVersion:1,kind:"nexus-v2-private-alpha-destructive-reset-binding",
+	  componentId:"node",
+	  preResetClosureHandoffSha256:\$preResetClosureHandoffSha256,
+	  nodeCandidateManifestSha256:\$nodeCandidateManifestSha256,
+	  targetIdentitySha256:\$targetIdentitySha256,
+	  replacementGenesisHash:\$replacementGenesisHash,
+	  boundAtUtc:\$boundAtUtc}' >"\${component_dir}/destructive-reset-binding.json.pending"
+chmod 0400 "\${component_dir}/destructive-reset-binding.json.pending"
+mv "\${component_dir}/destructive-reset-binding.json.pending" \
+	"\${component_dir}/destructive-reset-binding.json"
+chmod -R a-w "\${component_dir}"
 EOF
 fi
 
@@ -572,16 +655,19 @@ fi
 remote_root_bash <<EOF
 set -euo pipefail
 
-mkdir -p "${REMOTE_SHARED_ENV_DIR}" "${REMOTE_NODE_DATA_DIR}" "${REMOTE_STATE_DIR}"
+install -d -m 0755 -o root -g root "${REMOTE_SHARED_ENV_DIR}"
+mkdir -p "${REMOTE_NODE_DATA_DIR}" "${REMOTE_STATE_DIR}"
 if [[ "${phase1_closed}" -eq 1 ]]; then
 	test "\$(shasum -a 256 "${remote_tmp_dir}/phase1-start-alpha-node.sh" | awk '{print \$1}')" = "${phase1_launcher_sha256}"
 	test "\$(shasum -a 256 "${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" | awk '{print \$1}')" = "${phase1_guard_sha256}"
 	chmod 0755 "${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh"
 	CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+		MEDIA_PORT="${MEDIA_PORT}" IPFS_API_PORT="${IPFS_API_PORT}" IPFS_GATEWAY_PORT="${IPFS_GATEWAY_PORT}" \
 		"${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" preclose
 fi
-install -m 0644 "${remote_tmp_dir}/node.env" "${REMOTE_NODE_ENV_FILE}"
-chown root:root "${REMOTE_NODE_ENV_FILE}"
+install -m 0640 -o root -g "${DEPLOY_USER}" "${remote_tmp_dir}/node.env" "${REMOTE_NODE_ENV_FILE}"
+test "\$(shasum -a 256 "${REMOTE_NODE_ENV_FILE}" | awk '{print \$1}')" = "${node_env_sha256}"
+test "\$(stat -c '%a %U:%G' "${REMOTE_NODE_ENV_FILE}")" = "640 root:${DEPLOY_USER}"
 install -m 0755 "${remote_candidate_start}" "${REMOTE_START_SCRIPT}"
 install -m 0644 "${remote_candidate_service}" "${REMOTE_NODE_SERVICE_UNIT_FILE}"
 chown root:root "${REMOTE_START_SCRIPT}" "${REMOTE_NODE_SERVICE_UNIT_FILE}"
@@ -598,21 +684,28 @@ if [[ "${purge_state}" -eq 1 ]]; then
 			echo "[alpha-macmini2010] readiness packet was already consumed for the node reset" >&2
 			exit 1
 		}
+		test -f "\${archive_component_dir}/prepared.marker.json"
+		test -f "\${archive_component_dir}/destructive-reset-binding.json"
+		test -z "\$(find "\${archive_component_dir}" -perm /222 -print -quit)"
+		chmod u+w "\${archive_component_dir}"
 	fi
 	systemctl stop "${REMOTE_NODE_SERVICE_NAME}.service" >/dev/null 2>&1 || true
 	rm -rf "${REMOTE_NODE_DATA_DIR}"
 	mkdir -p "${REMOTE_NODE_DATA_DIR}"
 	chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "${REMOTE_NODE_DATA_DIR}"
 	if [[ "${ETERRA_RELEASE_VERSION}" != "dev" ]]; then
-		printf 'component=node\nreset_applied_at_utc=%s\nreplacement_source_commit=%s\nruntime_source_commit=%s\nnode_candidate_sha256=%s\ntarget_identity_sha256=%s\nalpha_genesis_hash=%s\n' \
+		printf 'component=node\nreset_applied_at_utc=%s\nreplacement_source_commit=%s\nruntime_source_commit=%s\nnode_candidate_sha256=%s\ntarget_identity_sha256=%s\nalpha_genesis_hash=%s\nprepared_marker_sha256=%s\ndestructive_reset_binding_sha256=%s\n' \
 			"\$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 			"${CHAIN_SOURCE_COMMIT}" \
 			"${candidate_runtime_source_commit:-none}" \
 			"${candidate_manifest_sha256:-none}" \
 			"${target_identity_sha256:-none}" \
 			"${candidate_genesis_hash:-none}" \
+			"\$(shasum -a 256 "\${archive_component_dir}/prepared.marker.json" | awk '{print \$1}')" \
+			"\$(shasum -a 256 "\${archive_component_dir}/destructive-reset-binding.json" | awk '{print \$1}')" \
 			>"\${archive_component_dir}/reset-applied.marker"
 		chmod 0440 "\${archive_component_dir}/reset-applied.marker"
+		chmod a-w "\${archive_component_dir}"
 	fi
 fi
 
@@ -624,8 +717,34 @@ else
 fi
 
 systemctl is-active --quiet "${REMOTE_NODE_SERVICE_NAME}.service"
+node_pid="\$(systemctl show --property MainPID --value "${REMOTE_NODE_SERVICE_NAME}.service")"
+test "\${node_pid}" -gt 1
+python3 -I -S - "${REMOTE_NODE_ENV_FILE}" "/proc/\${node_pid}/environ" <<'PY'
+import pathlib
+import sys
+
+environment_path, process_environment_path = sys.argv[1:]
+expected = {}
+for line in pathlib.Path(environment_path).read_text(encoding="utf-8").splitlines():
+    key, value = line.split("=", 1)
+    if key in expected:
+        raise SystemExit("duplicate installed node environment key")
+    expected[key] = value
+observed = {}
+for assignment in pathlib.Path(process_environment_path).read_bytes().split(b"\0"):
+    if not assignment:
+        continue
+    key, value = assignment.decode("utf-8").split("=", 1)
+    if key in observed:
+        raise SystemExit("duplicate live node environment key")
+    observed[key] = value
+for key, value in expected.items():
+    if observed.get(key) != value:
+        raise SystemExit(f"live node environment drifted: {key}")
+PY
 if [[ "${phase1_closed}" -eq 1 ]]; then
 	CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+		MEDIA_PORT="${MEDIA_PORT}" IPFS_API_PORT="${IPFS_API_PORT}" IPFS_GATEWAY_PORT="${IPFS_GATEWAY_PORT}" \
 		"${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" verify-node
 	python3 - "${REMOTE_PHASE1_CLOSED_STATE_FILE}" <<'PY'
 import datetime
@@ -640,7 +759,14 @@ value = {
     "kind": "nexus-v2-private-alpha-phase1-closed-start",
     "releaseId": "${ETERRA_RELEASE_VERSION}",
     "sourceCommit": "${CHAIN_SOURCE_COMMIT}",
+    "resetReadinessSha256": "${FRESH_RESET_READINESS_SHA256}",
+    "preResetClosureHandoffSha256": "${PRE_RESET_CLOSURE_HANDOFF_SHA256}",
     "nodeRpcLoopbackOnly": True,
+    "nodeP2pLoopbackOnly": True,
+    "mediaLoopbackOnly": False,
+    "ipfsApiLoopbackOnly": False,
+    "ipfsGatewayLoopbackOnly": False,
+    "mediaChainLoopbackConnected": False,
     "legacyAuthorityLoopbackOnly": False,
     "protectedFirewallRulesClosedBeforeNodeStart": True,
     "phase1LauncherSha256": "${phase1_launcher_sha256}",
@@ -713,7 +839,9 @@ if [[ -n "${evidence_output}" ]]; then
 		"${candidate_summary}" \
 		"${CHAIN_SOURCE_COMMIT}" \
 		"${node_runtime_hash}" \
+		"${node_env_sha256}" \
 		"${FRESH_RESET_READINESS_SHA256:-}" \
+		"${PRE_RESET_CLOSURE_HANDOFF_SHA256:-}" \
 		"${target_identity_sha256}" \
 		"${candidate_host_uname}" \
 		"${phase1_closed}" \
@@ -725,8 +853,8 @@ import os
 import pathlib
 import sys
 
-(output, summary_raw, deployment_commit, runtime_env_sha256, readiness_sha256,
- target_identity_sha256, deployment_host_uname, phase1_closed_raw,
+(output, summary_raw, deployment_commit, runtime_env_sha256, node_env_sha256, readiness_sha256,
+ pre_reset_closure_handoff_sha256, target_identity_sha256, deployment_host_uname, phase1_closed_raw,
  phase1_launcher_sha256, phase1_guard_sha256) = sys.argv[1:]
 summary = json.loads(summary_raw)
 phase1_closed = phase1_closed_raw == "1"
@@ -749,7 +877,15 @@ value = {
     "alphaGenesisHash": summary["genesisHash"],
     "runtimeCodeHash": summary["runtimeCodeHash"],
     "runtimeEnvironmentSha256": runtime_env_sha256,
+    "nodeEnvironment": {
+        "path": "/opt/eterra-alpha/shared/env/node.env",
+        "sha256": node_env_sha256,
+        "mode": "0640",
+        "owner": "root:eterra2010",
+        "liveProcessMatched": True,
+    },
     "freshResetReadinessSha256": readiness_sha256 or None,
+    "preResetClosureHandoffSha256": pre_reset_closure_handoff_sha256 or None,
     "remoteBuildPerformed": False,
     "remoteSpecFinalizationPerformed": False,
     "candidateBytesVerifiedBeforeAndAfterTransfer": True,

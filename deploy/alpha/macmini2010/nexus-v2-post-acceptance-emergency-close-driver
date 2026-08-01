@@ -1,0 +1,489 @@
+#!/bin/bash
+set -euo pipefail
+# Closed union of every credential-bearing environment variable accepted by the
+# chain, site, or Unity private-alpha deployment lanes.  Preserve each shell
+# value for local use, but remove its export attribute before the first child.
+export -n DEPLOY_PASSWORD REMOTE_SUDO_PASSWORD AURA_SURI GRAN_SURI \
+	MEDIA_SIGNER_SEED MEDIA_ADMIN_API_KEY AUTHORITY_RELAY_MNEMONIC \
+	AUTHORITY_RELAY_DERIVATION_PASSWORD ETERRA_LEGENDS_SIGNER_MNEMONIC \
+	ETERRA_LEGENDS_SIGNER_DERIVATION_PASSWORD ETERRA_LEGENDS_PRIVATE_ALPHA_ACCESS_KEY \
+	ETERRA_ALPHA_SUDO_MNEMONIC ETERRA_ALPHA_SUDO_DERIVATION_PASSWORD \
+	ADMIN_SESSION_SECRET ALPHA_ACCESS_SESSION_SECRET DISCORD_CLIENT_SECRET \
+	DISCORD_BOT_TOKEN MONGODB_URI ETERRA_LEGENDS_PLAYER_ACCESS_TOKEN \
+	NEXUS_V2_PRIVATE_ALPHA_ACCESS_KEY NEXUS_V2_SESSION_AUTHORIZATION_PROFILES_JSON \
+	ADMIN_API_KEY ETERRA_FPS_V2_OWNER_SECRET_PATH \
+	ETERRA_FPS_V2_PLAYER_GATEWAY_ACCESS_TOKEN ETERRA_FPS_V2_ROOT_SECRET_PATH \
+	ETERRA_FPS_V2_SUDO_SECRET_PATH 2>/dev/null || true
+umask 077
+# Credential authority comes only from the plan-pinned environment. Prevent
+# ambient values from reaching plan-validation or connection-loader children.
+export -n DEPLOY_PASSWORD REMOTE_SUDO_PASSWORD 2>/dev/null || true
+
+# Immutable, narrow closure authority copied beside every reopen plan. It can
+# remove only the plan-bound restricted transport and restore the plan-bound
+# Phase-1 Caddy bytes. It deliberately does not validate mutable source trees,
+# release artifacts, runtime state, or plan expiry before failing closed.
+
+component=""
+action=""
+mode=""
+operation_id=""
+plan_path=""
+plan_sha256=""
+result_path=""
+
+die() {
+	printf 'nexus-v2-post-acceptance-emergency-close-driver: %s\n' "$*" >&2
+	exit 2
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--component) component="${2:?missing component}"; shift ;;
+		--action) action="${2:?missing action}"; shift ;;
+		--mode) mode="${2:?missing mode}"; shift ;;
+		--operation-id) operation_id="${2:?missing operation ID}"; shift ;;
+		--plan) plan_path="${2:?missing plan}"; shift ;;
+		--plan-sha256) plan_sha256="${2:?missing plan SHA-256}"; shift ;;
+		--result) result_path="${2:?missing result}"; shift ;;
+		*) die "unknown argument: $1" ;;
+	esac
+	shift
+done
+
+[[ "${component}" =~ ^(chain-transport|fps-server|site-ingress)$ ]] || die "invalid component"
+[[ "${mode}" == execute ]] || die "emergency authority permits execute mode only"
+case "${component}:${action}" in
+	chain-transport:close|fps-server:rollback|site-ingress:close) ;;
+	*) die "emergency authority action/component mismatch" ;;
+esac
+[[ "${operation_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "invalid operation ID"
+[[ "${plan_path}" = /* && -f "${plan_path}" && ! -L "${plan_path}" ]] || die "plan must be an absolute regular file"
+[[ "${plan_sha256}" =~ ^[0-9a-f]{64}$ ]] || die "invalid plan SHA-256"
+[[ "${result_path}" = /* && ! -e "${result_path}" ]] || die "result path must be a new absolute path"
+
+for command in base64 jq mktemp python3 sha256sum ssh; do
+	command -v "${command}" >/dev/null 2>&1 || die "missing required command: ${command}"
+done
+
+python3 - "${plan_path}" "${plan_sha256}" "${operation_id}" <<'PY'
+import hashlib
+import json
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+expected_sha = sys.argv[2]
+operation = sys.argv[3]
+
+def reject_duplicates(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise SystemExit("duplicate plan key")
+        value[key] = item
+    return value
+
+raw = path.read_bytes()
+if hashlib.sha256(raw).hexdigest() != expected_sha:
+    raise SystemExit("plan hash mismatch")
+value = json.loads(raw, object_pairs_hook=reject_duplicates)
+canonical = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+if raw != canonical:
+    raise SystemExit("plan is not canonical JSON")
+if value.get("schemaVersion") != 1 or value.get("kind") != "nexus-v2-private-alpha-post-acceptance-reopen-plan":
+    raise SystemExit("plan identity mismatch")
+if value.get("operationId") != operation:
+    raise SystemExit("operation identity mismatch")
+policy = value.get("policy", {})
+if policy.get("chainStateMutationAuthorized") is not False or policy.get("chainStateRollbackAuthorized") is not False or policy.get("paidOrPublicProductionActivationAuthorized") is not False:
+    raise SystemExit("unsafe closure policy")
+if value.get("ports") != {"authority":8787,"chainP2p":30333,"chainRpc":9944,"ipfsApi":5001,"ipfsGateway":8080,"media":4000,"siteHttp":80,"siteHttps":443}:
+    raise SystemExit("port contract mismatch")
+closure = value.get("emergencyClosure", {})
+if set(closure) != {"bundleRoot","driver","helpers","libraries","caddyfiles","fps","sshHostPins","targets","unityFpsDeploymentEnvironment"}:
+    raise SystemExit("emergency closure schema mismatch")
+PY
+
+bundle_root="$(jq -er '.emergencyClosure.bundleRoot' "${plan_path}")"
+[[ "$(cd -- "$(dirname -- "$0")" && pwd)" == "${bundle_root}" ]] || die "driver is outside the pinned closure bundle"
+driver_sha256="$(sha256sum "$0" | awk '{print $1}')"
+[[ "${driver_sha256}" == "$(jq -er '.emergencyClosure.driver.sha256' "${plan_path}")" ]] || die "emergency driver hash mismatch"
+
+helper_path="$(jq -er --arg component "${component}" '.emergencyClosure.helpers[$component].path' "${plan_path}")"
+helper_sha256="$(jq -er --arg component "${component}" '.emergencyClosure.helpers[$component].sha256' "${plan_path}")"
+[[ -f "${helper_path}" && ! -L "${helper_path}" && -x "${helper_path}" ]] || die "emergency helper is unavailable"
+[[ "$(sha256sum "${helper_path}" | awk '{print $1}')" == "${helper_sha256}" ]] || die "emergency helper hash mismatch"
+
+ssh_known_hosts="$(jq -er '.emergencyClosure.sshHostPins.knownHosts.path' "${plan_path}")"
+ssh_known_hosts_sha256="$(jq -er '.emergencyClosure.sshHostPins.knownHosts.sha256' "${plan_path}")"
+ssh_host_pin_manifest="$(jq -er '.emergencyClosure.sshHostPins.manifest.path' "${plan_path}")"
+ssh_host_pin_manifest_sha256="$(jq -er '.emergencyClosure.sshHostPins.manifest.sha256' "${plan_path}")"
+ssh_host_pin_validator="$(jq -er '.emergencyClosure.sshHostPins.validator.path' "${plan_path}")"
+ssh_host_pin_validator_sha256="$(jq -er '.emergencyClosure.sshHostPins.validator.sha256' "${plan_path}")"
+for path in "${ssh_known_hosts}" "${ssh_host_pin_manifest}" "${ssh_host_pin_validator}"; do
+	[[ "${path}" = "${bundle_root}/"* && -f "${path}" && ! -L "${path}" ]] || die "emergency SSH host-pin artifact escapes the closure bundle"
+	[[ "${path}" =~ ^/[A-Za-z0-9._/+:-]+$ ]] || die "emergency SSH host-pin path contains OpenSSH expansion or whitespace"
+done
+[[ "$(sha256sum "${ssh_known_hosts}" | awk '{print $1}')" == "${ssh_known_hosts_sha256}" ]] || die "emergency dedicated SSH known_hosts hash mismatch"
+[[ "$(sha256sum "${ssh_host_pin_manifest}" | awk '{print $1}')" == "${ssh_host_pin_manifest_sha256}" ]] || die "emergency SSH host-pin manifest hash mismatch"
+[[ "$(sha256sum "${ssh_host_pin_validator}" | awk '{print $1}')" == "${ssh_host_pin_validator_sha256}" ]] || die "emergency SSH host-pin validator hash mismatch"
+python3 "${ssh_host_pin_validator}" verify \
+	--known-hosts "${ssh_known_hosts}" \
+	--manifest "${ssh_host_pin_manifest}" >/dev/null || die "emergency SSH host-pin validation failed"
+
+chain_env="$(jq -er '.selectedDeploymentEnvironment.path' "${plan_path}")"
+site_env="$(jq -er '.selectedSiteDeploymentEnvironment.path' "${plan_path}")"
+chain_host="$(jq -er '.emergencyClosure.targets.chainHost' "${plan_path}")"
+chain_user="$(jq -er '.emergencyClosure.targets.chainUser' "${plan_path}")"
+site_host="$(jq -er '.emergencyClosure.targets.siteHost' "${plan_path}")"
+site_user="$(jq -er '.emergencyClosure.targets.siteUser' "${plan_path}")"
+
+read_sudo_secret_file() {
+	local reference="$1"
+	python3 -I -S - "${reference}" <<'PY' ||
+import os
+import pathlib
+import stat
+import sys
+
+
+def reject(message: str) -> None:
+    print(f"emergency sudo credential: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+reference = sys.argv[1]
+if not reference.startswith("@/"):
+    reject("must be an @/absolute/path owner-only file reference")
+path = pathlib.Path(reference[1:])
+if not path.is_absolute() or ".." in path.parts:
+    reject("path must be canonical and absolute")
+try:
+    resolved = path.resolve(strict=True)
+except OSError:
+    reject("file is unavailable")
+if path != resolved:
+    reject("path traverses a symlink")
+
+directory_flags = (
+    os.O_RDONLY
+    | os.O_DIRECTORY
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+)
+descriptor = os.open("/", directory_flags)
+try:
+    for component in path.parts[1:-1]:
+        next_descriptor = os.open(component, directory_flags, dir_fd=descriptor)
+        os.close(descriptor)
+        descriptor = next_descriptor
+    file_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    secret_descriptor = os.open(path.name, file_flags, dir_fd=descriptor)
+    try:
+        before = os.fstat(secret_descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            reject("file is not regular")
+        if before.st_nlink != 1:
+            reject("file must have exactly one hard link")
+        if before.st_uid != os.getuid():
+            reject("file must be owned by the current user")
+        if stat.S_IMODE(before.st_mode) not in {0o400, 0o600}:
+            reject("file mode must be 0600 or 0400")
+        raw = bytearray()
+        while len(raw) <= 4097:
+            chunk = os.read(secret_descriptor, min(4098 - len(raw), 1024))
+            if not chunk:
+                break
+            raw.extend(chunk)
+        if len(raw) > 4097 or os.read(secret_descriptor, 1):
+            reject("payload exceeds 4096 bytes")
+        after = os.fstat(secret_descriptor)
+        observed = os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+        current = os.lstat(path)
+        identity = lambda item: (
+            item.st_dev,
+            item.st_ino,
+            item.st_size,
+            item.st_mtime_ns,
+            item.st_ctime_ns,
+            item.st_nlink,
+            stat.S_IMODE(item.st_mode),
+            item.st_uid,
+            item.st_gid,
+        )
+        if not (identity(before) == identity(after) == identity(observed) == identity(current)):
+            reject("file or ancestor changed while read")
+    finally:
+        os.close(secret_descriptor)
+finally:
+    os.close(descriptor)
+
+if raw.endswith(b"\n"):
+    raw = raw[:-1]
+if not raw or len(raw) > 4096 or b"\n" in raw or b"\r" in raw or b"\x00" in raw:
+    reject("must contain one bounded nonempty line")
+try:
+    value = raw.decode("utf-8")
+except UnicodeDecodeError:
+    reject("must be valid UTF-8")
+if not all(character.isprintable() for character in value):
+    reject("must contain only printable characters")
+sys.stdout.write(value)
+PY
+		die "emergency sudo credential source is invalid"
+}
+
+environment_value() {
+	local env_file="$1"
+	local requested_key="$2"
+	python3 - "${env_file}" "${requested_key}" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+requested = sys.argv[2]
+values = {}
+for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    line = raw.strip()
+    if not line or line.startswith("#"):
+        continue
+    if "=" not in line:
+        raise SystemExit(f"unsupported credential environment line {line_number}")
+    key, value = line.split("=", 1)
+    key = key.strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+        raise SystemExit(f"invalid credential environment key on line {line_number}")
+    if key in values:
+        raise SystemExit(f"duplicate credential environment key: {key}")
+    value = value.strip()
+    if value[:1] in {"'", '"'} or value[-1:] in {"'", '"'}:
+        if len(value) < 2 or value[0] != value[-1]:
+            raise SystemExit(f"unmatched credential quote for {key}")
+        value = value[1:-1]
+    if "\n" in value or "\r" in value or "\x00" in value:
+        raise SystemExit(f"invalid credential value for {key}")
+    values[key] = value
+sys.stdout.write(values.get(requested, ""))
+PY
+}
+
+load_connection() {
+	local env_file="$1"
+	local expected_host="$2"
+	local expected_user="$3"
+	[[ -f "${env_file}" && ! -L "${env_file}" ]] || die "selected credential environment is unavailable"
+	# Parse data-only assignments. Never source this mutable file and never honor
+	# SSH_OPTS: either could redirect or execute the emergency closure authority.
+	DEPLOY_HOST="$(environment_value "${env_file}" DEPLOY_HOST)" || die "cannot parse credential environment"
+	DEPLOY_USER="$(environment_value "${env_file}" DEPLOY_USER)" || die "cannot parse credential environment"
+	SSH_PORT="$(environment_value "${env_file}" SSH_PORT)" || die "cannot parse credential environment"
+	SSH_IDENTITY_FILE="$(environment_value "${env_file}" SSH_IDENTITY_FILE)" || die "cannot parse credential environment"
+	SSH_OPTS="$(environment_value "${env_file}" SSH_OPTS)" || die "cannot parse credential environment"
+	DEPLOY_PASSWORD="$(environment_value "${env_file}" DEPLOY_PASSWORD)" || die "cannot parse credential environment"
+	local sudo_reference
+	sudo_reference="$(environment_value "${env_file}" REMOTE_SUDO_PASSWORD)" || die "cannot parse credential environment"
+	DEPLOY_USER="${DEPLOY_USER:-${expected_user}}"
+	SSH_PORT="${SSH_PORT:-22}"
+	[[ -z "${SSH_OPTS}" ]] || die "SSH_OPTS is forbidden for immutable emergency closure"
+	[[ -z "${DEPLOY_PASSWORD}" ]] || die "DEPLOY_PASSWORD is forbidden; emergency SSH authentication must be key-only"
+	REMOTE_SUDO_PASSWORD="$(read_sudo_secret_file "${sudo_reference}")"
+	export -n DEPLOY_PASSWORD REMOTE_SUDO_PASSWORD
+	[[ "${DEPLOY_HOST}" == "${expected_host}" && "${DEPLOY_USER}" == "${expected_user}" ]] || die "credential target differs from immutable closure target"
+	[[ "${SSH_PORT}" =~ ^[0-9]{1,5}$ && "${SSH_PORT}" -ge 1 && "${SSH_PORT}" -le 65535 ]] || die "invalid SSH port"
+	[[ "${SSH_IDENTITY_FILE}" = /* && -f "${SSH_IDENTITY_FILE}" && ! -L "${SSH_IDENTITY_FILE}" ]] || die "SSH identity is unavailable"
+	[[ "${SSH_IDENTITY_FILE}" =~ ^/[A-Za-z0-9._/+:-]+$ ]] || die "SSH identity path contains OpenSSH expansion or whitespace"
+	[[ "${SSH_PORT}" == 22 ]] || die "protected emergency closure requires SSH port 22"
+	SSH_CMD=(
+		ssh -F /dev/null
+		-o "Hostname=${DEPLOY_HOST}"
+		-o "HostKeyAlias=${DEPLOY_HOST}"
+		-o "UserKnownHostsFile=${ssh_known_hosts}"
+		-o "GlobalKnownHostsFile=/dev/null"
+		-o "StrictHostKeyChecking=yes"
+		-o "UpdateHostKeys=no"
+		-o "KnownHostsCommand=none"
+		-o "VerifyHostKeyDNS=no"
+		-o "CheckHostIP=yes"
+		-o "CanonicalizeHostname=no"
+		-o "ProxyCommand=none"
+		-o "ProxyJump=none"
+		-o "HostKeyAlgorithms=ssh-ed25519,ecdsa-sha2-nistp256,rsa-sha2-512,rsa-sha2-256"
+		-o "PubkeyAcceptedAlgorithms=ssh-ed25519,ecdsa-sha2-nistp256,rsa-sha2-512,rsa-sha2-256"
+		-o "KexAlgorithms=curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group14-sha256"
+		-o "Ciphers=chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
+		-o "MACs=hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
+		-o "IdentitiesOnly=yes"
+		-o "IdentityAgent=none"
+		-o "IdentityFile=${SSH_IDENTITY_FILE}"
+		-o "Port=${SSH_PORT}"
+		-o "AddressFamily=inet"
+		-o "ClearAllForwardings=yes"
+		-o "ForwardAgent=no"
+		-o "ForwardX11=no"
+		-o "PermitLocalCommand=no"
+		-o "LocalCommand=none"
+		-o "RequestTTY=no"
+		-o "BatchMode=yes"
+		-o "PasswordAuthentication=no"
+		-o "KbdInteractiveAuthentication=no"
+		-o "PreferredAuthentications=publickey"
+		-o "ConnectionAttempts=1"
+		-o "NumberOfPasswordPrompts=0"
+	)
+	SSH_CMD+=("${DEPLOY_USER}@${DEPLOY_HOST}")
+}
+
+remote_root_bash() {
+	local local_script script_sha256 remote_command root_receiver root_receiver_escaped
+	local_script="$(mktemp /tmp/nexus-v2-emergency-close.XXXXXX)"
+	trap 'rm -f "${local_script}"' RETURN
+	cat >"${local_script}"
+	chmod 0600 "${local_script}"
+	script_sha256="$(sha256sum "${local_script}" | awk '{print $1}')"
+	root_receiver='set -euo pipefail
+umask 077
+expected_sha="$1"
+[[ "${expected_sha}" =~ ^[0-9a-f]{64}$ ]]
+stage="$(mktemp -d /run/nexus-v2-emergency-root-exec.XXXXXX)"
+cleanup() { rm -rf -- "${stage}"; }
+trap cleanup EXIT HUP INT TERM
+chmod 0700 "${stage}"
+payload="${stage}/payload"
+python3 -I -S -c "import os, sys; data=sys.stdin.buffer.read(); fd=os.open(sys.argv[1], os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os, \"O_NOFOLLOW\", 0), 0o500); h=os.fdopen(fd, \"wb\"); h.write(data); h.flush(); os.fsync(h.fileno()); os.fchmod(h.fileno(), 0o500); h.close()" "${payload}"
+[[ "$(stat -c "%U:%G:%a" "${payload}")" == root:root:500 ]]
+exec 9<"${payload}"
+read -r actual_sha _ < <(sha256sum /proc/self/fd/9)
+[[ "${actual_sha}" == "${expected_sha}" ]]
+/bin/bash /proc/self/fd/9'
+	printf -v root_receiver_escaped '%q' "${root_receiver}"
+	printf -v remote_command '%s' \
+		"/usr/bin/sudo -S -k -p '' -- /bin/bash -c ${root_receiver_escaped} nexus-v2-emergency-root-receiver '${script_sha256}'"
+	{
+		printf '%s\n' "${REMOTE_SUDO_PASSWORD}"
+		cat "${local_script}"
+	} | "${SSH_CMD[@]}" "${remote_command}"
+	rm -f "${local_script}"
+	trap - RETURN
+}
+
+if [[ "${component}" == chain-transport ]]; then
+	load_connection "${chain_env}" "${chain_host}" "${chain_user}"
+else
+	load_connection "${site_env}" "${site_host}" "${site_user}"
+fi
+
+emit_fps_result() {
+	local receipt_path="$1" already_applied="$2" receipt_sha
+	receipt_sha="$(sha256sum "${receipt_path}" | awk '{print $1}')"
+	python3 - "${result_path}" "${operation_id}" "${plan_path}" "${plan_sha256}" \
+		"${driver_sha256}" "${receipt_path}" "${receipt_sha}" "${already_applied}" <<'PY'
+import datetime as dt, json, os, pathlib, sys
+output, operation, plan_path, plan_sha, driver_sha, receipt_path, receipt_sha, already = sys.argv[1:]
+plan=json.loads(pathlib.Path(plan_path).read_text())
+value={"schemaVersion":1,"kind":"nexus-v2-private-alpha-post-acceptance-reopen-component-result",
+ "operationId":operation,"planSha256":plan_sha,"releaseId":plan["releaseId"],
+ "siteReleaseVersion":plan["siteReleaseVersion"],"sourceCommit":plan["sourceCommit"],
+ "siteSourceCommit":plan["siteSourceCommit"],"componentId":"fps-server","action":"rollback",
+ "mode":"execute","result":"passed","mutationPerformed":already!="true","alreadyApplied":already=="true",
+ "finalReleaseLockSha256":plan["finalReleaseLock"]["sha256"],
+ "acceptanceBoundaryReceiptSha256":plan["acceptanceBoundaryReceipt"]["sha256"],
+ "phase2FinalSealSha256":plan["phase2FinalSeal"]["sha256"],"fpsAdoptionSealSha256":None,
+ "driverSha256":driver_sha,
+ "remoteMarkerSha256":receipt_sha,"componentReceipt":{"path":receipt_path,"sha256":receipt_sha},
+ "checks":{"candidateNoLongerActive":True,"fpsServicesStopped":True,
+   "priorDeploymentRestored":True,"rollbackReceiptPinned":True,"siteLocalChainProxyAbsent":True},
+ "completedAtUtc":dt.datetime.now(dt.timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")}
+p=pathlib.Path(output); p.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o400)
+with os.fdopen(fd,"wb") as h: h.write((json.dumps(value,indent=2,sort_keys=True)+"\n").encode())
+PY
+}
+
+if [[ "${component}" == fps-server ]]; then
+	candidate="$(jq -er '.emergencyClosure.fps.candidateRoot' "${plan_path}")"
+	snapshot="$(jq -er '.emergencyClosure.fps.snapshotPath' "${plan_path}")"
+	deployment_receipt="$(jq -er '.emergencyClosure.fps.deploymentReceiptPath' "${plan_path}")"
+	rollback_receipt="$(jq -er '.emergencyClosure.fps.rollbackReceiptPath' "${plan_path}")"
+	fps_env="$(jq -er '.emergencyClosure.unityFpsDeploymentEnvironment.path' "${plan_path}")"
+	candidate_verifier="$(jq -er '.emergencyClosure.fps.candidateVerifier.path' "${plan_path}")"
+	receipt_verifier="$(jq -er '.emergencyClosure.fps.receiptVerifier.path' "${plan_path}")"
+	pin_verifier="$(jq -er '.emergencyClosure.fps.pinVerifier.path' "${plan_path}")"
+	for path in "${candidate_verifier}" "${receipt_verifier}" "${pin_verifier}"; do
+		[[ -f "${path}" && ! -L "${path}" && -x "${path}" ]] || die "emergency FPS verifier is unavailable"
+	done
+	export ETERRA_FPS_ALPHA_ENV_FILE="${fps_env}"
+	if [[ -f "${rollback_receipt}" && ! -L "${rollback_receipt}" ]]; then
+		python3 "${receipt_verifier}" verify-removal-receipt "${rollback_receipt}" \
+			--deployment-receipt "${deployment_receipt}" \
+			--candidate "${candidate}" --snapshot "${snapshot}" \
+			--environment "${fps_env}" --known-hosts "${ssh_known_hosts}" \
+			--host-pin-manifest "${ssh_host_pin_manifest}" \
+			--candidate-tool "${candidate_verifier}" --pin-verifier "${pin_verifier}" >/dev/null ||
+			die "existing FPS rollback receipt is invalid"
+		emit_fps_result "${rollback_receipt}" true
+		exit 0
+	fi
+	[[ -d "${snapshot}" && ! -L "${snapshot}" && -f "${deployment_receipt}" && ! -L "${deployment_receipt}" ]] ||
+		die "FPS promotion evidence is unavailable for rollback"
+	wrapper_output="$("${helper_path}" rollback --candidate "${candidate}" --snapshot "${snapshot}" \
+		--deployment-receipt "${deployment_receipt}" --rollback-receipt "${rollback_receipt}")" ||
+		die "guarded FPS rollback failed"
+	python3 - "${wrapper_output}" <<'PY' || die "guarded FPS rollback result contract mismatch"
+import json, sys
+value=json.loads(sys.argv[1])
+if value.get("schema") != "eterra.nexus-v2-fps-reopen-component-result.v1" or value.get("action") != "rollback" or value.get("result") != "passed" or value.get("verified") is not True or value.get("chainProxyState") != "removed":
+    raise SystemExit(1)
+PY
+	[[ -f "${rollback_receipt}" && ! -L "${rollback_receipt}" ]] || die "FPS rollback receipt was not created"
+	emit_fps_result "${rollback_receipt}" false
+	exit 0
+fi
+
+normal_caddy="$(jq -er '.emergencyClosure.caddyfiles.normal.path' "${plan_path}")"
+phase1_caddy="$(jq -er '.emergencyClosure.caddyfiles.phase1.path' "${plan_path}")"
+for name in normal phase1; do
+	if [[ "${name}" == normal ]]; then path="${normal_caddy}"; else path="${phase1_caddy}"; fi
+	expected="$(jq -er --arg name "${name}" '.emergencyClosure.caddyfiles[$name].sha256' "${plan_path}")"
+	[[ "$(sha256sum "${path}" | awk '{print $1}')" == "${expected}" ]] || die "emergency ${name} Caddyfile hash mismatch"
+done
+
+plan_base64="$(base64 <"${plan_path}" | tr -d '\r\n')"
+normal_caddy_base64="$(base64 <"${normal_caddy}" | tr -d '\r\n')"
+phase1_caddy_base64="$(base64 <"${phase1_caddy}" | tr -d '\r\n')"
+helper_base64="$(base64 <"${helper_path}" | tr -d '\r\n')"
+
+run_remote_helper() {
+	{
+		printf '%s\n' 'set -euo pipefail'
+		printf 'helper="$(mktemp /tmp/nexus-v2-emergency-close-helper.XXXXXX)"\n'
+		printf 'trap '\''rm -f "${helper}"'\'' EXIT\n'
+		printf 'printf %%s %q | base64 -d >"${helper}"\n' "${helper_base64}"
+		printf 'test "$(sha256sum "${helper}" | awk '\''{print $1}'\'')" = %q\n' "${helper_sha256}"
+		printf 'chmod 0700 "${helper}"\n'
+		printf '"${helper}" close %q %q %q %q %q %q\n' \
+			"${plan_base64}" "${plan_sha256}" "${driver_sha256}" "${helper_sha256}" \
+			"${normal_caddy_base64}" "${phase1_caddy_base64}"
+	} | remote_root_bash
+}
+
+remote_output="$(run_remote_helper)" || die "protected emergency helper failed"
+encoded_result="$(printf '%s\n' "${remote_output}" | sed -n 's/^NEXUS_V2_REOPEN_RESULT://p')"
+[[ -n "${encoded_result}" && "$(printf '%s\n' "${remote_output}" | grep -c '^NEXUS_V2_REOPEN_RESULT:')" == 1 ]] || die "emergency helper returned an invalid result envelope"
+mkdir -p "$(dirname -- "${result_path}")"
+printf '%s' "${encoded_result}" | base64 -d >"${result_path}.pending"
+python3 - "${result_path}.pending" "${result_path}" <<'PY'
+import json
+import os
+import pathlib
+import sys
+source, destination = map(pathlib.Path, sys.argv[1:])
+value = json.loads(source.read_text(encoding="utf-8"))
+payload = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+with os.fdopen(fd, "wb") as handle:
+    handle.write(payload)
+source.unlink()
+PY

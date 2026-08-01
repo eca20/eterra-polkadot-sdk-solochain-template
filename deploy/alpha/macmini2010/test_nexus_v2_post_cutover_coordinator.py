@@ -266,6 +266,29 @@ if trace:
         handle.write(f"{a.mode}:{a.component}:{a.action}\n")
 """
 
+MOCK_SUPERVISOR = r"""#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+required = {
+    "verify-arm", "--arm", "--expected-sha256", "--release-id",
+    "--site-release-version", "--source-commit", "--full-binding",
+}
+if not required.issubset(sys.argv):
+    raise SystemExit(2)
+trace = os.environ.get("MOCK_SUPERVISOR_TRACE")
+if trace:
+    path = Path(trace)
+    count = len(path.read_text().splitlines()) if path.exists() else 0
+    with path.open("a") as handle:
+        handle.write("verify-arm\n")
+    fail_after = int(os.environ.get("MOCK_SUPERVISOR_FAIL_AFTER", "0"))
+    if fail_after and count >= fail_after:
+        raise SystemExit(2)
+raise SystemExit(0)
+"""
+
 
 class CoordinatorTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -316,6 +339,13 @@ class CoordinatorTests(unittest.TestCase):
         self.state = self.root / "state"
         self.evidence = self.root / "evidence.json"
         self.trace = self.root / "driver-trace.txt"
+        self.supervisor = self.root / "pre-reset-supervisor.py"
+        self.supervisor.write_text(MOCK_SUPERVISOR, encoding="utf-8")
+        self.supervisor.chmod(0o700)
+        self.arm = self.root / "automatic-restore-arm.json"
+        write_json(self.arm, {"fixture": "live automatic-restore arm"})
+        self.arm.chmod(0o600)
+        self.supervisor_trace = self.root / "supervisor-trace.txt"
         self.boundary_patches = [
             mock.patch.object(tool.boundary, "load_runtime_artifacts", return_value=object()),
             mock.patch.object(
@@ -683,6 +713,27 @@ class CoordinatorTests(unittest.TestCase):
             mode,
         ]
 
+    def external_argv(
+        self,
+        *,
+        state: Path | None = None,
+        evidence: Path | None = None,
+    ) -> list[str]:
+        argv = self.argv("--execute", state=state, evidence=evidence)
+        return argv[:-1] + [
+            "--external-recovery-supervisor",
+            str(self.supervisor),
+            "--external-recovery-supervisor-sha256",
+            file_hash(self.supervisor),
+            "--automatic-restore-arm",
+            str(self.arm),
+            "--automatic-restore-arm-sha256",
+            file_hash(self.arm),
+            "--site-release-version",
+            "v0.1.0-alpha.1",
+            argv[-1],
+        ]
+
     def test_validate_only_invokes_no_driver_and_dry_run_covers_every_action(self) -> None:
         with self.environment():
             self.assertEqual(tool.main(self.argv("--validate-only")), 0)
@@ -731,6 +782,52 @@ class CoordinatorTests(unittest.TestCase):
             for component in tool.EXPECTED_COMPONENTS
         ]
         self.assertLess(max(archive_positions), min(restore_positions))
+
+    def test_externally_supervised_failure_propagates_without_nested_recovery(self) -> None:
+        with self.environment(
+            MOCK_POST_SMOKE_FAIL="1",
+            MOCK_SUPERVISOR_TRACE=str(self.supervisor_trace),
+        ):
+            self.assertEqual(tool.main(self.external_argv()), 2)
+        trace = self.trace.read_text().splitlines()
+        self.assertEqual(
+            [line for line in trace if line.startswith("execute:")],
+            [
+                "execute:chain-media:post-cutover-smoke",
+                "execute:site-indexer:post-cutover-smoke",
+            ],
+        )
+        self.assertFalse(self.evidence.exists())
+        self.assertFalse((self.state / "final-evidence.marker.json").exists())
+        ownership = json.loads(
+            (self.state / "external-recovery-ownership.json").read_text()
+        )
+        self.assertEqual(ownership["recoveryOwner"], "pre-reset-rollback-supervisor")
+        self.assertFalse(ownership["nestedRecoveryActionsAllowed"])
+        self.assertGreaterEqual(
+            len(self.supervisor_trace.read_text().splitlines()), 4
+        )
+
+    def test_externally_supervised_success_keeps_canonical_final_evidence(self) -> None:
+        with self.environment(MOCK_SUPERVISOR_TRACE=str(self.supervisor_trace)):
+            self.assertEqual(tool.main(self.external_argv()), 0)
+        evidence = json.loads(self.evidence.read_text())
+        self.assertEqual(evidence["decision"], "keep-v2")
+        self.assertFalse(evidence["automaticRestorePerformed"])
+        self.assertTrue((self.state / "final-evidence.marker.json").is_file())
+        state = json.loads((self.state / "state-contract.json").read_text())
+        self.assertEqual(state["recoveryOwner"], "pre-reset-rollback-supervisor")
+        self.assertEqual(
+            [
+                line
+                for line in self.trace.read_text().splitlines()
+                if line.startswith("execute:")
+            ],
+            [
+                "execute:chain-media:post-cutover-smoke",
+                "execute:site-indexer:post-cutover-smoke",
+            ],
+        )
 
     def test_post_acceptance_failure_pauses_and_never_restores(self) -> None:
         write_json(

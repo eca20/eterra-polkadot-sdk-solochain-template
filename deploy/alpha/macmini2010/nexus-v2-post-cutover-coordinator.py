@@ -25,6 +25,7 @@ from typing import Any, Mapping, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SAFETY_TOOL_DIR = REPO_ROOT / "scripts/nexus-v2-private-alpha"
 sys.path.insert(0, str(SAFETY_TOOL_DIR))
+import deployment_secret_environment  # noqa: E402,F401
 import alpha_v2_release as safety  # noqa: E402
 import acceptance_boundary as boundary  # noqa: E402
 
@@ -32,6 +33,10 @@ import acceptance_boundary as boundary  # noqa: E402
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 OPERATION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+SITE_RELEASE_RE = re.compile(
+    r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
 EXPECTED_COMPONENTS = {"chain-media", "site-indexer"}
 EXPECTED_ARCHIVES = {
     "chain-media": {"node", "media"},
@@ -261,6 +266,25 @@ EXECUTE_CHECKS = {
         "economicFlagsDisabled",
     },
 }
+EXTERNAL_RECOVERY_OWNERSHIP_KEYS = {
+    "schemaVersion",
+    "kind",
+    "operationId",
+    "planSha256",
+    "releaseId",
+    "siteReleaseVersion",
+    "sourceCommit",
+    "supervisorPath",
+    "supervisorSha256",
+    "automaticRestoreArmPath",
+    "automaticRestoreArmSha256",
+    "fixtureOnly",
+    "recoveryOwner",
+    "nestedRecoveryActionsAllowed",
+    "verificationLogPath",
+    "verificationLogSha256",
+    "verifiedAtUtc",
+}
 
 
 class CoordinatorError(RuntimeError):
@@ -303,6 +327,14 @@ def ensure_sha256(value: Any, label: str) -> str:
     require(
         isinstance(value, str) and bool(SHA256_RE.fullmatch(value)),
         f"{label} must be 64 lowercase hex characters",
+    )
+    return value
+
+
+def ensure_site_release(value: Any, label: str) -> str:
+    require(
+        isinstance(value, str) and bool(SITE_RELEASE_RE.fullmatch(value)),
+        f"{label} must be a v-prefixed semantic version",
     )
     return value
 
@@ -948,7 +980,199 @@ def validate_inputs(args: argparse.Namespace, plan: Mapping[str, Any]) -> dict[s
     }
 
 
-def state_contract(plan: Mapping[str, Any], inputs: Mapping[str, Any]) -> dict[str, Any]:
+def external_recovery_configuration(
+    args: argparse.Namespace,
+    plan: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    raw = {
+        "supervisorPath": args.external_recovery_supervisor,
+        "supervisorSha256": args.external_recovery_supervisor_sha256,
+        "armPath": args.automatic_restore_arm,
+        "armSha256": args.automatic_restore_arm_sha256,
+        "siteReleaseVersion": args.site_release_version,
+    }
+    supplied = {name for name, value in raw.items() if value is not None}
+    if not supplied:
+        require(
+            not args.allow_nondeployable_external_recovery_fixture,
+            "NONDEPLOYABLE external-recovery fixture flag requires an external supervisor",
+        )
+        return None
+    require(
+        supplied == set(raw),
+        "external recovery ownership requires supervisor, arm, hashes, and site release",
+    )
+    require(
+        args.execute,
+        "external recovery ownership is valid only for coordinator execute mode",
+    )
+    require(
+        not inputs["nonzeroAcceptanceAssets"],
+        "external pre-reset recovery ownership requires zero current and lifetime acceptance assets",
+    )
+    supervisor = ensure_regular_file(
+        Path(raw["supervisorPath"]),
+        "external recovery supervisor",
+        executable=True,
+    )
+    supervisor_sha256 = ensure_sha256(
+        raw["supervisorSha256"], "external recovery supervisor SHA-256"
+    )
+    require(
+        sha256_file(supervisor) == supervisor_sha256,
+        "external recovery supervisor hash mismatch",
+    )
+    arm = ensure_regular_file(
+        Path(raw["armPath"]), "automatic-restore supervisor arm"
+    )
+    require(
+        stat.S_IMODE(arm.stat().st_mode) & 0o077 == 0,
+        "automatic-restore supervisor arm is not owner-only",
+    )
+    arm_sha256 = ensure_sha256(
+        raw["armSha256"], "automatic-restore supervisor arm SHA-256"
+    )
+    require(sha256_file(arm) == arm_sha256, "automatic-restore supervisor arm hash mismatch")
+    site_release = ensure_site_release(
+        raw["siteReleaseVersion"], "external recovery site release version"
+    )
+    return {
+        "supervisorPath": str(supervisor),
+        "supervisorSha256": supervisor_sha256,
+        "armPath": str(arm),
+        "armSha256": arm_sha256,
+        "siteReleaseVersion": site_release,
+        "fixtureOnly": bool(args.allow_nondeployable_external_recovery_fixture),
+        "releaseId": plan["releaseId"],
+        "sourceCommit": plan["sourceCommit"],
+    }
+
+
+def external_recovery_command(value: Mapping[str, Any]) -> list[str]:
+    command = [
+        value["supervisorPath"],
+        "verify-arm",
+        "--arm",
+        value["armPath"],
+        "--expected-sha256",
+        value["armSha256"],
+        "--release-id",
+        value["releaseId"],
+        "--site-release-version",
+        value["siteReleaseVersion"],
+        "--source-commit",
+        value["sourceCommit"],
+        "--full-binding",
+    ]
+    if value["fixtureOnly"]:
+        command.append("--allow-nondeployable-fixture")
+    return command
+
+
+def verify_external_recovery_owner(
+    state_dir: Path,
+    plan: Mapping[str, Any],
+    value: Mapping[str, Any],
+    *,
+    publish_receipt: bool,
+) -> None:
+    require(
+        sha256_file(Path(value["supervisorPath"])) == value["supervisorSha256"],
+        "external recovery supervisor drifted",
+    )
+    require(
+        sha256_file(Path(value["armPath"])) == value["armSha256"],
+        "automatic-restore supervisor arm drifted",
+    )
+    receipt_path = state_dir / "external-recovery-ownership.json"
+    log_path = state_dir / "external-recovery-ownership.verify.log"
+    if publish_receipt:
+        require(
+            not receipt_path.exists() and not log_path.exists(),
+            "external recovery ownership outputs already exist",
+        )
+        with log_path.open("xb") as log:
+            os.chmod(log_path, 0o600)
+            completed = subprocess.run(
+                external_recovery_command(value),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                check=False,
+                env=os.environ.copy(),
+            )
+        require(
+            completed.returncode == 0,
+            f"external recovery supervisor arm verification failed; see {log_path}",
+        )
+        log_path.chmod(0o400)
+        receipt = {
+            "schemaVersion": 1,
+            "kind": "nexus-v2-private-alpha-post-cutover-external-recovery-ownership",
+            "operationId": plan["operationId"],
+            "planSha256": plan["sha256"],
+            "releaseId": plan["releaseId"],
+            "siteReleaseVersion": value["siteReleaseVersion"],
+            "sourceCommit": plan["sourceCommit"],
+            "supervisorPath": value["supervisorPath"],
+            "supervisorSha256": value["supervisorSha256"],
+            "automaticRestoreArmPath": value["armPath"],
+            "automaticRestoreArmSha256": value["armSha256"],
+            "fixtureOnly": value["fixtureOnly"],
+            "recoveryOwner": "pre-reset-rollback-supervisor",
+            "nestedRecoveryActionsAllowed": False,
+            "verificationLogPath": str(log_path),
+            "verificationLogSha256": sha256_file(log_path),
+            "verifiedAtUtc": utc_now(),
+        }
+        exact_keys(receipt, EXTERNAL_RECOVERY_OWNERSHIP_KEYS, "external recovery ownership")
+        write_new_json(receipt_path, receipt, mode=0o400)
+        return
+
+    receipt = read_json(receipt_path, "external recovery ownership")
+    exact_keys(receipt, EXTERNAL_RECOVERY_OWNERSHIP_KEYS, "external recovery ownership")
+    require_schema_one(receipt, "external recovery ownership")
+    expected = {
+        "kind": "nexus-v2-private-alpha-post-cutover-external-recovery-ownership",
+        "operationId": plan["operationId"],
+        "planSha256": plan["sha256"],
+        "releaseId": plan["releaseId"],
+        "siteReleaseVersion": value["siteReleaseVersion"],
+        "sourceCommit": plan["sourceCommit"],
+        "supervisorPath": value["supervisorPath"],
+        "supervisorSha256": value["supervisorSha256"],
+        "automaticRestoreArmPath": value["armPath"],
+        "automaticRestoreArmSha256": value["armSha256"],
+        "fixtureOnly": value["fixtureOnly"],
+        "recoveryOwner": "pre-reset-rollback-supervisor",
+        "nestedRecoveryActionsAllowed": False,
+        "verificationLogPath": str(log_path),
+    }
+    for field, expected_value in expected.items():
+        require(receipt.get(field) == expected_value, f"external recovery ownership {field} mismatch")
+    require(
+        sha256_file(log_path) == receipt["verificationLogSha256"],
+        "external recovery ownership verification log drifted",
+    )
+    parse_utc(receipt["verifiedAtUtc"], "external recovery ownership verifiedAtUtc")
+    completed = subprocess.run(
+        external_recovery_command(value),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+        env=os.environ.copy(),
+    )
+    require(
+        completed.returncode == 0,
+        "external recovery supervisor is no longer live and armed",
+    )
+
+
+def state_contract(
+    plan: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    external_recovery: Mapping[str, Any] | None,
+) -> dict[str, Any]:
     return {
         "schemaVersion": 1,
         "kind": "nexus-v2-private-alpha-post-cutover-coordinator-state",
@@ -966,6 +1190,26 @@ def state_contract(plan: Mapping[str, Any], inputs: Mapping[str, Any]) -> dict[s
         "ingressClosedEvidenceSha256": inputs["ingressClosedEvidenceSha256"],
         "economicGatesSha256": inputs["economicGatesSha256"],
         "acceptanceInventorySha256": inputs["acceptanceInventorySha256"],
+        "recoveryOwner": (
+            "pre-reset-rollback-supervisor"
+            if external_recovery is not None
+            else "post-cutover-coordinator"
+        ),
+        "siteReleaseVersion": (
+            external_recovery["siteReleaseVersion"]
+            if external_recovery is not None
+            else None
+        ),
+        "externalRecoverySupervisorSha256": (
+            external_recovery["supervisorSha256"]
+            if external_recovery is not None
+            else None
+        ),
+        "automaticRestoreArmSha256": (
+            external_recovery["armSha256"]
+            if external_recovery is not None
+            else None
+        ),
     }
 
 
@@ -973,12 +1217,13 @@ def prepare_state_dir(
     path: Path,
     plan: Mapping[str, Any],
     inputs: Mapping[str, Any],
+    external_recovery: Mapping[str, Any] | None,
 ) -> tuple[Path, dict[str, Any]]:
     require(not path.is_symlink(), "coordinator state directory must not be a symlink")
     path.mkdir(parents=True, exist_ok=True)
     require(path.is_dir(), "coordinator state path is not a directory")
     sentinel_path = path / "state-contract.json"
-    expected = state_contract(plan, inputs)
+    expected = state_contract(plan, inputs, external_recovery)
     if sentinel_path.exists():
         actual = read_json(sentinel_path, "coordinator state contract")
         require(actual == expected, "coordinator state contract does not match this invocation")
@@ -1623,7 +1868,18 @@ def run(args: argparse.Namespace) -> None:
     require(expected_plan_hash, "NEXUS_V2_ROLLBACK_PLAN_SHA256 must be set")
     plan = validate_plan(Path(args.plan), expected_plan_hash)
     inputs = validate_inputs(args, plan)
-    state_dir, _ = prepare_state_dir(Path(args.state_dir), plan, inputs)
+    external_recovery = external_recovery_configuration(args, plan, inputs)
+    state_dir, _ = prepare_state_dir(
+        Path(args.state_dir), plan, inputs, external_recovery
+    )
+    if external_recovery is not None:
+        ownership_path = state_dir / "external-recovery-ownership.json"
+        verify_external_recovery_owner(
+            state_dir,
+            plan,
+            external_recovery,
+            publish_receipt=not ownership_path.exists(),
+        )
     evidence_path = Path(args.evidence)
     if recover_completed(state_dir, evidence_path, plan, inputs):
         print(f"coordinator already completed: {evidence_path}")
@@ -1651,6 +1907,10 @@ def run(args: argparse.Namespace) -> None:
                 "dry-run",
             )
     revalidate_immutable_inputs(plan, inputs)
+    if external_recovery is not None:
+        verify_external_recovery_owner(
+            state_dir, plan, external_recovery, publish_receipt=False
+        )
     if args.dry_run:
         write_final_evidence(
             state_dir,
@@ -1665,6 +1925,10 @@ def run(args: argparse.Namespace) -> None:
 
     revalidate_immutable_inputs(plan, inputs)
     require_observation_still_fresh(inputs)
+    if external_recovery is not None:
+        verify_external_recovery_owner(
+            state_dir, plan, external_recovery, publish_receipt=False
+        )
     post_smoke = [
         run_component_action(
             state_dir,
@@ -1678,6 +1942,10 @@ def run(args: argparse.Namespace) -> None:
     ]
     smoke_passed = all(result["checks"]["smokePassed"] for result in post_smoke)
     if smoke_passed:
+        if external_recovery is not None:
+            verify_external_recovery_owner(
+                state_dir, plan, external_recovery, publish_receipt=False
+            )
         write_final_evidence(
             state_dir,
             evidence_path,
@@ -1688,6 +1956,15 @@ def run(args: argparse.Namespace) -> None:
         )
         print(f"post-cutover smoke passed; V2 retained: {evidence_path}")
         return
+
+    if external_recovery is not None:
+        verify_external_recovery_owner(
+            state_dir, plan, external_recovery, publish_receipt=False
+        )
+        raise CoordinatorError(
+            "post-cutover smoke failed while recovery is externally owned; "
+            "no nested pause, archive, restore, or reopen action was invoked"
+        )
 
     if inputs["nonzeroAcceptanceAssets"]:
         revalidate_immutable_inputs(plan, inputs)
@@ -1795,6 +2072,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--acceptance-inventory", required=True)
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--evidence", required=True)
+    parser.add_argument("--external-recovery-supervisor")
+    parser.add_argument("--external-recovery-supervisor-sha256")
+    parser.add_argument("--automatic-restore-arm")
+    parser.add_argument("--automatic-restore-arm-sha256")
+    parser.add_argument("--site-release-version")
+    parser.add_argument(
+        "--allow-nondeployable-external-recovery-fixture",
+        action="store_true",
+    )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--validate-only", action="store_true")
     mode.add_argument("--dry-run", action="store_true")
