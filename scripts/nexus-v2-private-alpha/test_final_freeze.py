@@ -204,9 +204,14 @@ class FinalFreezeTests(unittest.TestCase):
             "releaseId": "nexus-v2-test",
             "sourceCommit": source,
             "componentSourceCommits": {
+                "ai": "6" * 40,
+                "blockchainia-site": "7" * 40,
                 "chain": source,
+                "flow": "8" * 40,
+                "ip": "9" * 40,
                 "media": "b" * 40,
                 "sdkgen": "c" * 40,
+                "unity": "5" * 40,
                 "web": "df01ffc08a791a73d60461d25d0a9d8a78456466",
             },
             "preV16SourceRuntime": {

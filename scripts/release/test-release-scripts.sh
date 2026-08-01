@@ -8,6 +8,8 @@ REHEARSE="${ROOT_DIR}/scripts/release/rehearse-runtime-upgrade.sh"
 MEDIA_DEPLOY="${ROOT_DIR}/deploy/alpha/macmini2010/deploy-media.sh"
 NODE_DEPLOY="${ROOT_DIR}/deploy/alpha/macmini2010/deploy-node.sh"
 DEPLOY_ALL="${ROOT_DIR}/deploy/alpha/macmini2010/deploy-all.sh"
+AUTHORITY_DEPLOY="${ROOT_DIR}/deploy/alpha/macmini2010/deploy-arcade-authority.sh"
+PHASE1_CLOSED_INGRESS="${ROOT_DIR}/deploy/alpha/macmini2010/nexus-v2-phase1-closed-ingress.sh"
 DEPLOY_LIB="${ROOT_DIR}/deploy/alpha/macmini2010/lib.sh"
 RESET_NODE="${ROOT_DIR}/deploy/alpha/macmini2010/reset-node.sh"
 RESET_MEDIA="${ROOT_DIR}/deploy/alpha/macmini2010/reset-media.sh"
@@ -16,6 +18,9 @@ ACCEPTANCE_BOUNDARY="${ROOT_DIR}/scripts/nexus-v2-private-alpha/acceptance_bound
 ACCEPTANCE_BOUNDARY_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_acceptance_boundary.py"
 POST_CUTOVER_COORDINATOR="${ROOT_DIR}/deploy/alpha/macmini2010/nexus-v2-post-cutover-coordinator.py"
 POST_CUTOVER_COORDINATOR_TEST="${ROOT_DIR}/deploy/alpha/macmini2010/test_nexus_v2_post_cutover_coordinator.py"
+PHASE1_CLOSED_DEPLOY_TEST="${ROOT_DIR}/deploy/alpha/macmini2010/test_phase1_closed_deploy.py"
+RELEASE_LOCK="${ROOT_DIR}/scripts/nexus-v2-private-alpha/release_lock.py"
+RELEASE_LOCK_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_release_lock.py"
 FINAL_FREEZE="${ROOT_DIR}/scripts/nexus-v2-private-alpha/final_freeze.py"
 FINAL_FREEZE_TEST="${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_final_freeze.py"
 FINAL_FREEZE_CHAIN_DRIVER="${ROOT_DIR}/deploy/alpha/macmini2010/nexus-v2-final-freeze-chain-driver"
@@ -33,14 +38,14 @@ LINUX_RUNTIME_BUNDLE_TEST="${ROOT_DIR}/scripts/release/test_linux_runtime_bundle
 CLEAN_BUILD="${ROOT_DIR}/scripts/clean-build-artifacts.sh"
 DEPLOY="${ROOT_DIR}/scripts/deploy.sh"
 
-bash -n "$BUILD" "$NEXUS_V2_BUNDLE" "$REHEARSE" "$MEDIA_DEPLOY" "$NODE_DEPLOY" "$DEPLOY_ALL" \
+bash -n "$BUILD" "$NEXUS_V2_BUNDLE" "$REHEARSE" "$MEDIA_DEPLOY" "$NODE_DEPLOY" "$DEPLOY_ALL" "$AUTHORITY_DEPLOY" "$PHASE1_CLOSED_INGRESS" \
 	"$DEPLOY_LIB" "$RESET_NODE" "$RESET_MEDIA" "$CLEAN_BUILD" "$DEPLOY" \
 	"${ROOT_DIR}/deploy/macmini2010/deploy-node.sh" "$FINAL_FREEZE_CHAIN_DRIVER" \
 	"$LINUX_AMD64_NODE_BUILD" "$LINUX_AMD64_NODE_RUNNER" "$LINUX_RUNTIME_PROBE_RUNNER"
 python3 -m unittest \
 	"${ROOT_DIR}/scripts/nexus-v2-private-alpha/test_verify_reset_readiness.py"
 python3 -m unittest "$ACCEPTANCE_BOUNDARY_TEST"
-python3 -m unittest "${POST_CUTOVER_COORDINATOR_TEST}"
+python3 -m unittest "${POST_CUTOVER_COORDINATOR_TEST}" "${PHASE1_CLOSED_DEPLOY_TEST}" "$RELEASE_LOCK_TEST"
 python3 -m unittest "$FINAL_FREEZE_TEST" "$NODE_CANDIDATE_TEST" "$FROZEN_SNAPSHOT_PROOF_TEST" \
 	"$FINAL_FREEZE_CHAIN_DRIVER_TEST" "$FINAL_FREEZE_RUNTIME_BUNDLE_TEST"
 python3 -m unittest "$LINUX_RUNTIME_BUNDLE_TEST"
@@ -50,6 +55,7 @@ python3 -m unittest "$LINUX_RUNTIME_BUNDLE_TEST"
 "$LINUX_AMD64_NODE_BUILD" --help >/dev/null
 "$LINUX_RUNTIME_BUNDLE_ASSEMBLER" --help >/dev/null
 "$ACCEPTANCE_BOUNDARY" --help >/dev/null
+"$RELEASE_LOCK" --help >/dev/null
 rg -q '948f9b08a66e7fe01b03a98ef1c7568292e07ec2e4fe90d88c07bb14563c84ff' \
 	"${ROOT_DIR}/scripts/release/Dockerfile.node-linux-amd64"
 rg -Fq 'rustup component add rust-src --toolchain 1.89.0-x86_64-unknown-linux-gnu' \
@@ -136,6 +142,11 @@ rg -q 'dry-run: guarded node purge and immutable candidate promotion validated' 
 rg -q 'release node deploys require --promote-candidate; remote builds are forbidden' "$NODE_DEPLOY"
 rg -q -- '--target-identity' "$NODE_DEPLOY"
 rg -q 'state_getStorageHash' "$NODE_DEPLOY"
+rg -q -- '--phase1-closed' "$NODE_DEPLOY"
+rg -q 'nexus-v2-phase1-closed-ingress.sh.*preclose' "$NODE_DEPLOY"
+rg -q 'phase1_closed=true rpc_bind=127.0.0.1' "${ROOT_DIR}/deploy/alpha/macmini2010/start-alpha-node.sh"
+rg -q 'verify-authority' "$AUTHORITY_DEPLOY"
+rg -q 'remove_external_allows' "$PHASE1_CLOSED_INGRESS"
 rg -q 'uname -srm' "$NODE_DEPLOY"
 rg -q 'VERSION_ID.*24.04' "$NODE_DEPLOY"
 rg -q 'solochain-eterra-node.*--version' "$NODE_DEPLOY"

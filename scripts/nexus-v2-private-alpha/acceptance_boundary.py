@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -167,6 +168,113 @@ WRITE_BARRIER_KEYS = {
     "pausedAtUtc",
     "stabilityWindowSeconds",
     "evidenceSha256",
+}
+PHASE1_EXECUTE_KEYS = {
+    "schemaVersion",
+    "kind",
+    "operationId",
+    "releaseId",
+    "sourceCommit",
+    "siteSourceCommit",
+    "siteReleaseVersion",
+    "siteCandidateUsableForExecute",
+    "genesisHash",
+    "driverSha256",
+    "inputsSha256",
+    "executeTokenSha256",
+    "observedAtFinalizedBlock",
+    "acceptanceBoundaryCaptureSha256",
+    "economicGatesSha256",
+    "acceptanceInventorySha256",
+    "chainMediaComponentEvidenceSha256",
+    "siteIndexerComponentEvidenceSha256",
+    "ingressClosedEvidenceSha256",
+    "stabilityWindowSeconds",
+    "stabilityWindowElapsedMilliseconds",
+    "allExternalWriteIngressClosed",
+    "blockProductionContinues",
+    "authorityLocalServicePreserved",
+    "readOnlySiteStackPreserved",
+    "automaticReopenAuthorized",
+    "paidOrPublicActivationAuthorized",
+    "completedAtUtc",
+}
+PHASE1_CHAIN_COMPONENT_KEYS = {
+    "schemaVersion",
+    "kind",
+    "operationId",
+    "releaseId",
+    "sourceCommit",
+    "genesisHash",
+    "observedAtUtc",
+    "observedAtFinalizedBlock",
+    "driverSha256",
+    "inputsSha256",
+    "executeTokenSha256",
+    "acceptanceBoundaryCaptureSha256",
+    "closureObservationSha256",
+    "postWindowObservationSha256",
+    "remoteMarkerSha256",
+    "firewallStatusSha256",
+    "stabilityWindowSeconds",
+    "stabilityWindowElapsedMilliseconds",
+    "services",
+    "trustedObservation",
+    "checks",
+    "automaticReopenAuthorized",
+    "paidOrPublicActivationAuthorized",
+}
+PHASE1_SITE_COMPONENT_KEYS = {
+    "schemaVersion",
+    "kind",
+    "operationId",
+    "releaseId",
+    "sourceCommit",
+    "siteSourceCommit",
+    "genesisHash",
+    "observedAtUtc",
+    "observedAtFinalizedBlock",
+    "driverSha256",
+    "inputsSha256",
+    "executeTokenSha256",
+    "acceptanceBoundaryCaptureSha256",
+    "closureObservationSha256",
+    "postWindowObservationSha256",
+    "remoteMarkerSha256",
+    "firewallStatusSha256",
+    "listenersSha256",
+    "readOnlyCaddyfileSha256",
+    "originalCaddyfileSha256",
+    "services",
+    "localReadiness",
+    "routeStatus",
+    "checks",
+    "automaticReopenAuthorized",
+    "paidOrPublicActivationAuthorized",
+}
+COORDINATOR_PLAN_KEYS = {
+    "schemaVersion",
+    "kind",
+    "operationId",
+    "releaseId",
+    "sourceCommit",
+    "genesisHash",
+    "runtimeCodeSha256",
+    "runtimeMetadataScaleSha256",
+    "runtimeBundleManifestSha256",
+    "freshResetReadinessSha256",
+    "finalBackupManifestSha256",
+    "restoreEvidenceSha256",
+    "postCutoverObservationSha256",
+    "acceptanceBoundaryCaptureSha256",
+    "ingressClosedEvidenceSha256",
+    "coordinatorSha256",
+    "maxObservationAgeSeconds",
+    "automaticRestoreApproved",
+    "paidOrPublicActivationAuthorized",
+    "createdAtUtc",
+    "expiresAtUtc",
+    "components",
 }
 FINAL_MARKER_KEYS = {
     "schemaVersion",
@@ -1193,6 +1301,426 @@ def command_collect(args: argparse.Namespace) -> None:
     )
 
 
+def canonical_input(path: Path, label: str) -> dict[str, Any]:
+    require(path.is_absolute(), f"{label} path must be absolute")
+    require(path.is_file() and not path.is_symlink(), f"{label} must be a regular file")
+    value = read_json(path, label)
+    require(path.read_bytes() == canonical_bytes(value), f"{label} is not canonical JSON")
+    return value
+
+
+def phase1_path(root: Path, relative: str, label: str) -> Path:
+    path = (root / relative).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise BoundaryError(f"{label} escapes the Phase-1 output root") from exc
+    return path
+
+
+def validate_phase1_output(root_value: str, expected_execute_sha256: str) -> dict[str, Any]:
+    root = Path(root_value)
+    require(root.is_absolute(), "Phase-1 output root must be absolute")
+    require(root.is_dir() and not root.is_symlink(), "Phase-1 output root is unavailable")
+    root = root.resolve()
+    expected_execute_sha256 = ensure_sha256(
+        expected_execute_sha256, "Phase-1 execute evidence SHA-256"
+    )
+
+    execute_path = phase1_path(root, "execute-evidence.json", "Phase-1 execute evidence")
+    execute = canonical_input(execute_path, "Phase-1 execute evidence")
+    require(sha256_file(execute_path) == expected_execute_sha256, "Phase-1 execute evidence hash mismatch")
+    exact_keys(execute, PHASE1_EXECUTE_KEYS, "Phase-1 execute evidence")
+    require(execute["schemaVersion"] == 1, "Phase-1 execute evidence schema mismatch")
+    require(
+        execute["kind"] == "nexus-v2-private-alpha-phase1-ingress-closure-execute-evidence",
+        "Phase-1 execute evidence kind mismatch",
+    )
+    release_id = ensure_release(execute["releaseId"])
+    source_commit = ensure_commit(execute["sourceCommit"])
+    site_commit = ensure_commit(execute["siteSourceCommit"])
+    genesis_hash = ensure_hash256(execute["genesisHash"], "Phase-1 genesis hash")
+    for field in (
+        "siteCandidateUsableForExecute",
+        "allExternalWriteIngressClosed",
+        "blockProductionContinues",
+        "authorityLocalServicePreserved",
+        "readOnlySiteStackPreserved",
+    ):
+        require(execute[field] is True, f"Phase-1 execute evidence must set {field}=true")
+    for field in ("automaticReopenAuthorized", "paidOrPublicActivationAuthorized"):
+        require(execute[field] is False, f"Phase-1 execute evidence must set {field}=false")
+    stability = execute["stabilityWindowSeconds"]
+    elapsed = execute["stabilityWindowElapsedMilliseconds"]
+    require(
+        isinstance(stability, int)
+        and not isinstance(stability, bool)
+        and 30 <= stability <= 900,
+        "Phase-1 stability window must be in 30..900",
+    )
+    require(
+        isinstance(elapsed, int) and not isinstance(elapsed, bool) and elapsed >= stability * 1000,
+        "Phase-1 stability window did not elapse",
+    )
+    parse_utc(execute["completedAtUtc"], "Phase-1 completion time")
+    block_number, block_hash = release.finalized_block(
+        execute["observedAtFinalizedBlock"], "Phase-1 execute evidence"
+    )
+
+    files = {
+        "capture": ("acceptance-boundary-rpc-capture.json", "acceptanceBoundaryCaptureSha256"),
+        "gates": ("post-v16-economic-gates.json", "economicGatesSha256"),
+        "inventory": ("post-v16-acceptance-inventory.json", "acceptanceInventorySha256"),
+        "ingress": ("ingress-closed-evidence.json", "ingressClosedEvidenceSha256"),
+        "chainComponent": (
+            "chain-media-ingress-component-evidence.json",
+            "chainMediaComponentEvidenceSha256",
+        ),
+        "siteComponent": (
+            "site-indexer-ingress-component-evidence.json",
+            "siteIndexerComponentEvidenceSha256",
+        ),
+    }
+    loaded: dict[str, dict[str, Any]] = {}
+    paths: dict[str, Path] = {}
+    for name, (relative, hash_field) in files.items():
+        path = phase1_path(root, relative, f"Phase-1 {name}")
+        value = canonical_input(path, f"Phase-1 {name}")
+        require(
+            sha256_file(path) == ensure_sha256(execute[hash_field], f"Phase-1 {name} SHA-256"),
+            f"Phase-1 {name} hash mismatch",
+        )
+        loaded[name] = value
+        paths[name] = path
+
+    capture = loaded["capture"]
+    exact_keys(capture, CAPTURE_KEYS, "Phase-1 acceptance capture")
+    require(capture["schemaVersion"] == 1, "Phase-1 acceptance capture schema mismatch")
+    require(
+        capture["kind"] == "nexus-v2-private-alpha-acceptance-boundary-rpc-capture",
+        "Phase-1 acceptance capture kind mismatch",
+    )
+    require(capture["releaseId"] == release_id, "Phase-1 capture release mismatch")
+    require(capture["sourceCommit"] == source_commit, "Phase-1 capture source mismatch")
+    require(capture["genesisHash"] == genesis_hash, "Phase-1 capture genesis mismatch")
+    require(
+        capture["observedAtFinalizedBlock"] == {"number": block_number, "hash": block_hash},
+        "Phase-1 capture block mismatch",
+    )
+    observed_at = parse_utc(capture["observedAtUtc"], "Phase-1 capture observedAtUtc")
+    runtime = exact_keys(capture["runtime"], RUNTIME_KEYS, "Phase-1 capture runtime")
+    require(runtime["specVersion"] == EXPECTED_SPEC_VERSION, "Phase-1 runtime spec mismatch")
+    ensure_sha256(runtime["runtimeCodeSha256"], "Phase-1 runtime code SHA-256")
+    ensure_sha256(runtime["runtimeMetadataScaleSha256"], "Phase-1 runtime metadata SHA-256")
+
+    ingress = loaded["ingress"]
+    validate_ingress_evidence(
+        paths["ingress"],
+        execute["ingressClosedEvidenceSha256"],
+        {
+            "releaseId": release_id,
+            "sourceCommit": source_commit,
+            "genesisHash": genesis_hash,
+            "blockNumber": block_number,
+            "blockHash": block_hash,
+        },
+    )
+    require(ingress["observedAtUtc"] == capture["observedAtUtc"], "Phase-1 ingress time mismatch")
+    require(
+        ingress["components"]["chain-media"]["componentEvidenceSha256"]
+        == execute["chainMediaComponentEvidenceSha256"],
+        "Phase-1 ingress chain component hash mismatch",
+    )
+    require(
+        ingress["components"]["site-indexer"]["componentEvidenceSha256"]
+        == execute["siteIndexerComponentEvidenceSha256"],
+        "Phase-1 ingress site component hash mismatch",
+    )
+
+    chain_component = loaded["chainComponent"]
+    site_component = loaded["siteComponent"]
+    exact_keys(chain_component, PHASE1_CHAIN_COMPONENT_KEYS, "Phase-1 chain component")
+    exact_keys(site_component, PHASE1_SITE_COMPONENT_KEYS, "Phase-1 site component")
+    for component, kind in (
+        (chain_component, "nexus-v2-private-alpha-phase1-chain-media-ingress-component-evidence"),
+        (site_component, "nexus-v2-private-alpha-phase1-site-indexer-ingress-component-evidence"),
+    ):
+        require(component["schemaVersion"] == 1, "Phase-1 component schema mismatch")
+        require(component["kind"] == kind, "Phase-1 component kind mismatch")
+        require(component["releaseId"] == release_id, "Phase-1 component release mismatch")
+        require(component["sourceCommit"] == source_commit, "Phase-1 component source mismatch")
+        require(component["genesisHash"] == genesis_hash, "Phase-1 component genesis mismatch")
+        require(
+            component["observedAtFinalizedBlock"] == capture["observedAtFinalizedBlock"],
+            "Phase-1 component block mismatch",
+        )
+        require(component["automaticReopenAuthorized"] is False, "Phase-1 component may not reopen")
+        require(
+            component["paidOrPublicActivationAuthorized"] is False,
+            "Phase-1 component may not authorize paid/public activation",
+        )
+    require(site_component["siteSourceCommit"] == site_commit, "Phase-1 site source mismatch")
+
+    closure_times: list[dt.datetime] = []
+    for name, component in (("chain-close", chain_component), ("site-close", site_component)):
+        path = phase1_path(root, f"component-observations/{name}.json", f"Phase-1 {name}")
+        value = canonical_input(path, f"Phase-1 {name}")
+        require(
+            sha256_file(path) == component["closureObservationSha256"],
+            f"Phase-1 {name} observation hash mismatch",
+        )
+        require(value.get("schemaVersion") == 1, f"Phase-1 {name} schema mismatch")
+        expected_kind = (
+            "nexus-v2-private-alpha-phase1-chain-ingress-observation"
+            if name == "chain-close"
+            else "nexus-v2-private-alpha-phase1-site-ingress-observation"
+        )
+        require(value.get("kind") == expected_kind, f"Phase-1 {name} kind mismatch")
+        require(value.get("action") == "close", f"Phase-1 {name} action mismatch")
+        closure_times.append(parse_utc(value.get("observedAtUtc"), f"Phase-1 {name} time"))
+    paused_at = max(closure_times)
+    require(paused_at <= observed_at, "Phase-1 acceptance capture predates closure")
+    require(
+        observed_at - paused_at >= dt.timedelta(seconds=stability),
+        "Phase-1 closure was not stable before acceptance capture",
+    )
+
+    return {
+        "root": root,
+        "execute": execute,
+        "executePath": execute_path,
+        "executeSha256": expected_execute_sha256,
+        "releaseId": release_id,
+        "sourceCommit": source_commit,
+        "siteSourceCommit": site_commit,
+        "genesisHash": genesis_hash,
+        "block": {"number": block_number, "hash": block_hash},
+        "observedAtUtc": capture["observedAtUtc"],
+        "pausedAtUtc": paused_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "stabilityWindowSeconds": stability,
+        "capture": capture,
+        "paths": paths,
+    }
+
+
+def compose_observation_value(phase1: Mapping[str, Any], media_commit: str) -> dict[str, Any]:
+    media_commit = ensure_commit(media_commit)
+    execute = phase1["execute"]
+    return {
+        "schemaVersion": 1,
+        "kind": "nexus-v2-private-alpha-post-cutover-rollback-observation",
+        "releaseId": phase1["releaseId"],
+        "sourceCommit": phase1["sourceCommit"],
+        "componentSourceCommits": {
+            "chain-media": {"chain": phase1["sourceCommit"], "media": media_commit},
+            "site-indexer": {
+                "chain": phase1["sourceCommit"],
+                "site": phase1["siteSourceCommit"],
+            },
+        },
+        "observedAtFinalizedBlock": phase1["block"],
+        "observedAtUtc": phase1["observedAtUtc"],
+        "writeBarrier": {
+            "mode": "AllV2WritesPaused",
+            "chainWritesPaused": True,
+            "authorityResultsPaused": True,
+            "webMutationsPaused": True,
+            "gameplaySessionIngressPaused": True,
+            "inventoryObservedAfterPause": True,
+            "pausedAtUtc": phase1["pausedAtUtc"],
+            "stabilityWindowSeconds": phase1["stabilityWindowSeconds"],
+            "evidenceSha256": execute["ingressClosedEvidenceSha256"],
+        },
+        "acceptanceBoundaryCaptureSha256": execute["acceptanceBoundaryCaptureSha256"],
+        "ingressClosedEvidenceSha256": execute["ingressClosedEvidenceSha256"],
+        "economicGatesSha256": execute["economicGatesSha256"],
+        "acceptanceInventorySha256": execute["acceptanceInventorySha256"],
+    }
+
+
+def command_compose_observation(args: argparse.Namespace) -> None:
+    phase1 = validate_phase1_output(
+        args.phase1_output_root, args.phase1_execute_evidence_sha256
+    )
+    observation = compose_observation_value(phase1, args.media_source_commit)
+    exact_keys(observation, OBSERVATION_KEYS, "composed post-cutover observation")
+    output = Path(args.output)
+    write_new_json(output, observation)
+    print(f"post-cutover observation composed: {output} sha256={sha256_file(output)}")
+
+
+def git_output(root: Path, *arguments: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(root), *arguments], capture_output=True, text=True, check=False
+    )
+    require(completed.returncode == 0, f"cannot inspect source root: {root}")
+    return completed.stdout.strip()
+
+
+def validate_clean_root(root_value: str, expected_commit: str, label: str) -> Path:
+    root = Path(root_value)
+    require(root.is_absolute() and root.is_dir() and not root.is_symlink(), f"{label} root is invalid")
+    root = root.resolve()
+    require(
+        Path(git_output(root, "rev-parse", "--show-toplevel")).resolve() == root,
+        f"{label} root must be a Git worktree root",
+    )
+    require(git_output(root, "rev-parse", "HEAD") == expected_commit, f"{label} HEAD mismatch")
+    require(
+        git_output(root, "status", "--porcelain", "--untracked-files=all") == "",
+        f"{label} worktree is dirty",
+    )
+    return root
+
+
+def script_pin(root: Path, relative_value: str, label: str) -> dict[str, str]:
+    relative = Path(relative_value)
+    require(not relative.is_absolute() and ".." not in relative.parts, f"{label} path is invalid")
+    path = (root / relative).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise BoundaryError(f"{label} escapes its source root") from exc
+    require(path.is_file() and not path.is_symlink(), f"{label} is unavailable")
+    require(bool(path.stat().st_mode & 0o100), f"{label} is not executable")
+    git_output(root, "ls-files", "--error-unmatch", relative.as_posix())
+    return {"path": relative.as_posix(), "sha256": sha256_file(path)}
+
+
+def command_compose_coordinator_plan(args: argparse.Namespace) -> None:
+    phase1 = validate_phase1_output(
+        args.phase1_output_root, args.phase1_execute_evidence_sha256
+    )
+    observation_path = Path(args.observation)
+    observation = canonical_input(observation_path, "post-cutover observation")
+    observation_sha = ensure_sha256(args.observation_sha256, "post-cutover observation SHA-256")
+    require(sha256_file(observation_path) == observation_sha, "post-cutover observation hash mismatch")
+    exact_keys(observation, OBSERVATION_KEYS, "post-cutover observation")
+    expected_observation = compose_observation_value(phase1, args.media_source_commit)
+    require(observation == expected_observation, "post-cutover observation does not match Phase-1 output")
+
+    component_commits = observation["componentSourceCommits"]
+    chain_commit = ensure_commit(component_commits["chain-media"]["chain"])
+    media_commit = ensure_commit(component_commits["chain-media"]["media"])
+    site_commit = ensure_commit(component_commits["site-indexer"]["site"])
+    chain_root = validate_clean_root(args.chain_root, chain_commit, "chain")
+    media_root = validate_clean_root(args.media_root, media_commit, "media")
+    site_root = validate_clean_root(args.site_root, site_commit, "site")
+
+    runtime_artifacts = load_runtime_artifacts(
+        Path(args.runtime_bundle_root), args.runtime_bundle_manifest_sha256
+    )
+    derived = derive_and_validate_artifacts(
+        phase1["paths"]["capture"],
+        phase1["paths"]["gates"],
+        phase1["paths"]["inventory"],
+        runtime_artifacts,
+    )
+    require(derived["captureSha256"] == observation["acceptanceBoundaryCaptureSha256"], "capture hash mismatch")
+
+    readiness_path = Path(args.fresh_reset_readiness)
+    canonical_input(readiness_path, "fresh-reset readiness")
+    readiness_sha = ensure_sha256(args.fresh_reset_readiness_sha256, "fresh-reset readiness SHA-256")
+    require(sha256_file(readiness_path) == readiness_sha, "fresh-reset readiness hash mismatch")
+    backup_path = Path(args.final_backup_manifest)
+    canonical_input(backup_path, "final backup manifest")
+    restore_path = Path(args.restore_evidence)
+    canonical_input(restore_path, "restore evidence")
+
+    coordinator_relative = "deploy/alpha/macmini2010/nexus-v2-post-cutover-coordinator.py"
+    chain_driver_relative = "deploy/alpha/macmini2010/nexus-v2-rollback-component-driver"
+    chain_scripts = {
+        "restoreState": "deploy/alpha/macmini2010/restore-alpha-state.sh",
+        "deployNode": "deploy/alpha/macmini2010/deploy-node.sh",
+        "deployMedia": "deploy/alpha/macmini2010/deploy-media.sh",
+        "status": "deploy/alpha/macmini2010/status.sh",
+    }
+    site_scripts = {
+        "restoreState": args.site_restore_path,
+        "deploySite": args.site_deploy_path,
+        "status": args.site_status_path,
+    }
+    coordinator_pin = script_pin(chain_root, coordinator_relative, "post-cutover coordinator")
+    chain_driver = script_pin(chain_root, chain_driver_relative, "chain rollback driver")
+    site_driver = script_pin(site_root, args.site_driver_path, "site rollback driver")
+    chain_script_pins = {
+        role: {"sourceId": "chain", **script_pin(chain_root, path, f"chain {role}")}
+        for role, path in chain_scripts.items()
+    }
+    site_script_pins = {
+        role: {"sourceId": "site", **script_pin(site_root, path, f"site {role}")}
+        for role, path in site_scripts.items()
+    }
+
+    created = parse_utc(args.created_at or utc_now(), "coordinator plan createdAtUtc")
+    expires = (
+        parse_utc(args.expires_at, "coordinator plan expiresAtUtc")
+        if args.expires_at
+        else created + dt.timedelta(minutes=15)
+    )
+    require(created < expires and expires - created <= dt.timedelta(hours=1), "invalid coordinator plan window")
+    max_age = args.max_observation_age_seconds
+    require(30 <= max_age <= 900, "max observation age must be in 30..900")
+    archive_base = args.reset_archive_root.rstrip("/") + "/" + readiness_sha
+
+    plan = {
+        "schemaVersion": 1,
+        "kind": "nexus-v2-private-alpha-post-cutover-coordinator-plan",
+        "operationId": ensure_release(args.operation_id),
+        "releaseId": phase1["releaseId"],
+        "sourceCommit": chain_commit,
+        "genesisHash": phase1["genesisHash"],
+        "runtimeCodeSha256": derived["runtimeCodeSha256"],
+        "runtimeMetadataScaleSha256": derived["runtimeMetadataScaleSha256"],
+        "runtimeBundleManifestSha256": runtime_artifacts.bundle_manifest_sha256,
+        "freshResetReadinessSha256": readiness_sha,
+        "finalBackupManifestSha256": sha256_file(backup_path),
+        "restoreEvidenceSha256": sha256_file(restore_path),
+        "postCutoverObservationSha256": observation_sha,
+        "acceptanceBoundaryCaptureSha256": derived["captureSha256"],
+        "ingressClosedEvidenceSha256": phase1["execute"]["ingressClosedEvidenceSha256"],
+        "coordinatorSha256": coordinator_pin["sha256"],
+        "maxObservationAgeSeconds": max_age,
+        "automaticRestoreApproved": True,
+        "paidOrPublicActivationAuthorized": False,
+        "createdAtUtc": created.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "expiresAtUtc": expires.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "components": [
+            {
+                "id": "chain-media",
+                "sourcePins": [
+                    {"id": "chain", "root": str(chain_root), "expectedCommit": chain_commit},
+                    {"id": "media", "root": str(media_root), "expectedCommit": media_commit},
+                ],
+                "driverSourceId": "chain",
+                "driverPath": chain_driver["path"],
+                "driverSha256": chain_driver["sha256"],
+                "requiredResetArchives": {
+                    "node": f"{archive_base}/node",
+                    "media": f"{archive_base}/media",
+                },
+                "scriptPins": chain_script_pins,
+            },
+            {
+                "id": "site-indexer",
+                "sourcePins": [
+                    {"id": "chain", "root": str(chain_root), "expectedCommit": chain_commit},
+                    {"id": "site", "root": str(site_root), "expectedCommit": site_commit},
+                ],
+                "driverSourceId": "site",
+                "driverPath": site_driver["path"],
+                "driverSha256": site_driver["sha256"],
+                "requiredResetArchives": {"site": f"{archive_base}/site"},
+                "scriptPins": site_script_pins,
+            },
+        ],
+    }
+    exact_keys(plan, COORDINATOR_PLAN_KEYS, "composed coordinator plan")
+    output = Path(args.output)
+    write_new_json(output, plan)
+    print(f"post-cutover coordinator plan composed: {output} sha256={sha256_file(output)}")
+
+
 def command_validate_capture(args: argparse.Namespace) -> None:
     artifacts = load_runtime_artifacts(Path(args.runtime_bundle_root), args.runtime_bundle_manifest_sha256)
     result = derive_and_validate_artifacts(
@@ -1473,6 +2001,58 @@ def command_create_receipt(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
+    observation = subparsers.add_parser(
+        "compose-observation",
+        help="compose the closed post-cutover observation from a pinned Phase-1 output",
+    )
+    observation.add_argument("--phase1-output-root", required=True)
+    observation.add_argument("--phase1-execute-evidence-sha256", required=True)
+    observation.add_argument("--media-source-commit", required=True)
+    observation.add_argument("--output", required=True)
+    observation.set_defaults(func=command_compose_observation)
+
+    plan = subparsers.add_parser(
+        "compose-coordinator-plan",
+        help="compose a hash-pinned plan accepted by the post-cutover coordinator",
+    )
+    plan.add_argument("--phase1-output-root", required=True)
+    plan.add_argument("--phase1-execute-evidence-sha256", required=True)
+    plan.add_argument("--observation", required=True)
+    plan.add_argument("--observation-sha256", required=True)
+    plan.add_argument("--media-source-commit", required=True)
+    plan.add_argument("--operation-id", required=True)
+    plan.add_argument("--chain-root", required=True)
+    plan.add_argument("--media-root", required=True)
+    plan.add_argument("--site-root", required=True)
+    plan.add_argument("--runtime-bundle-root", required=True)
+    plan.add_argument("--runtime-bundle-manifest-sha256", required=True)
+    plan.add_argument("--fresh-reset-readiness", required=True)
+    plan.add_argument("--fresh-reset-readiness-sha256", required=True)
+    plan.add_argument("--final-backup-manifest", required=True)
+    plan.add_argument("--restore-evidence", required=True)
+    plan.add_argument(
+        "--site-driver-path",
+        default="tcg/deploy/alpha/macmini2014/nexus-v2-rollback-component-driver",
+    )
+    plan.add_argument(
+        "--site-restore-path",
+        default="tcg/deploy/alpha/macmini2014/restore-alpha-state.sh",
+    )
+    plan.add_argument(
+        "--site-deploy-path", default="tcg/deploy/alpha/macmini2014/deploy-site.sh"
+    )
+    plan.add_argument(
+        "--site-status-path", default="tcg/deploy/alpha/macmini2014/status.sh"
+    )
+    plan.add_argument(
+        "--reset-archive-root", default="/opt/eterra-alpha/archive/nexus-v2-fresh-reset"
+    )
+    plan.add_argument("--max-observation-age-seconds", type=int, default=600)
+    plan.add_argument("--created-at")
+    plan.add_argument("--expires-at")
+    plan.add_argument("--output", required=True)
+    plan.set_defaults(func=command_compose_coordinator_plan)
+
     collect = subparsers.add_parser("collect", help="read one finalized block and derive gates/inventory")
     collect.add_argument("--rpc-url", required=True)
     collect.add_argument("--rpc-timeout-seconds", type=int, default=30)

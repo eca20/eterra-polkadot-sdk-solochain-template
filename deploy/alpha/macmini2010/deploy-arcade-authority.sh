@@ -7,6 +7,8 @@ source "${SCRIPT_DIR}/lib.sh"
 
 authorize_after=0
 seed_config_after=0
+phase1_closed=0
+dry_run=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -16,13 +18,22 @@ while [[ $# -gt 0 ]]; do
 		--seed-config)
 			seed_config_after=1
 			;;
+		--phase1-closed)
+			phase1_closed=1
+			;;
+		--dry-run)
+			dry_run=1
+			;;
 		--help|-h)
 			cat <<'EOF'
-Usage: deploy-arcade-authority.sh [--authorize] [--seed-config]
+Usage: deploy-arcade-authority.sh [--authorize] [--seed-config] [--phase1-closed] [--dry-run]
 
 Builds and deploys the self-hosted Nova Rail authority relay API and operator.
 Pass --authorize to run the one-shot operator after the service is deployed.
 Pass --seed-config to idempotently seed the Nova Rail ArcadeCore game config.
+--phase1-closed starts the legacy authority on 127.0.0.1 only, precloses
+protected firewall rules before restart, and forbids authorization or seeding.
+--dry-run is local-only and is intended for the guarded Phase-1 deployment.
 EOF
 			exit 0
 			;;
@@ -35,8 +46,22 @@ done
 
 load_env
 require_cmd expect
+require_cmd base64
 require_cmd rsync
+require_cmd shasum
 require_cmd ssh
+
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	[[ "${authorize_after}" -eq 0 && "${seed_config_after}" -eq 0 ]] ||
+		die "--phase1-closed forbids authority authorization and config seeding"
+	[[ "${ETERRA_RELEASE_VERSION}" != "dev" ]] ||
+		die "--phase1-closed is valid only for a non-dev private-alpha release"
+	NEXUS_V2_PHASE1_CLOSED=1
+	RPC_BIND_HOST=127.0.0.1
+	AUTHORITY_BIND_HOST=127.0.0.1
+	AUTHORITY_RPC_URL="ws://127.0.0.1:${CHAIN_RPC_PORT}"
+	export NEXUS_V2_PHASE1_CLOSED RPC_BIND_HOST AUTHORITY_BIND_HOST AUTHORITY_RPC_URL
+fi
 
 DOTNET_BIN="${DOTNET_BIN:-/opt/homebrew/bin/dotnet}"
 if [[ ! -x "${DOTNET_BIN}" ]]; then
@@ -53,6 +78,38 @@ if [[ "${AUTHORITY_SUBMITTER_MODE}" == "live_alpha" ]]; then
 	[[ -n "${AUTHORITY_RELAY_ACCOUNT}" ]] || die "AUTHORITY_RELAY_ACCOUNT or NOVA_RAIL_RELAY_ACCOUNT is required for live alpha authority"
 	[[ "${AUTHORITY_RELAY_ACCOUNT}" != "replace-with-nova-rail-relay-ss58-account" ]] || die "AUTHORITY_RELAY_ACCOUNT must be replaced with the relay SS58 account"
 	[[ -n "${AUTHORITY_RELAY_MNEMONIC}" ]] || die "AUTHORITY_RELAY_MNEMONIC is required for live alpha authority; use @/secure/path for file-backed local env"
+fi
+
+phase1_guard_sha256=""
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	phase1_guard_sha256="$(shasum -a 256 "${SCRIPT_DIR}/nexus-v2-phase1-closed-ingress.sh" | awk '{print $1}')"
+fi
+
+if [[ "${dry_run}" -eq 1 ]]; then
+	log "dry-run: authority source and Phase-1 closed-start contract validated; no build, SSH, or live mutation performed"
+	log "dry-run: release=${ETERRA_RELEASE_VERSION} authority_source=${AUTHORITY_SOURCE_COMMIT} phase1_closed=${phase1_closed} bind_host=${AUTHORITY_BIND_HOST} phase1_guard_sha256=${phase1_guard_sha256:-none}"
+	exit 0
+fi
+
+# In Phase-1 this is the first remote operation. It reasserts closure before
+# local publish time and requires the node's closed-start marker.
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	phase1_guard_base64="$(base64 <"${SCRIPT_DIR}/nexus-v2-phase1-closed-ingress.sh" | tr -d '\r\n')"
+	remote_root_bash <<EOF
+set -euo pipefail
+test -f "${REMOTE_PHASE1_CLOSED_STATE_FILE}"
+test "\$(jq -r '.nodeRpcLoopbackOnly' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "true"
+test "\$(jq -r '.protectedFirewallRulesClosedBeforeNodeStart' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "true"
+test "\$(jq -r '.releaseId' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "${ETERRA_RELEASE_VERSION}"
+test "\$(jq -r '.sourceCommit' "${REMOTE_PHASE1_CLOSED_STATE_FILE}")" = "${ETERRA_EXPECTED_CHAIN_COMMIT}"
+guard="\$(mktemp /tmp/nexus-v2-phase1-closed-ingress.XXXXXX)"
+trap 'rm -f "\${guard}"' EXIT
+printf '%s' '${phase1_guard_base64}' | base64 -d >"\${guard}"
+test "\$(shasum -a 256 "\${guard}" | awk '{print \$1}')" = "${phase1_guard_sha256}"
+chmod 0700 "\${guard}"
+CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+	"\${guard}" preclose
+EOF
 fi
 
 bundle_dir="$(make_temp_dir)"
@@ -107,6 +164,9 @@ rsync_to_remote "${publish_api_dir}/" "${REMOTE_AUTHORITY_API_DIR}/"
 rsync_to_remote "${publish_operator_dir}/" "${REMOTE_AUTHORITY_OPERATOR_DIR}/"
 rsync_to_remote_no_delete "${bundle_dir}/arcade-authority.env" "${remote_tmp_dir}/arcade-authority.env"
 rsync_to_remote_no_delete "${SCRIPT_DIR}/eterra-arcade-authority.service" "${remote_tmp_dir}/eterra-arcade-authority.service"
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	rsync_to_remote_no_delete "${SCRIPT_DIR}/nexus-v2-phase1-closed-ingress.sh" "${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh"
+fi
 if [[ -f "${bundle_dir}/secrets/nova-rail-relay.mnemonic" ]]; then
 	rsync_to_remote_no_delete "${bundle_dir}/secrets/nova-rail-relay.mnemonic" "${remote_tmp_dir}/nova-rail-relay.mnemonic"
 fi
@@ -137,15 +197,45 @@ chown root:root "${REMOTE_AUTHORITY_SERVICE_UNIT_FILE}"
 chown -R "${DEPLOY_USER}:${DEPLOY_USER}" "${REMOTE_AUTHORITY_DIR}"
 chmod 0755 "${REMOTE_AUTHORITY_API_DIR}/Eterra.Arcade.Authority.Api" "${REMOTE_AUTHORITY_OPERATOR_BIN}"
 
-ufw --force delete allow from "${LAN_CIDR}" to any port "${AUTHORITY_PORT}" proto tcp >/dev/null 2>&1 || true
-ufw allow from "${LAN_CIDR}" to any port "${AUTHORITY_PORT}" proto tcp comment 'eterra-alpha-arcade-authority' >/dev/null
-ufw --force delete allow from "${LAN_CIDR}" to any port "${CHAIN_RPC_PORT}" proto tcp >/dev/null 2>&1 || true
-ufw allow from "${LAN_CIDR}" to any port "${CHAIN_RPC_PORT}" proto tcp comment 'eterra-alpha-chain-rpc-lan-wallet' >/dev/null
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	test "\$(shasum -a 256 "${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" | awk '{print \$1}')" = "${phase1_guard_sha256}"
+	chmod 0755 "${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh"
+	CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+		"${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" preclose
+else
+	ufw --force delete allow from "${LAN_CIDR}" to any port "${AUTHORITY_PORT}" proto tcp >/dev/null 2>&1 || true
+	ufw allow from "${LAN_CIDR}" to any port "${AUTHORITY_PORT}" proto tcp comment 'eterra-alpha-arcade-authority' >/dev/null
+	ufw --force delete allow from "${LAN_CIDR}" to any port "${CHAIN_RPC_PORT}" proto tcp >/dev/null 2>&1 || true
+	ufw allow from "${LAN_CIDR}" to any port "${CHAIN_RPC_PORT}" proto tcp comment 'eterra-alpha-chain-rpc-lan-wallet' >/dev/null
+fi
 
 systemctl daemon-reload
 systemctl enable "${AUTHORITY_SERVICE_NAME}.service"
 systemctl restart "${AUTHORITY_SERVICE_NAME}.service"
 systemctl is-active --quiet "${AUTHORITY_SERVICE_NAME}.service"
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+		"${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" verify-authority
+	python3 - "${REMOTE_PHASE1_CLOSED_STATE_FILE}" <<'PY'
+import datetime
+import json
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+value = json.loads(path.read_text(encoding="utf-8"))
+value["legacyAuthorityLoopbackOnly"] = True
+value["protectedFirewallRulesClosedBeforeAuthorityStart"] = True
+value["authoritySourceCommit"] = "${AUTHORITY_SOURCE_COMMIT}"
+value["phase1IngressGuardSha256"] = "${phase1_guard_sha256}"
+value["updatedAtUtc"] = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+temporary = path.with_suffix(".tmp")
+temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+os.chmod(temporary, 0o440)
+os.replace(temporary, path)
+PY
+fi
 systemctl --no-pager --full status "${AUTHORITY_SERVICE_NAME}.service" || true
 printf '%s\n' "${ETERRA_RELEASE_VERSION}" >"${REMOTE_RELEASE_VERSION_FILE}"
 printf '%s\n' "${AUTHORITY_SOURCE_COMMIT}" >"${REMOTE_AUTHORITY_SOURCE_COMMIT_FILE}"

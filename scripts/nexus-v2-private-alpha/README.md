@@ -43,13 +43,23 @@ and role; it is never accepted as the deployable production Wasm.
 Run `./scripts/nexus-v2-private-alpha/alpha_v2_release.py COMMAND --help` for
 the complete arguments.
 
-The post-cutover boundary tool has four closed commands:
+The post-cutover boundary tool has six closed commands:
 
 ```bash
 ./scripts/nexus-v2-private-alpha/acceptance_boundary.py collect --help
 ./scripts/nexus-v2-private-alpha/acceptance_boundary.py validate-capture --help
+./scripts/nexus-v2-private-alpha/acceptance_boundary.py compose-observation --help
+./scripts/nexus-v2-private-alpha/acceptance_boundary.py compose-coordinator-plan --help
 ./scripts/nexus-v2-private-alpha/acceptance_boundary.py create-receipt --help
 ./scripts/nexus-v2-private-alpha/acceptance_boundary.py verify-receipt --help
+```
+
+The late-bound offline release lock is captured only after all component lanes
+have committed their final worktrees:
+
+```bash
+./scripts/nexus-v2-private-alpha/release_lock.py capture --help
+./scripts/nexus-v2-private-alpha/release_lock.py verify --help
 ```
 
 `runtimeCodeSha256` and `runtimeMetadataScaleSha256` are SHA-256 digests with
@@ -82,6 +92,11 @@ the production Wasm file SHA-256 used by this receipt.
   `NEXUS_V2_RESET_READINESS_SHA256`; release media reset also requires
   immutable candidate promotion. `--dry-run` validates this local plan and
   exits before SSH.
+- `deploy-all.sh --fresh --phase1-closed` implies the legacy authority deploy,
+  precloses all RPC/P2P/authority UFW allows before either restart, launches
+  chain RPC and authority on loopback, and forbids authority authorization or
+  configuration seeding. The normal deployment mode retains its prior
+  external listener/firewall behavior.
 - `build-linux-amd64-node.sh` builds the deployment ELF with Rust 1.89, locked
   dependencies, a digest-pinned bookworm image, BuildKit `linux/amd64`, and the
   source commit's `SOURCE_DATE_EPOCH`; it emits a closed build attestation and
@@ -127,6 +142,17 @@ the production Wasm file SHA-256 used by this receipt.
   mode-0440 canonical receipt and refuses overwrite. `verify-receipt` requires
   the receipt's separately supplied SHA-256 plus exact release, deployment
   commit, genesis, production Wasm, and metadata identities.
+- `compose-observation` validates the entire canonical, separately hash-pinned
+  Phase-1 closure output and derives the coordinator write-barrier envelope;
+  `compose-coordinator-plan` then pins clean chain/media/site roots and every
+  action script into the exact schema consumed by the post-cutover
+  coordinator. Neither command contacts a host.
+- `release_lock.py` pins the clean HEAD and tree of chain, web, SDKGen, Unity,
+  media, IP, AI, Blockchainia Flow, and the Blockchainia site. It also binds
+  the node/media candidates, target identity, runtime/snapshot/read-model
+  manifests, full EditMode/PlayMode XML, and exactly one credential-file hash
+  without copying secrets. Verification rejects a stale or differently
+  selected deployment environment.
 - Post-reset validation is two-phase with access closed. First, perform only
   base-stack read-only smoke with fresh post-V16 disabled gates and zero
   current/lifetime acceptance inventory. Issue the acceptance-boundary receipt

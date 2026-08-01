@@ -9,6 +9,8 @@ CHAIN_RPC_PORT="${CHAIN_RPC_PORT:-9944}"
 CHAIN_P2P_PORT="${CHAIN_P2P_PORT:-30333}"
 RPC_CORS="${RPC_CORS:-https://eterra.online}"
 MINI_LAN_IP="${MINI_LAN_IP:-}"
+NEXUS_V2_PHASE1_CLOSED="${NEXUS_V2_PHASE1_CLOSED:-0}"
+RPC_BIND_HOST="${RPC_BIND_HOST:-0.0.0.0}"
 AURA_SURI="${AURA_SURI:-}"
 GRAN_SURI="${GRAN_SURI:-}"
 KEY_MARKER="${BASE_PATH}/.alpha-keys-inserted"
@@ -63,13 +65,33 @@ args=(
 	--port "${CHAIN_P2P_PORT}"
 	--rpc-port "${CHAIN_RPC_PORT}"
 	--rpc-methods Safe
-	--unsafe-rpc-external
 	--rpc-cors "${RPC_CORS}"
 )
 
-if [[ -n "${MINI_LAN_IP}" ]]; then
-	args+=(--public-addr "/ip4/${MINI_LAN_IP}/tcp/${CHAIN_P2P_PORT}")
-fi
+case "${NEXUS_V2_PHASE1_CLOSED,,}" in
+	1|true|yes|on)
+		[[ "${RPC_BIND_HOST}" == "127.0.0.1" ]] || {
+			echo "[start-alpha-node] Phase-1 closed mode requires RPC_BIND_HOST=127.0.0.1" >&2
+			exit 1
+		}
+		# Substrate binds RPC to loopback by default.  Omission of both external
+		# flags is intentional and is verified after systemd starts the node.
+		;;
+	0|false|no|off)
+		args+=(--unsafe-rpc-external)
+		if [[ -n "${MINI_LAN_IP}" ]]; then
+			args+=(--public-addr "/ip4/${MINI_LAN_IP}/tcp/${CHAIN_P2P_PORT}")
+		fi
+		;;
+	*)
+		echo "[start-alpha-node] invalid NEXUS_V2_PHASE1_CLOSED value" >&2
+		exit 1
+		;;
+esac
 
-echo "[start-alpha-node] rpc=${CHAIN_RPC_PORT} p2p=${CHAIN_P2P_PORT} base_path=${BASE_PATH}"
+if [[ "${NEXUS_V2_PHASE1_CLOSED,,}" =~ ^(1|true|yes|on)$ ]]; then
+	echo "[start-alpha-node] phase1_closed=true rpc_bind=127.0.0.1 rpc=${CHAIN_RPC_PORT} p2p=${CHAIN_P2P_PORT} base_path=${BASE_PATH}"
+else
+	echo "[start-alpha-node] phase1_closed=false rpc_bind=external rpc=${CHAIN_RPC_PORT} p2p=${CHAIN_P2P_PORT} base_path=${BASE_PATH}"
+fi
 exec "${NODE_BIN}" "${args[@]}"

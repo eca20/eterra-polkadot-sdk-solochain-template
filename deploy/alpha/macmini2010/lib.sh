@@ -208,6 +208,8 @@ load_env() {
 	NEXUS_V2_NODE_CANDIDATE_SHA256="${NEXUS_V2_NODE_CANDIDATE_SHA256:-}"
 	NEXUS_V2_TARGET_IDENTITY_SHA256="${NEXUS_V2_TARGET_IDENTITY_SHA256:-}"
 	NEXUS_V2_ALPHA_GENESIS_HASH="${NEXUS_V2_ALPHA_GENESIS_HASH:-}"
+	NEXUS_V2_PHASE1_CLOSED="${NEXUS_V2_PHASE1_CLOSED:-0}"
+	RPC_BIND_HOST="${RPC_BIND_HOST:-0.0.0.0}"
 	RUNTIME_SPEC_VERSION="${RUNTIME_SPEC_VERSION:-106}"
 	RUNTIME_CODE_HASH="${RUNTIME_CODE_HASH:-unverified}"
 	MEDIA_RELEASE_CONTENT_SMOKE_URL="${MEDIA_RELEASE_CONTENT_SMOKE_URL:-}"
@@ -320,6 +322,7 @@ load_env() {
 	REMOTE_RUNTIME_SOURCE_COMMIT_FILE="${REMOTE_STATE_DIR}/runtime-source-commit.txt"
 	REMOTE_NODE_CANDIDATE_SHA256_FILE="${REMOTE_STATE_DIR}/node-candidate.sha256"
 	REMOTE_ALPHA_GENESIS_HASH_FILE="${REMOTE_STATE_DIR}/alpha-genesis-hash.txt"
+	REMOTE_PHASE1_CLOSED_STATE_FILE="${REMOTE_STATE_DIR}/nexus-v2-phase1-closed-start.json"
 	REMOTE_TARGET_IDENTITY_FILE="${REMOTE_STATE_DIR}/eterra-spec106-target-identity.v2.json"
 	REMOTE_MEDIA_SOURCE_COMMIT_FILE="${REMOTE_STATE_DIR}/media-source-commit.txt"
 	REMOTE_AUTHORITY_SOURCE_COMMIT_FILE="${REMOTE_STATE_DIR}/authority-source-commit.txt"
@@ -578,7 +581,7 @@ compute_node_runtime_hash() {
 
 	combine_hash_values \
 		"$(hash_file "${env_file}")" \
-		"$(hash_repo_paths "${REPO_ROOT}" deploy/alpha/macmini2010/start-alpha-node.sh deploy/alpha/macmini2010/eterra-alpha-node.service)"
+		"$(hash_repo_paths "${REPO_ROOT}" deploy/alpha/macmini2010/start-alpha-node.sh deploy/alpha/macmini2010/nexus-v2-phase1-closed-ingress.sh deploy/alpha/macmini2010/eterra-alpha-node.service)"
 }
 
 compute_media_build_hash() {
@@ -611,6 +614,8 @@ CHAIN_RPC_PORT=${CHAIN_RPC_PORT}
 CHAIN_P2P_PORT=${CHAIN_P2P_PORT}
 MINI_LAN_IP=${MINI_LAN_IP}
 RPC_CORS=${ALPHA_RPC_CORS}
+NEXUS_V2_PHASE1_CLOSED=${NEXUS_V2_PHASE1_CLOSED}
+RPC_BIND_HOST=${RPC_BIND_HOST}
 AURA_SURI=${AURA_SURI}
 GRAN_SURI=${GRAN_SURI}
 EOF

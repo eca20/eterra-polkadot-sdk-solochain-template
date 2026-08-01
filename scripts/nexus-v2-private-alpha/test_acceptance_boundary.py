@@ -7,6 +7,7 @@ import datetime as dt
 import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -208,6 +209,292 @@ class BoundaryTests(unittest.TestCase):
         key = item["prefix"] + suffix
         item["keys"] = [key]
         item["values"] = {key: "0x00"}
+
+    def phase1_output(
+        self,
+        root: Path,
+        *,
+        source_commit: str = SOURCE,
+        site_commit: str = "f" * 40,
+    ) -> str:
+        (root / "component-observations").mkdir(parents=True)
+        observed_at = "2026-07-31T12:00:30Z"
+        capture = self.capture(observed_at)
+        capture["sourceCommit"] = source_commit
+        gates = tool.disabled_gates(capture, self.metadata)
+        gates["sourceCommit"] = source_commit
+        inventory = tool.acceptance_inventory(capture, self.metadata)
+        inventory["sourceCommit"] = source_commit
+        write_json(root / "acceptance-boundary-rpc-capture.json", capture)
+        write_json(root / "post-v16-economic-gates.json", gates)
+        write_json(root / "post-v16-acceptance-inventory.json", inventory)
+
+        closure_values = {}
+        for name, kind in (
+            ("chain-close", "nexus-v2-private-alpha-phase1-chain-ingress-observation"),
+            ("site-close", "nexus-v2-private-alpha-phase1-site-ingress-observation"),
+        ):
+            value = {
+                "schemaVersion": 1,
+                "kind": kind,
+                "action": "close",
+                "observedAtUtc": "2026-07-31T12:00:00Z",
+            }
+            path = root / "component-observations" / f"{name}.json"
+            write_json(path, value)
+            closure_values[name] = tool.sha256_file(path)
+
+        block = {"number": 42, "hash": BLOCK_HASH}
+        common = {
+            "schemaVersion": 1,
+            "operationId": "phase1-compose-test",
+            "releaseId": RELEASE,
+            "sourceCommit": source_commit,
+            "genesisHash": GENESIS_HASH,
+            "observedAtUtc": observed_at,
+            "observedAtFinalizedBlock": block,
+            "driverSha256": "1" * 64,
+            "inputsSha256": "2" * 64,
+            "executeTokenSha256": "3" * 64,
+            "acceptanceBoundaryCaptureSha256": tool.sha256_file(
+                root / "acceptance-boundary-rpc-capture.json"
+            ),
+            "postWindowObservationSha256": "4" * 64,
+            "remoteMarkerSha256": "5" * 64,
+            "firewallStatusSha256": "6" * 64,
+            "services": {},
+            "checks": {},
+            "automaticReopenAuthorized": False,
+            "paidOrPublicActivationAuthorized": False,
+        }
+        chain_component = {
+            **common,
+            "kind": "nexus-v2-private-alpha-phase1-chain-media-ingress-component-evidence",
+            "closureObservationSha256": closure_values["chain-close"],
+            "stabilityWindowSeconds": 30,
+            "stabilityWindowElapsedMilliseconds": 30000,
+            "trustedObservation": {},
+        }
+        site_component = {
+            **common,
+            "kind": "nexus-v2-private-alpha-phase1-site-indexer-ingress-component-evidence",
+            "siteSourceCommit": site_commit,
+            "closureObservationSha256": closure_values["site-close"],
+            "listenersSha256": "7" * 64,
+            "readOnlyCaddyfileSha256": "8" * 64,
+            "originalCaddyfileSha256": "9" * 64,
+            "localReadiness": {},
+            "routeStatus": {},
+        }
+        write_json(root / "chain-media-ingress-component-evidence.json", chain_component)
+        write_json(root / "site-indexer-ingress-component-evidence.json", site_component)
+
+        ingress = {
+            "schemaVersion": 1,
+            "kind": "nexus-v2-private-alpha-ingress-closed-evidence",
+            "releaseId": RELEASE,
+            "sourceCommit": source_commit,
+            "genesisHash": GENESIS_HASH,
+            "observedAtFinalizedBlock": block,
+            "observedAtUtc": observed_at,
+            "mode": "AllExternalWriteIngressClosed",
+            "components": {
+                "chain-media": {
+                    "publicRpcWriteIngressClosed": True,
+                    "authorityOperatorIngressClosed": True,
+                    "gameplaySessionIngressClosed": True,
+                    "componentEvidenceSha256": tool.sha256_file(
+                        root / "chain-media-ingress-component-evidence.json"
+                    ),
+                },
+                "site-indexer": {
+                    "webMutationIngressClosed": True,
+                    "indexerMutationIngressClosed": True,
+                    "componentEvidenceSha256": tool.sha256_file(
+                        root / "site-indexer-ingress-component-evidence.json"
+                    ),
+                },
+            },
+            "blockProductionContinues": True,
+            "paidOrPublicActivationAuthorized": False,
+        }
+        write_json(root / "ingress-closed-evidence.json", ingress)
+        execute = {
+            "schemaVersion": 1,
+            "kind": "nexus-v2-private-alpha-phase1-ingress-closure-execute-evidence",
+            "operationId": "phase1-compose-test",
+            "releaseId": RELEASE,
+            "sourceCommit": source_commit,
+            "siteSourceCommit": site_commit,
+            "siteReleaseVersion": "v0.1.0-alpha.1",
+            "siteCandidateUsableForExecute": True,
+            "genesisHash": GENESIS_HASH,
+            "driverSha256": "1" * 64,
+            "inputsSha256": "2" * 64,
+            "executeTokenSha256": "3" * 64,
+            "observedAtFinalizedBlock": block,
+            "acceptanceBoundaryCaptureSha256": tool.sha256_file(
+                root / "acceptance-boundary-rpc-capture.json"
+            ),
+            "economicGatesSha256": tool.sha256_file(root / "post-v16-economic-gates.json"),
+            "acceptanceInventorySha256": tool.sha256_file(
+                root / "post-v16-acceptance-inventory.json"
+            ),
+            "chainMediaComponentEvidenceSha256": tool.sha256_file(
+                root / "chain-media-ingress-component-evidence.json"
+            ),
+            "siteIndexerComponentEvidenceSha256": tool.sha256_file(
+                root / "site-indexer-ingress-component-evidence.json"
+            ),
+            "ingressClosedEvidenceSha256": tool.sha256_file(root / "ingress-closed-evidence.json"),
+            "stabilityWindowSeconds": 30,
+            "stabilityWindowElapsedMilliseconds": 30000,
+            "allExternalWriteIngressClosed": True,
+            "blockProductionContinues": True,
+            "authorityLocalServicePreserved": True,
+            "readOnlySiteStackPreserved": True,
+            "automaticReopenAuthorized": False,
+            "paidOrPublicActivationAuthorized": False,
+            "completedAtUtc": "2026-07-31T12:00:31Z",
+        }
+        write_json(root / "execute-evidence.json", execute)
+        return tool.sha256_file(root / "execute-evidence.json")
+
+    def test_compose_observation_consumes_closed_phase1_output(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="phase1-compose-") as temporary:
+            root = Path(temporary).resolve()
+            execute_sha = self.phase1_output(root)
+            output = root.parent / f"{root.name}-observation.json"
+            args = SimpleNamespace(
+                phase1_output_root=str(root),
+                phase1_execute_evidence_sha256=execute_sha,
+                media_source_commit="e" * 40,
+                output=str(output),
+            )
+            tool.command_compose_observation(args)
+            value = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(value["writeBarrier"]["pausedAtUtc"], "2026-07-31T12:00:00Z")
+            self.assertEqual(value["writeBarrier"]["evidenceSha256"], tool.sha256_file(root / "ingress-closed-evidence.json"))
+            self.assertEqual(value["componentSourceCommits"]["chain-media"]["media"], "e" * 40)
+            with self.assertRaises(tool.BoundaryError):
+                tool.validate_phase1_output(str(root), "0" * 64)
+            output.unlink()
+
+    def test_compose_coordinator_plan_is_accepted_by_coordinator_schema(self) -> None:
+        def create_repo(root: Path, files: dict[str, bytes]) -> str:
+            for relative, payload in files.items():
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+                path.chmod(0o755)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "-C", str(root), "config", "user.name", "Phase Test"], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.email", "phase@example.invalid"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=True)
+            return subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+            ).strip()
+
+        shell = b"#!/bin/sh\nexit 0\n"
+        coordinator_source = (
+            SCRIPT.parents[2] / "deploy/alpha/macmini2010/nexus-v2-post-cutover-coordinator.py"
+        ).read_bytes()
+        with tempfile.TemporaryDirectory(prefix="coordinator-compose-") as temporary:
+            root = Path(temporary).resolve()
+            chain = root / "chain"
+            media = root / "media"
+            site = root / "site"
+            chain_commit = create_repo(
+                chain,
+                {
+                    "deploy/alpha/macmini2010/nexus-v2-post-cutover-coordinator.py": coordinator_source,
+                    "deploy/alpha/macmini2010/nexus-v2-rollback-component-driver": shell,
+                    "deploy/alpha/macmini2010/restore-alpha-state.sh": shell,
+                    "deploy/alpha/macmini2010/deploy-node.sh": shell,
+                    "deploy/alpha/macmini2010/deploy-media.sh": shell,
+                    "deploy/alpha/macmini2010/status.sh": shell,
+                },
+            )
+            media_commit = create_repo(media, {"README.md": shell})
+            site_commit = create_repo(
+                site,
+                {
+                    "tcg/deploy/alpha/macmini2014/nexus-v2-rollback-component-driver": shell,
+                    "tcg/deploy/alpha/macmini2014/restore-alpha-state.sh": shell,
+                    "tcg/deploy/alpha/macmini2014/deploy-site.sh": shell,
+                    "tcg/deploy/alpha/macmini2014/status.sh": shell,
+                },
+            )
+            phase1 = root / "phase1"
+            execute_sha = self.phase1_output(
+                phase1, source_commit=chain_commit, site_commit=site_commit
+            )
+            observation = root / "observation.json"
+            tool.command_compose_observation(
+                SimpleNamespace(
+                    phase1_output_root=str(phase1),
+                    phase1_execute_evidence_sha256=execute_sha,
+                    media_source_commit=media_commit,
+                    output=str(observation),
+                )
+            )
+            readiness = root / "readiness.json"
+            backup = root / "backup.json"
+            restore = root / "restore.json"
+            for path, kind in (
+                (readiness, "fixture-readiness"),
+                (backup, "fixture-backup"),
+                (restore, "fixture-restore"),
+            ):
+                write_json(path, {"kind": kind, "schemaVersion": 1})
+            plan = root / "plan.json"
+            args = SimpleNamespace(
+                phase1_output_root=str(phase1),
+                phase1_execute_evidence_sha256=execute_sha,
+                observation=str(observation),
+                observation_sha256=tool.sha256_file(observation),
+                media_source_commit=media_commit,
+                operation_id="coordinator-compose-test",
+                chain_root=str(chain),
+                media_root=str(media),
+                site_root=str(site),
+                runtime_bundle_root=str(root / "runtime"),
+                runtime_bundle_manifest_sha256=self.pins.manifest_sha256,
+                fresh_reset_readiness=str(readiness),
+                fresh_reset_readiness_sha256=tool.sha256_file(readiness),
+                final_backup_manifest=str(backup),
+                restore_evidence=str(restore),
+                site_driver_path="tcg/deploy/alpha/macmini2014/nexus-v2-rollback-component-driver",
+                site_restore_path="tcg/deploy/alpha/macmini2014/restore-alpha-state.sh",
+                site_deploy_path="tcg/deploy/alpha/macmini2014/deploy-site.sh",
+                site_status_path="tcg/deploy/alpha/macmini2014/status.sh",
+                reset_archive_root="/opt/eterra-alpha/archive/nexus-v2-fresh-reset",
+                max_observation_age_seconds=600,
+                created_at=None,
+                expires_at=None,
+                output=str(plan),
+            )
+            with mock.patch.object(tool, "load_runtime_artifacts", return_value=self.artifacts):
+                tool.command_compose_coordinator_plan(args)
+
+            coordinator_path = SCRIPT.parents[2] / "deploy/alpha/macmini2010/nexus-v2-post-cutover-coordinator.py"
+            specification = importlib.util.spec_from_file_location(
+                "coordinator_composed_plan_tested", coordinator_path
+            )
+            assert specification is not None and specification.loader is not None
+            coordinator = importlib.util.module_from_spec(specification)
+            sys.modules[specification.name] = coordinator
+            specification.loader.exec_module(coordinator)
+            with mock.patch.object(
+                coordinator.boundary.runtime_bundle, "PRODUCTION_PINS", self.pins
+            ):
+                validated = coordinator.validate_plan(plan, tool.sha256_file(plan))
+            self.assertEqual(validated["sourceCommit"], chain_commit)
+            self.assertEqual(validated["components"]["chain-media"]["sourceCommits"]["media"], media_commit)
 
     def test_legacy_or_v2_game_write_permanently_blocks_restore(self) -> None:
         capture = self.capture()

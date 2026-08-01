@@ -5,9 +5,14 @@
   "releaseId": "nexus-v2-private-alpha-REPLACE",
   "sourceCommit": "REPLACE_WITH_40_HEX_CHAIN_DEPLOY_COMMIT",
   "componentSourceCommits": {
+    "ai": "REPLACE_WITH_40_HEX_AI_COMMIT",
+    "blockchainia-site": "REPLACE_WITH_40_HEX_BLOCKCHAINIA_SITE_COMMIT",
     "chain": "REPLACE_WITH_40_HEX_CHAIN_DEPLOY_COMMIT",
+    "flow": "REPLACE_WITH_40_HEX_BLOCKCHAINIA_FLOW_COMMIT",
+    "ip": "REPLACE_WITH_40_HEX_IP_COMMIT",
     "media": "REPLACE_WITH_40_HEX_MEDIA_COMMIT",
     "sdkgen": "fa30860eeffae6b2d196d4e294c7c298773974c6",
+    "unity": "REPLACE_WITH_40_HEX_UNITY_COMMIT",
     "web": "REPLACE_WITH_40_HEX_FINAL_WEB_COMMIT"
   },
   "preV16SourceRuntime": {

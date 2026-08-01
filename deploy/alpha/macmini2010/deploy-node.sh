@@ -12,6 +12,7 @@ verify_restored_final_backup=""
 promotion_manifest=""
 target_identity=""
 evidence_output=""
+phase1_closed=0
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--purge-state)
@@ -24,6 +25,9 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--dry-run)
 			dry_run=1
+			;;
+		--phase1-closed)
+			phase1_closed=1
 			;;
 		--verify-restored-final-backup)
 			[[ $# -ge 2 ]] || die "--verify-restored-final-backup requires a staging path"
@@ -51,7 +55,7 @@ Usage: deploy-node.sh [--purge-state]
        deploy-node.sh --purge-state --fresh-reset-readiness READINESS.json \
          --promote-candidate /path/to/node-candidate.json \
          --target-identity /path/to/eterra-spec106-target-identity.v2.json \
-         [--evidence OUTPUT.json] [--dry-run]
+         [--evidence OUTPUT.json] [--phase1-closed] [--dry-run]
        deploy-node.sh --verify-restored-final-backup STAGING_DIR
 
 Normal deploys preserve the alpha node base path and chain state.
@@ -67,6 +71,10 @@ The restore-verification mode is read-only. It proves that the exact staged
 node binary, chain spec, service unit, and environment are installed and that
 the restored node is healthy; it never builds, syncs, restarts, or deploys.
 Alpha spec/genesis changes are only applied when --purge-state is set.
+--phase1-closed is valid only for the guarded fresh-reset promotion path. It
+precloses protected UFW ports before restart and installs the exact launcher
+from this clean deployment commit so RPC starts on loopback without an
+externally writable interval.
 EOF
 			exit 0
 			;;
@@ -79,12 +87,19 @@ done
 
 load_env
 require_cmd expect
+require_cmd base64
 require_cmd git
 require_cmd jq
 require_cmd python3
 require_cmd rsync
 require_cmd shasum
 require_cmd ssh
+
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	NEXUS_V2_PHASE1_CLOSED=1
+	RPC_BIND_HOST=127.0.0.1
+	export NEXUS_V2_PHASE1_CLOSED RPC_BIND_HOST
+fi
 
 if [[ -n "${verify_restored_final_backup}" ]]; then
 	[[ "${purge_state}" -eq 0 && "${dry_run}" -eq 0 && -z "${fresh_reset_readiness}" && -z "${promotion_manifest}" && -z "${target_identity}" && -z "${evidence_output}" ]] ||
@@ -159,6 +174,14 @@ fi
 if [[ -n "${fresh_reset_readiness}" && "${purge_state}" -ne 1 ]]; then
 	die "--fresh-reset-readiness requires --purge-state"
 fi
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	[[ "${purge_state}" -eq 1 && -n "${fresh_reset_readiness}" ]] ||
+		die "--phase1-closed requires the guarded --purge-state --fresh-reset-readiness path"
+	[[ -n "${promotion_manifest}" && -n "${target_identity}" ]] ||
+		die "--phase1-closed requires immutable candidate promotion and target identity"
+	[[ "${ETERRA_RELEASE_VERSION}" != "dev" ]] ||
+		die "--phase1-closed is valid only for a non-dev private-alpha release"
+fi
 if [[ "${dry_run}" -eq 1 && "${purge_state}" -ne 1 ]]; then
 	die "--dry-run is supported only for the guarded purge plan"
 fi
@@ -199,6 +222,8 @@ candidate_plain_spec_sha256=""
 candidate_raw_spec_sha256=""
 candidate_service_sha256=""
 candidate_start_sha256=""
+phase1_launcher_sha256=""
+phase1_guard_sha256=""
 candidate_runtime_source_commit=""
 candidate_genesis_hash=""
 candidate_runtime_code_hash=""
@@ -255,6 +280,28 @@ if [[ -n "${promotion_manifest}" ]]; then
 	export NODE_RUNTIME_SOURCE_COMMIT NODE_ALPHA_GENESIS_HASH
 fi
 
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	phase1_launcher_sha256="$(shasum -a 256 "${SCRIPT_DIR}/start-alpha-node.sh" | awk '{print $1}')"
+	phase1_guard_sha256="$(shasum -a 256 "${SCRIPT_DIR}/nexus-v2-phase1-closed-ingress.sh" | awk '{print $1}')"
+fi
+
+# This is deliberately the first remote operation in the protected path.  A
+# second preclose immediately before systemd restart defends against drift
+# during staging, but no deployment/build step is allowed to precede this one.
+if [[ "${phase1_closed}" -eq 1 && "${dry_run}" -eq 0 ]]; then
+	phase1_guard_base64="$(base64 <"${SCRIPT_DIR}/nexus-v2-phase1-closed-ingress.sh" | tr -d '\r\n')"
+	remote_root_bash <<EOF
+set -euo pipefail
+guard="\$(mktemp /tmp/nexus-v2-phase1-closed-ingress.XXXXXX)"
+trap 'rm -f "\${guard}"' EXIT
+printf '%s' '${phase1_guard_base64}' | base64 -d >"\${guard}"
+test "\$(shasum -a 256 "\${guard}" | awk '{print \$1}')" = "${phase1_guard_sha256}"
+chmod 0700 "\${guard}"
+CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+	"\${guard}" preclose
+EOF
+fi
+
 if [[ "${promote_candidate}" -eq 1 && "${dry_run}" -eq 0 ]]; then
 	candidate_host_uname="$(remote_root_bash <<'EOF'
 set -euo pipefail
@@ -285,7 +332,7 @@ if [[ "${ETERRA_RELEASE_VERSION}" != "dev" && "${purge_state}" -eq 1 ]]; then
 fi
 if [[ "${dry_run}" -eq 1 ]]; then
 	log "dry-run: guarded node purge and immutable candidate promotion validated; no SSH or live mutation performed"
-	log "dry-run: release=${ETERRA_RELEASE_VERSION} replacement_source=${CHAIN_SOURCE_COMMIT} runtime_source=${candidate_runtime_source_commit:-none} candidate_sha256=${candidate_manifest_sha256:-none} genesis=${candidate_genesis_hash:-none} readiness_sha256=${FRESH_RESET_READINESS_SHA256:-none}"
+	log "dry-run: release=${ETERRA_RELEASE_VERSION} replacement_source=${CHAIN_SOURCE_COMMIT} runtime_source=${candidate_runtime_source_commit:-none} candidate_sha256=${candidate_manifest_sha256:-none} genesis=${candidate_genesis_hash:-none} readiness_sha256=${FRESH_RESET_READINESS_SHA256:-none} phase1_closed=${phase1_closed} phase1_launcher_sha256=${phase1_launcher_sha256:-none} phase1_guard_sha256=${phase1_guard_sha256:-none}"
 	exit 0
 fi
 
@@ -434,6 +481,10 @@ else
 fi
 
 rsync_to_remote_no_delete "${bundle_dir}/node.env" "${remote_tmp_dir}/node.env"
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	rsync_to_remote_no_delete "${SCRIPT_DIR}/start-alpha-node.sh" "${remote_tmp_dir}/phase1-start-alpha-node.sh"
+	rsync_to_remote_no_delete "${SCRIPT_DIR}/nexus-v2-phase1-closed-ingress.sh" "${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh"
+fi
 if [[ "${promote_candidate}" -eq 0 ]]; then
 	rsync_to_remote_no_delete "${ALPHA_OVERRIDES_FILE}" "${remote_tmp_dir}/alpha-overrides.json"
 fi
@@ -514,11 +565,21 @@ if [[ "${promote_candidate}" -eq 1 ]]; then
 	remote_candidate_start="${remote_tmp_dir}/candidate/start-alpha-node.sh"
 	remote_candidate_service="${remote_tmp_dir}/candidate/eterra-alpha-node.service"
 fi
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	remote_candidate_start="${remote_tmp_dir}/phase1-start-alpha-node.sh"
+fi
 
 remote_root_bash <<EOF
 set -euo pipefail
 
 mkdir -p "${REMOTE_SHARED_ENV_DIR}" "${REMOTE_NODE_DATA_DIR}" "${REMOTE_STATE_DIR}"
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	test "\$(shasum -a 256 "${remote_tmp_dir}/phase1-start-alpha-node.sh" | awk '{print \$1}')" = "${phase1_launcher_sha256}"
+	test "\$(shasum -a 256 "${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" | awk '{print \$1}')" = "${phase1_guard_sha256}"
+	chmod 0755 "${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh"
+	CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+		"${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" preclose
+fi
 install -m 0644 "${remote_tmp_dir}/node.env" "${REMOTE_NODE_ENV_FILE}"
 chown root:root "${REMOTE_NODE_ENV_FILE}"
 install -m 0755 "${remote_candidate_start}" "${REMOTE_START_SCRIPT}"
@@ -563,6 +624,35 @@ else
 fi
 
 systemctl is-active --quiet "${REMOTE_NODE_SERVICE_NAME}.service"
+if [[ "${phase1_closed}" -eq 1 ]]; then
+	CHAIN_RPC_PORT="${CHAIN_RPC_PORT}" CHAIN_P2P_PORT="${CHAIN_P2P_PORT}" AUTHORITY_PORT="${AUTHORITY_PORT}" \
+		"${remote_tmp_dir}/nexus-v2-phase1-closed-ingress.sh" verify-node
+	python3 - "${REMOTE_PHASE1_CLOSED_STATE_FILE}" <<'PY'
+import datetime
+import json
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+value = {
+    "schemaVersion": 1,
+    "kind": "nexus-v2-private-alpha-phase1-closed-start",
+    "releaseId": "${ETERRA_RELEASE_VERSION}",
+    "sourceCommit": "${CHAIN_SOURCE_COMMIT}",
+    "nodeRpcLoopbackOnly": True,
+    "legacyAuthorityLoopbackOnly": False,
+    "protectedFirewallRulesClosedBeforeNodeStart": True,
+    "phase1LauncherSha256": "${phase1_launcher_sha256}",
+    "phase1IngressGuardSha256": "${phase1_guard_sha256}",
+    "updatedAtUtc": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+}
+temporary = path.with_suffix(".tmp")
+temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+os.chmod(temporary, 0o440)
+os.replace(temporary, path)
+PY
+fi
 if [[ "${promote_candidate}" -eq 1 ]]; then
 	genesis_response="\$(curl -fsS --max-time 15 -H 'Content-Type: application/json' \
 		-d '{"id":1,"jsonrpc":"2.0","method":"chain_getBlockHash","params":[0]}' \
@@ -625,7 +715,10 @@ if [[ -n "${evidence_output}" ]]; then
 		"${node_runtime_hash}" \
 		"${FRESH_RESET_READINESS_SHA256:-}" \
 		"${target_identity_sha256}" \
-		"${candidate_host_uname}" <<'PY'
+		"${candidate_host_uname}" \
+		"${phase1_closed}" \
+		"${phase1_launcher_sha256}" \
+		"${phase1_guard_sha256}" <<'PY'
 import datetime
 import json
 import os
@@ -633,8 +726,10 @@ import pathlib
 import sys
 
 (output, summary_raw, deployment_commit, runtime_env_sha256, readiness_sha256,
- target_identity_sha256, deployment_host_uname) = sys.argv[1:]
+ target_identity_sha256, deployment_host_uname, phase1_closed_raw,
+ phase1_launcher_sha256, phase1_guard_sha256) = sys.argv[1:]
 summary = json.loads(summary_raw)
+phase1_closed = phase1_closed_raw == "1"
 value = {
     "schemaVersion": 1,
     "kind": "nexus-v2-private-alpha-node-promotion-evidence",
@@ -658,6 +753,11 @@ value = {
     "remoteBuildPerformed": False,
     "remoteSpecFinalizationPerformed": False,
     "candidateBytesVerifiedBeforeAndAfterTransfer": True,
+    "candidateStartScriptInstalled": not phase1_closed,
+    "phase1ClosedStart": phase1_closed,
+    "phase1LauncherSha256": phase1_launcher_sha256 or None,
+    "phase1IngressGuardSha256": phase1_guard_sha256 or None,
+    "protectedFirewallRulesClosedBeforeNodeStart": phase1_closed,
     "paidOrPublicActivationAllowed": False,
     "promotedAtUtc": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
 }

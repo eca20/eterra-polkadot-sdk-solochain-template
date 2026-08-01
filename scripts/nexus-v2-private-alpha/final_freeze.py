@@ -39,7 +39,17 @@ ROLES = (
 )
 FREEZE_ORDER = ROLES
 ACTIONS = ("preflight", "freeze", "verify-frozen", "snapshot", "verify-snapshot")
-SOURCE_COMPONENTS = {"chain", "media", "sdkgen", "web"}
+SOURCE_COMPONENTS = {
+    "chain",
+    "web",
+    "sdkgen",
+    "unity",
+    "media",
+    "ip",
+    "ai",
+    "flow",
+    "blockchainia-site",
+}
 COMPONENT_ARTIFACTS: dict[str, set[tuple[str, str]]] = {
     "site-ingress": {
         ("ingress", "caddy-config"),
@@ -293,7 +303,10 @@ def validate_plan(path: Path, expected_sha256: str) -> dict[str, Any]:
         ensure_commit(commit, f"{component} source commit")
     require(source_commits["chain"] == source_commit, "plan chain source commit mismatch")
     require(set(ROLE_SOURCE_COMPONENT) == set(ROLES), "role-to-source-component map does not cover the closed role set")
-    require(set(ROLE_SOURCE_COMPONENT.values()) == SOURCE_COMPONENTS, "role-to-source-component map leaves a source commit unused")
+    require(
+        set(ROLE_SOURCE_COMPONENT.values()).issubset(SOURCE_COMPONENTS),
+        "role-to-source-component map references an unpinned source",
+    )
     pre_v16 = value.get("preV16SourceRuntime")
     require(isinstance(pre_v16, dict) and set(pre_v16) == PRE_V16_SOURCE_KEYS, "pre-V16 source runtime contract mismatch")
     ensure_commit(pre_v16.get("deployedSourceCommit"), "deployed pre-V16 source commit")
