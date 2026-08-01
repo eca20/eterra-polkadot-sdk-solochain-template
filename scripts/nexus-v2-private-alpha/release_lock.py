@@ -41,6 +41,7 @@ LOCK_KEYS = {"schemaVersion", "kind", "releaseId", "createdAtUtc", "repositories
 REPOSITORY_KEYS = {"root", "head", "tree"}
 ARTIFACT_KEYS = {
     "deploymentEnvironment",
+    "siteDeploymentEnvironment",
     "forbiddenDeploymentEnvironments",
     "runtimeBundleManifest",
     "targetIdentity",
@@ -249,9 +250,28 @@ def validate_semantic_pins(lock: Mapping[str, Any]) -> None:
     }
     for name, expected in required_environment.items():
         require(environment.get(name) == expected, f"deployment environment pin is stale: {name}")
+    site_environment = parse_environment(Path(artifacts["siteDeploymentEnvironment"]["path"]))
+    require(
+        site_environment.get("EXPECTED_SOURCE_COMMIT") == repositories["web"]["head"],
+        "site deployment environment source pin is stale",
+    )
+    for name in (
+        "PUBLIC_MEDIA_UPLOAD_ENABLED",
+        "PUBLIC_AVATAR_UPLOAD_ENABLED",
+        "NEXUS_V2_SESSION_AUTHORIZATION_PRODUCTION_ENABLED",
+    ):
+        require(
+            site_environment.get(name, "").lower() == "false",
+            f"site deployment environment must disable {name}",
+        )
 
 
-def validate_lock(path: Path, expected_sha256: str, selected_environment: str) -> dict[str, Any]:
+def validate_lock(
+    path: Path,
+    expected_sha256: str,
+    selected_environment: str,
+    selected_site_environment: str,
+) -> dict[str, Any]:
     expected_sha256 = ensure_sha(expected_sha256, "release-lock SHA-256")
     lock = read_json(path, "release lock")
     require(path.read_bytes() == canonical_bytes(lock), "release lock is not canonical JSON")
@@ -288,6 +308,12 @@ def validate_lock(path: Path, expected_sha256: str, selected_environment: str) -
     required_selected = Path(artifacts["deploymentEnvironment"]["path"]).resolve()
     require(selected == required_selected, "selected deployment environment is not the release-locked file")
     require(str(selected) not in forbidden, "selected deployment environment is forbidden")
+    selected_site = Path(selected_site_environment)
+    require(selected_site.is_absolute(), "selected site deployment environment must be absolute")
+    require(
+        selected_site.resolve() == Path(artifacts["siteDeploymentEnvironment"]["path"]).resolve(),
+        "selected site deployment environment is not the release-locked file",
+    )
 
     unity_results = exact_keys(
         artifacts["unityTestResults"], {"editMode", "playMode"}, "Unity result pins"
@@ -318,6 +344,9 @@ def command_capture(args: argparse.Namespace) -> None:
     require(selected_environment not in forbidden, "selected environment is also forbidden")
     artifacts: dict[str, Any] = {
         "deploymentEnvironment": file_pin(selected_environment, "deployment environment"),
+        "siteDeploymentEnvironment": file_pin(
+            args.site_deployment_environment, "site deployment environment"
+        ),
         "forbiddenDeploymentEnvironments": forbidden,
         "runtimeBundleManifest": file_pin(args.runtime_bundle_manifest, "runtime bundle manifest"),
         "targetIdentity": file_pin(args.target_identity, "target identity"),
@@ -344,12 +373,17 @@ def command_capture(args: argparse.Namespace) -> None:
     output = Path(args.output)
     write_new(output, lock)
     digest = sha256_file(output)
-    validate_lock(output, digest, selected_environment)
+    validate_lock(output, digest, selected_environment, args.site_deployment_environment)
     print(f"release lock captured: {output} sha256={digest}")
 
 
 def command_verify(args: argparse.Namespace) -> None:
-    validate_lock(Path(args.lock), args.expected_sha256, args.selected_deployment_environment)
+    validate_lock(
+        Path(args.lock),
+        args.expected_sha256,
+        args.selected_deployment_environment,
+        args.selected_site_deployment_environment,
+    )
     print(f"release lock verified: sha256={args.expected_sha256}")
 
 
@@ -360,6 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--release-id", required=True)
     capture.add_argument("--repository", action="append", default=[], required=True, metavar="ID=/ABS/ROOT")
     capture.add_argument("--deployment-environment", required=True)
+    capture.add_argument("--site-deployment-environment", required=True)
     capture.add_argument("--forbidden-deployment-environment", action="append", default=[])
     capture.add_argument("--runtime-bundle-manifest", required=True)
     capture.add_argument("--target-identity", required=True)
@@ -376,6 +411,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--lock", required=True)
     verify.add_argument("--expected-sha256", required=True)
     verify.add_argument("--selected-deployment-environment", required=True)
+    verify.add_argument("--selected-site-deployment-environment", required=True)
     verify.set_defaults(func=command_verify)
     return parser
 

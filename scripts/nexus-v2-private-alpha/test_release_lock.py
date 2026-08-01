@@ -107,6 +107,19 @@ class ReleaseLockTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            site_environment = root / "site-release.env"
+            site_environment.write_text(
+                "\n".join(
+                    (
+                        f'EXPECTED_SOURCE_COMMIT="{repositories["web"]["head"]}"',
+                        "PUBLIC_MEDIA_UPLOAD_ENABLED=false",
+                        "PUBLIC_AVATAR_UPLOAD_ENABLED=false",
+                        "NEXUS_V2_SESSION_AUTHORIZATION_PRODUCTION_ENABLED=false",
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             stale = root / "alpha-release-final.env"
             stale.write_text("ETERRA_RELEASE_VERSION=stale\n", encoding="utf-8")
             output = root / "release-lock.json"
@@ -117,6 +130,7 @@ class ReleaseLockTests(unittest.TestCase):
                     for identifier in sorted(tool.REPOSITORY_IDS)
                 ],
                 deployment_environment=str(environment),
+                site_deployment_environment=str(site_environment),
                 forbidden_deployment_environment=[str(stale)],
                 runtime_bundle_manifest=str(runtime),
                 target_identity=str(target),
@@ -131,14 +145,14 @@ class ReleaseLockTests(unittest.TestCase):
             )
             tool.command_capture(args)
             digest = tool.sha256_file(output)
-            value = tool.validate_lock(output, digest, str(environment))
+            value = tool.validate_lock(output, digest, str(environment), str(site_environment))
             self.assertEqual(set(value["repositories"]), tool.REPOSITORY_IDS)
             self.assertEqual(value["artifacts"]["unityTestResults"]["editMode"]["total"], 590)
             with self.assertRaises(tool.ReleaseLockError):
-                tool.validate_lock(output, digest, str(stale))
+                tool.validate_lock(output, digest, str(stale), str(site_environment))
             environment.write_text("ETERRA_RELEASE_VERSION=stale\n", encoding="utf-8")
             with self.assertRaises(tool.ReleaseLockError):
-                tool.validate_lock(output, digest, str(environment))
+                tool.validate_lock(output, digest, str(environment), str(site_environment))
 
 
 if __name__ == "__main__":

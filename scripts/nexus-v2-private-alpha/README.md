@@ -150,9 +150,9 @@ the production Wasm file SHA-256 used by this receipt.
 - `release_lock.py` pins the clean HEAD and tree of chain, web, SDKGen, Unity,
   media, IP, AI, Blockchainia Flow, and the Blockchainia site. It also binds
   the node/media candidates, target identity, runtime/snapshot/read-model
-  manifests, full EditMode/PlayMode XML, and exactly one credential-file hash
-  without copying secrets. Verification rejects a stale or differently
-  selected deployment environment.
+  manifests, full EditMode/PlayMode XML, and exactly selected chain and site
+  environment hashes without copying secrets. Verification rejects a stale or
+  differently selected deployment environment on either host.
 - Post-reset validation is two-phase with access closed. First, perform only
   base-stack read-only smoke with fresh post-V16 disabled gates and zero
   current/lifetime acceptance inventory. Issue the acceptance-boundary receipt
