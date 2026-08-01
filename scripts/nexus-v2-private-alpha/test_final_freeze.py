@@ -92,7 +92,67 @@ class FinalFreezeTests(unittest.TestCase):
                         path = Path(args.bundle_root) / relative
                         path.parent.mkdir(parents=True, exist_ok=True)
                         if not path.exists():
-                            if args.role == "chain" and name == "try-runtime-snapshot-proof":
+                            if args.role == "chain" and name == "legacy-source-inventory":
+                                block = {{"number": args.frozen_block_number, "hash": args.frozen_block_hash}}
+                                query = lambda method, params, result: {{"method": method, "params": params, "result": result}}
+                                inventory = {{
+                                    "schemaVersion": 1,
+                                    "kind": {tool.release.LEGACY_SOURCE_INVENTORY_KIND!r},
+                                    "releaseId": args.release_id,
+                                    "sourceCommit": args.source_commit,
+                                    "deployedSourceCommit": "d" * 40,
+                                    "observedAtUtc": "2026-07-31T00:00:00Z",
+                                    "observedAtFinalizedBlock": block,
+                                    "captureMode": "isolated-frozen-copy-read-only",
+                                    "finality": {{
+                                        "finalizedHead": query("chain_getFinalizedHead", [], args.frozen_block_hash),
+                                        "blockHashAtNumber": query("chain_getBlockHash", [args.frozen_block_number], args.frozen_block_hash),
+                                        "header": query("chain_getHeader", [args.frozen_block_hash], {{"number": hex(args.frozen_block_number)}}),
+                                    }},
+                                    "storage": {{
+                                        "tcgStorageVersion": {{
+                                            "pallet": "EterraTCG", "storage": ":__STORAGE_VERSION__:",
+                                            "key": {tool.release.LEGACY_TCG_STORAGE_VERSION_KEY!r},
+                                            "query": query("state_getStorage", [{tool.release.LEGACY_TCG_STORAGE_VERSION_KEY!r}, args.frozen_block_hash], "0x0e00"),
+                                        }},
+                                        "nextCardId": {{
+                                            "pallet": "EterraTCG", "storage": "NextCardId",
+                                            "key": {tool.release.LEGACY_NEXT_CARD_ID_KEY!r},
+                                            "query": query("state_getStorage", [{tool.release.LEGACY_NEXT_CARD_ID_KEY!r}, args.frozen_block_hash], None),
+                                        }},
+                                        "cards": {{
+                                            "pallet": "EterraTCG", "storage": "Cards",
+                                            "prefix": {tool.release.LEGACY_CARDS_PREFIX!r},
+                                            "method": "state_getKeysPaged", "at": args.frozen_block_hash,
+                                            "pageSize": {tool.release.LEGACY_CARD_KEY_PAGE_SIZE},
+                                            "pages": [{{"startKey": None, "keys": []}}],
+                                        }},
+                                    }},
+                                    "summary": {{
+                                        "cardIdsSha256": hashlib.sha256(b"").hexdigest(),
+                                        "cardsCount": 0, "maxCardId": None,
+                                        "minimumMigrationBlocks": 1, "nextCardId": 0,
+                                        "tcgStorageVersion": 14,
+                                        "v16MigrationBatchSize": {tool.release.V16_MIGRATION_BATCH_SIZE},
+                                    }},
+                                    "safety": {tool.release.LEGACY_SAFETY!r},
+                                }}
+                                path.write_text(json.dumps(inventory, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+                            elif args.role == "chain" and name == "tcg-storage-version-observation":
+                                observation = {{
+                                    "schemaVersion": 1,
+                                    "kind": "frame-pallet-storage-version-observation",
+                                    "finalizedBlock": {{"number": args.frozen_block_number, "hash": args.frozen_block_hash}},
+                                    "decoded": {{"scaleType": "u16", "storageVersion": 14}},
+                                    "liveSource": {{"commit": "d" * 40, "declaredStorageVersion": 14}},
+                                    "readOnlyRpc": {{
+                                        "method": "state_getStorage",
+                                        "storageKey": {tool.release.LEGACY_TCG_STORAGE_VERSION_KEY!r},
+                                        "result": "0x0e00",
+                                    }},
+                                }}
+                                path.write_text(json.dumps(observation, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+                            elif args.role == "chain" and name == "try-runtime-snapshot-proof":
                                 artifact_root = Path(args.bundle_root) / "artifacts" / "chain"
                                 source_path = lambda item_group, item_name: artifact_root / f"{{item_group}}-{{item_name}}.bin"
                                 source_sha = lambda item_group, item_name: hashlib.sha256(source_path(item_group, item_name).read_bytes()).hexdigest()

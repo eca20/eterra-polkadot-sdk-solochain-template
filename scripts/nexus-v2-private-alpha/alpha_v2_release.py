@@ -17,6 +17,9 @@ import re
 import stat
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -31,6 +34,7 @@ REQUIRED_ARTIFACTS: dict[str, set[str]] = {
         "runtime-v14-metadata",
         "runtime-v16-production-wasm",
         "runtime-v16-try-runtime-wasm",
+        "legacy-source-inventory",
         "tcg-storage-version-observation",
         "try-runtime-snapshot",
         "try-runtime-snapshot-proof",
@@ -214,6 +218,65 @@ PRE_V16_ABSENT_V2_PALLETS = [
     "EterraGameResults",
 ]
 PRE_V16_ABSENT_V2_PALLET_INDICES = [35, 36, 37, 38]
+LEGACY_SOURCE_INVENTORY_KIND = (
+    "nexus-v2-private-alpha-frozen-legacy-source-inventory"
+)
+LEGACY_TCG_STORAGE_VERSION_KEY = (
+    "0x2ac14ba6b10e5ff91888f263bf83e9a94e7b9012096b41c4eb3aaf947f6ea429"
+)
+LEGACY_NEXT_CARD_ID_KEY = (
+    "0x2ac14ba6b10e5ff91888f263bf83e9a9e8da9327457f7e23b5dae0a9f0f8a915"
+)
+LEGACY_CARDS_PREFIX = (
+    "0x2ac14ba6b10e5ff91888f263bf83e9a947a302df212e07c474ca486147c54c8b"
+)
+LEGACY_CARD_KEY_HEX_LENGTH = 2 + (32 + 16 + 4) * 2
+LEGACY_CARD_KEY_PAGE_SIZE = 256
+MAX_LEGACY_CARD_KEYS = 100_000
+V16_MIGRATION_BATCH_SIZE = 100
+MAX_MIGRATION_BLOCKS = 1_000_000
+LEGACY_SOURCE_INVENTORY_KEYS = {
+    "captureMode",
+    "deployedSourceCommit",
+    "finality",
+    "kind",
+    "observedAtFinalizedBlock",
+    "observedAtUtc",
+    "releaseId",
+    "safety",
+    "schemaVersion",
+    "sourceCommit",
+    "storage",
+    "summary",
+}
+LEGACY_FINALITY_KEYS = {"blockHashAtNumber", "finalizedHead", "header"}
+LEGACY_RPC_QUERY_KEYS = {"method", "params", "result"}
+LEGACY_STORAGE_KEYS = {"cards", "nextCardId", "tcgStorageVersion"}
+LEGACY_CARD_STORAGE_KEYS = {
+    "at",
+    "method",
+    "pageSize",
+    "pages",
+    "pallet",
+    "prefix",
+    "storage",
+}
+LEGACY_PAGE_KEYS = {"keys", "startKey"}
+LEGACY_SUMMARY_KEYS = {
+    "cardIdsSha256",
+    "cardsCount",
+    "maxCardId",
+    "minimumMigrationBlocks",
+    "nextCardId",
+    "tcgStorageVersion",
+    "v16MigrationBatchSize",
+}
+LEGACY_SAFETY = {
+    "extrinsicSubmitted": False,
+    "isolatedFrozenCopy": True,
+    "readOnlyRpc": True,
+    "sourceStateMutated": False,
+}
 
 
 class SafetyError(RuntimeError):
@@ -266,6 +329,10 @@ def read_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
 def write_new_bytes(path: Path, value: bytes, mode: int = 0o600) -> None:
     require(not path.exists(), f"refusing to overwrite output: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -275,8 +342,7 @@ def write_new_bytes(path: Path, value: bytes, mode: int = 0o600) -> None:
 
 
 def write_new_json(path: Path, value: Mapping[str, Any]) -> None:
-    encoded = (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    write_new_bytes(path, encoded)
+    write_new_bytes(path, canonical_json_bytes(value))
 
 
 def ensure_release_id(value: str) -> str:
@@ -679,6 +745,7 @@ def validate_migration_result(
     snapshot_hash: str,
     runtime_hash: str,
     try_log_hash: str,
+    source_inventory: Mapping[str, Any],
 ) -> None:
     require(result.get("schemaVersion") == 1, "migration result schema mismatch")
     require(result.get("kind") == "nexus-v2-v14-v16-migration-result", "migration result kind mismatch")
@@ -718,6 +785,18 @@ def validate_migration_result(
     require(classified == counts["cardsSeen"], "migration classification counts do not reconcile")
     if max_seen is not None:
         require(counts["nextCardId"] > max_seen, "NextCardId is not greater than maxCardIdSeen")
+    require(
+        counts["nextCardId"] == source_inventory["nextCardId"],
+        "migration result NextCardId differs from the frozen source inventory",
+    )
+    require(
+        counts["legacyCardsBefore"] == source_inventory["cardsCount"],
+        "migration result card count differs from the frozen source inventory",
+    )
+    require(
+        max_seen == source_inventory["maxCardId"],
+        "migration result max card ID differs from the frozen source inventory",
+    )
 
 
 def command_rehearse_migration(args: argparse.Namespace) -> None:
@@ -731,9 +810,60 @@ def command_rehearse_migration(args: argparse.Namespace) -> None:
     require(sha256_file(try_runtime) == expected_try_hash, "try-runtime binary hash mismatch")
     require(sha256_file(verifier) == expected_verifier_hash, "migration verifier hash mismatch")
     require(bool(re.fullmatch(r"[0-9a-f]{7,40}", args.try_runtime_revision)), "invalid try-runtime revision")
+    source_inventory_path = find_artifact(
+        verified, bundle_root, "node", "legacy-source-inventory"
+    )
+    source_inventory = validate_legacy_source_inventory(
+        source_inventory_path, verified["releaseId"], verified["sourceCommit"]
+    )
+    observation_path = find_artifact(
+        verified, bundle_root, "node", "tcg-storage-version-observation"
+    )
+    observation = read_json(observation_path)
+    observation_block = finalized_block(
+        observation.get("finalizedBlock"), "pinned TCG storage-version observation"
+    )
     require(
-        isinstance(args.migration_blocks, int) and 1 <= args.migration_blocks <= 1_000_000,
-        "migration blocks must be in 1..1000000",
+        observation_block
+        == (source_inventory["blockNumber"], source_inventory["blockHash"]),
+        "legacy source inventory and TCG storage-version observation use different finalized blocks",
+    )
+    observation_live_source = observation.get("liveSource")
+    require(
+        isinstance(observation_live_source, dict)
+        and observation_live_source.get("commit") == source_inventory["deployedSourceCommit"],
+        "legacy source inventory deployed source differs from the TCG observation",
+    )
+    snapshot_proof_path = find_artifact(
+        verified, bundle_root, "node", "try-runtime-snapshot-proof"
+    )
+    snapshot_proof_value = read_json(snapshot_proof_path)
+    snapshot_block = finalized_block(
+        snapshot_proof_value.get("frozenFinalizedBlock"), "try-runtime snapshot proof"
+    )
+    require(
+        snapshot_block
+        == (source_inventory["blockNumber"], source_inventory["blockHash"]),
+        "legacy source inventory and try-runtime snapshot use different finalized blocks",
+    )
+    required_migration_blocks = source_inventory["minimumMigrationBlocks"]
+    migration_blocks = (
+        required_migration_blocks if args.migration_blocks is None else args.migration_blocks
+    )
+    require(
+        isinstance(migration_blocks, int)
+        and not isinstance(migration_blocks, bool)
+        and 1 <= migration_blocks <= MAX_MIGRATION_BLOCKS,
+        f"migration blocks must be in 1..{MAX_MIGRATION_BLOCKS}",
+    )
+    require(
+        required_migration_blocks <= MAX_MIGRATION_BLOCKS,
+        "frozen NextCardId exceeds the bounded migration-rehearsal block limit",
+    )
+    require(
+        migration_blocks >= required_migration_blocks,
+        "migration blocks are insufficient for frozen NextCardId: "
+        f"provided={migration_blocks} required={required_migration_blocks}",
     )
 
     snapshot = find_artifact(verified, bundle_root, "node", "try-runtime-snapshot")
@@ -764,7 +894,7 @@ def command_rehearse_migration(args: argparse.Namespace) -> None:
         str(runtime),
         "fast-forward",
         "--n-blocks",
-        str(args.migration_blocks),
+        str(migration_blocks),
         "--blocktime",
         "6000",
         "--try-state",
@@ -810,7 +940,14 @@ def command_rehearse_migration(args: argparse.Namespace) -> None:
     verified_run = run_and_capture(verifier_command, verifier_log)
     require(verified_run.returncode == 0, f"migration completion verifier failed; see {verifier_log}")
     result = read_json(result_path)
-    validate_migration_result(result, verified, snapshot_hash, runtime_hash, try_log_hash)
+    validate_migration_result(
+        result,
+        verified,
+        snapshot_hash,
+        runtime_hash,
+        try_log_hash,
+        source_inventory,
+    )
 
     evidence = {
         "schemaVersion": 1,
@@ -821,11 +958,21 @@ def command_rehearse_migration(args: argparse.Namespace) -> None:
         "fromStorageVersion": 14,
         "toStorageVersion": 16,
         "snapshotSha256": snapshot_hash,
+        "legacySourceInventorySha256": source_inventory["sha256"],
+        "legacySourceInventoryFinalizedBlock": {
+            "number": source_inventory["blockNumber"],
+            "hash": source_inventory["blockHash"],
+        },
+        "legacyNextCardId": source_inventory["nextCardId"],
+        "legacyCardsCount": source_inventory["cardsCount"],
+        "legacyMaxCardId": source_inventory["maxCardId"],
+        "v16MigrationBatchSize": V16_MIGRATION_BATCH_SIZE,
+        "minimumMigrationBlocks": required_migration_blocks,
         "runtimeWasmSha256": runtime_hash,
         "tryRuntimeRevision": args.try_runtime_revision,
         "tryRuntimeBinarySha256": expected_try_hash,
         "tryRuntimeVersion": try_version,
-        "tryRuntimeFastForwardBlocks": args.migration_blocks,
+        "tryRuntimeFastForwardBlocks": migration_blocks,
         "tryRuntimeLogSha256": try_log_hash,
         "migrationVerifierSha256": expected_verifier_hash,
         "migrationVerifierLogSha256": sha256_file(verifier_log),
@@ -846,6 +993,435 @@ def finalized_block(value: Any, label: str) -> tuple[int, str]:
     require(isinstance(number, int) and not isinstance(number, bool) and number >= 0, f"invalid {label} block number")
     block_hash = ensure_hash256(value["hash"], f"{label} block hash")
     return number, block_hash
+
+
+def minimum_v16_migration_blocks(next_card_id: int) -> int:
+    require(
+        isinstance(next_card_id, int)
+        and not isinstance(next_card_id, bool)
+        and 0 <= next_card_id <= 0xFFFF_FFFF,
+        "legacy NextCardId must be a u32",
+    )
+    return max(1, (next_card_id + V16_MIGRATION_BATCH_SIZE - 1) // V16_MIGRATION_BATCH_SIZE)
+
+
+def decode_scale_u32(value: Any, label: str) -> int:
+    if value is None:
+        return 0
+    require(
+        isinstance(value, str) and re.fullmatch(r"0x[0-9a-f]{8}", value) is not None,
+        f"{label} must be null or exactly four lowercase SCALE bytes",
+    )
+    return int.from_bytes(bytes.fromhex(value[2:]), "little")
+
+
+def decode_legacy_card_key(value: Any) -> int:
+    require(
+        isinstance(value, str)
+        and len(value) == LEGACY_CARD_KEY_HEX_LENGTH
+        and re.fullmatch(r"0x[0-9a-f]+", value) is not None,
+        "legacy Cards key is not canonical lowercase hex",
+    )
+    raw = bytes.fromhex(value[2:])
+    prefix = bytes.fromhex(LEGACY_CARDS_PREFIX[2:])
+    require(raw.startswith(prefix), "legacy Cards key has the wrong storage prefix")
+    encoded_id = raw[-4:]
+    require(
+        raw[32:48] == hashlib.blake2b(encoded_id, digest_size=16).digest(),
+        "legacy Cards key has an invalid Blake2_128Concat hash",
+    )
+    return int.from_bytes(encoded_id, "little")
+
+
+def validate_rpc_query(
+    value: Any,
+    method: str,
+    params: list[Any],
+    label: str,
+) -> Mapping[str, Any]:
+    query = require_exact_keys(value, LEGACY_RPC_QUERY_KEYS, label)
+    require(query.get("method") == method, f"{label} method mismatch")
+    require(query.get("params") == params, f"{label} parameters mismatch")
+    return query
+
+
+def validate_legacy_source_inventory_value(
+    value: Mapping[str, Any],
+    *,
+    release_id: str | None = None,
+    source_commit: str | None = None,
+) -> dict[str, Any]:
+    require_exact_keys(value, LEGACY_SOURCE_INVENTORY_KEYS, "legacy source inventory")
+    require(value.get("schemaVersion") == 1, "legacy source inventory schema mismatch")
+    require(value.get("kind") == LEGACY_SOURCE_INVENTORY_KIND, "legacy source inventory kind mismatch")
+    inventory_release = ensure_release_id(str(value.get("releaseId", "")))
+    inventory_source = ensure_commit(str(value.get("sourceCommit", "")))
+    deployed_source = ensure_commit(str(value.get("deployedSourceCommit", "")))
+    if release_id is not None:
+        require(inventory_release == release_id, "legacy source inventory release mismatch")
+    if source_commit is not None:
+        require(inventory_source == source_commit, "legacy source inventory source mismatch")
+    parse_utc(str(value.get("observedAtUtc", "")), "legacy source inventory observedAtUtc")
+    require(
+        value.get("captureMode") == "isolated-frozen-copy-read-only",
+        "legacy source inventory was not captured from the isolated frozen copy",
+    )
+    require(value.get("safety") == LEGACY_SAFETY, "legacy source inventory safety contract mismatch")
+    block_number, block_hash = finalized_block(
+        value.get("observedAtFinalizedBlock"), "legacy source inventory"
+    )
+    require(block_number > 0, "legacy source inventory may not use genesis block zero")
+
+    finality = require_exact_keys(value.get("finality"), LEGACY_FINALITY_KEYS, "legacy inventory finality")
+    finalized = validate_rpc_query(
+        finality["finalizedHead"], "chain_getFinalizedHead", [], "legacy finalized-head query"
+    )
+    require(finalized.get("result") == block_hash, "legacy inventory finalized head mismatch")
+    at_number = validate_rpc_query(
+        finality["blockHashAtNumber"],
+        "chain_getBlockHash",
+        [block_number],
+        "legacy block-number query",
+    )
+    require(at_number.get("result") == block_hash, "legacy inventory block-number hash mismatch")
+    header = validate_rpc_query(
+        finality["header"], "chain_getHeader", [block_hash], "legacy block-header query"
+    )
+    header_result = header.get("result")
+    require(isinstance(header_result, dict), "legacy inventory block header is missing")
+    header_number = header_result.get("number")
+    require(
+        isinstance(header_number, str)
+        and re.fullmatch(r"0x[0-9a-f]+", header_number) is not None
+        and int(header_number, 16) == block_number,
+        "legacy inventory block header number mismatch",
+    )
+
+    storage = require_exact_keys(value.get("storage"), LEGACY_STORAGE_KEYS, "legacy inventory storage")
+    plain_keys = {"key", "pallet", "query", "storage"}
+    version = require_exact_keys(
+        storage["tcgStorageVersion"], plain_keys, "legacy TCG storage-version capture"
+    )
+    require(
+        version.get("pallet") == "EterraTCG"
+        and version.get("storage") == ":__STORAGE_VERSION__:",
+        "legacy TCG storage-version identity mismatch",
+    )
+    require(version.get("key") == LEGACY_TCG_STORAGE_VERSION_KEY, "legacy TCG storage-version key mismatch")
+    version_query = validate_rpc_query(
+        version.get("query"),
+        "state_getStorage",
+        [LEGACY_TCG_STORAGE_VERSION_KEY, block_hash],
+        "legacy TCG storage-version query",
+    )
+    require(version_query.get("result") == "0x0e00", "legacy TCG source storage is not V14")
+
+    next_card = require_exact_keys(storage["nextCardId"], plain_keys, "legacy NextCardId capture")
+    require(
+        next_card.get("pallet") == "EterraTCG" and next_card.get("storage") == "NextCardId",
+        "legacy NextCardId identity mismatch",
+    )
+    require(next_card.get("key") == LEGACY_NEXT_CARD_ID_KEY, "legacy NextCardId key mismatch")
+    next_query = validate_rpc_query(
+        next_card.get("query"),
+        "state_getStorage",
+        [LEGACY_NEXT_CARD_ID_KEY, block_hash],
+        "legacy NextCardId query",
+    )
+    next_card_id = decode_scale_u32(next_query.get("result"), "legacy NextCardId result")
+
+    cards = require_exact_keys(storage["cards"], LEGACY_CARD_STORAGE_KEYS, "legacy Cards capture")
+    require(
+        cards.get("pallet") == "EterraTCG" and cards.get("storage") == "Cards",
+        "legacy Cards identity mismatch",
+    )
+    require(cards.get("prefix") == LEGACY_CARDS_PREFIX, "legacy Cards storage prefix mismatch")
+    require(cards.get("method") == "state_getKeysPaged", "legacy Cards query method mismatch")
+    require(cards.get("at") == block_hash, "legacy Cards query block mismatch")
+    require(cards.get("pageSize") == LEGACY_CARD_KEY_PAGE_SIZE, "legacy Cards page size mismatch")
+    pages = cards.get("pages")
+    require(isinstance(pages, list) and pages, "legacy Cards pages must be a non-empty array")
+    all_keys: list[str] = []
+    expected_start: str | None = None
+    for index, raw_page in enumerate(pages):
+        page = require_exact_keys(raw_page, LEGACY_PAGE_KEYS, f"legacy Cards page {index}")
+        require(page.get("startKey") == expected_start, f"legacy Cards page {index} cursor mismatch")
+        keys = page.get("keys")
+        require(
+            isinstance(keys, list) and len(keys) <= LEGACY_CARD_KEY_PAGE_SIZE,
+            f"legacy Cards page {index} is invalid",
+        )
+        require(keys == sorted(keys), f"legacy Cards page {index} is not sorted")
+        if expected_start is not None and keys:
+            require(keys[0] > expected_start, f"legacy Cards page {index} repeated its cursor")
+        all_keys.extend(keys)
+        require(len(all_keys) <= MAX_LEGACY_CARD_KEYS, "legacy Cards inventory exceeds the collector bound")
+        expected_start = keys[-1] if keys else expected_start
+        if index < len(pages) - 1:
+            require(
+                len(keys) == LEGACY_CARD_KEY_PAGE_SIZE,
+                "legacy Cards capture continued after a short page",
+            )
+        else:
+            require(
+                len(keys) < LEGACY_CARD_KEY_PAGE_SIZE,
+                "legacy Cards capture lacks a terminal short page",
+            )
+    require(all_keys == sorted(set(all_keys)), "legacy Cards keys are duplicated or globally unsorted")
+    card_ids = [decode_legacy_card_key(key) for key in all_keys]
+    require(len(card_ids) == len(set(card_ids)), "legacy Cards decoded IDs are duplicated")
+    max_card_id = max(card_ids) if card_ids else None
+    if max_card_id is not None:
+        require(next_card_id > max_card_id, "legacy Cards contains an ID outside NextCardId")
+    card_ids_sha256 = sha256_bytes(
+        b"".join(card_id.to_bytes(4, "little") for card_id in sorted(card_ids))
+    )
+    minimum_blocks = minimum_v16_migration_blocks(next_card_id)
+
+    summary = require_exact_keys(value.get("summary"), LEGACY_SUMMARY_KEYS, "legacy inventory summary")
+    expected_summary = {
+        "cardIdsSha256": card_ids_sha256,
+        "cardsCount": len(card_ids),
+        "maxCardId": max_card_id,
+        "minimumMigrationBlocks": minimum_blocks,
+        "nextCardId": next_card_id,
+        "tcgStorageVersion": 14,
+        "v16MigrationBatchSize": V16_MIGRATION_BATCH_SIZE,
+    }
+    require(summary == expected_summary, "legacy source inventory summary is not derived from its RPC evidence")
+    return {
+        "releaseId": inventory_release,
+        "sourceCommit": inventory_source,
+        "deployedSourceCommit": deployed_source,
+        "blockNumber": block_number,
+        "blockHash": block_hash,
+        **expected_summary,
+    }
+
+
+def validate_legacy_source_inventory(
+    path: Path,
+    release_id: str | None = None,
+    source_commit: str | None = None,
+) -> dict[str, Any]:
+    require(path.is_file() and not path.is_symlink(), "legacy source inventory must be a regular file")
+    value = read_json(path)
+    require(
+        path.read_bytes() == canonical_json_bytes(value),
+        "legacy source inventory is not canonical JSON",
+    )
+    result = validate_legacy_source_inventory_value(
+        value, release_id=release_id, source_commit=source_commit
+    )
+    result["sha256"] = sha256_file(path)
+    return result
+
+
+class FrozenInventoryRpc:
+    def __init__(self, url: str, timeout_seconds: float) -> None:
+        parsed = urllib.parse.urlparse(url)
+        require(parsed.scheme == "http", "legacy inventory RPC must use HTTP over the local tunnel")
+        require(parsed.hostname in {"127.0.0.1", "::1"}, "legacy inventory RPC must be loopback-only")
+        require(parsed.port is not None, "legacy inventory RPC must include an explicit port")
+        require(not parsed.username and not parsed.password, "legacy inventory RPC may not contain credentials")
+        require(parsed.path in {"", "/"} and not parsed.query and not parsed.fragment, "legacy inventory RPC URL is invalid")
+        require(timeout_seconds > 0 and timeout_seconds <= 60, "legacy inventory RPC timeout is invalid")
+        self.url = url
+        self.timeout_seconds = timeout_seconds
+        self.request_id = 0
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def call(self, method: str, params: list[Any]) -> Any:
+        self.request_id += 1
+        payload = json.dumps(
+            {"id": self.request_id, "jsonrpc": "2.0", "method": method, "params": params},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            self.url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with self.opener.open(request, timeout=self.timeout_seconds) as response:
+                body = response.read(8 * 1024 * 1024 + 1)
+        except (OSError, urllib.error.URLError) as exc:
+            raise SafetyError(f"legacy inventory RPC failed: {method}") from exc
+        require(len(body) <= 8 * 1024 * 1024, "legacy inventory RPC response is too large")
+        try:
+            value = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SafetyError(f"legacy inventory RPC returned invalid JSON: {method}") from exc
+        require(
+            isinstance(value, dict)
+            and value.get("jsonrpc") == "2.0"
+            and value.get("id") == self.request_id
+            and "result" in value
+            and "error" not in value,
+            f"legacy inventory RPC returned an invalid envelope: {method}",
+        )
+        return value["result"]
+
+
+def rpc_query(rpc: FrozenInventoryRpc, method: str, params: list[Any]) -> dict[str, Any]:
+    return {"method": method, "params": params, "result": rpc.call(method, params)}
+
+
+def collect_legacy_source_inventory(
+    rpc: FrozenInventoryRpc,
+    *,
+    release_id: str,
+    source_commit: str,
+    deployed_source_commit: str,
+    block_number: int,
+    block_hash: str,
+    observed_at: str,
+) -> dict[str, Any]:
+    release_id = ensure_release_id(release_id)
+    source_commit = ensure_commit(source_commit)
+    deployed_source_commit = ensure_commit(deployed_source_commit)
+    require(block_number > 0, "legacy source inventory may not use genesis block zero")
+    block_hash = ensure_hash256(block_hash, "legacy source inventory block hash")
+    parse_utc(observed_at, "legacy source inventory observedAtUtc")
+    finalized = rpc_query(rpc, "chain_getFinalizedHead", [])
+    at_number = rpc_query(rpc, "chain_getBlockHash", [block_number])
+    header = rpc_query(rpc, "chain_getHeader", [block_hash])
+    require(finalized["result"] == block_hash, "isolated RPC finalized head differs from the frozen block")
+    require(at_number["result"] == block_hash, "isolated RPC block-number hash differs from the frozen block")
+
+    version_query = rpc_query(
+        rpc, "state_getStorage", [LEGACY_TCG_STORAGE_VERSION_KEY, block_hash]
+    )
+    next_query = rpc_query(rpc, "state_getStorage", [LEGACY_NEXT_CARD_ID_KEY, block_hash])
+    pages: list[dict[str, Any]] = []
+    start_key: str | None = None
+    while True:
+        params: list[Any] = [LEGACY_CARDS_PREFIX, LEGACY_CARD_KEY_PAGE_SIZE, start_key, block_hash]
+        keys = rpc.call("state_getKeysPaged", params)
+        require(isinstance(keys, list), "legacy Cards RPC page is not an array")
+        pages.append({"startKey": start_key, "keys": keys})
+        total = sum(len(page["keys"]) for page in pages)
+        require(total <= MAX_LEGACY_CARD_KEYS, "legacy Cards inventory exceeds the collector bound")
+        if len(keys) < LEGACY_CARD_KEY_PAGE_SIZE:
+            break
+        require(keys, "legacy Cards RPC returned an impossible full empty page")
+        start_key = keys[-1]
+    require(
+        rpc.call("chain_getFinalizedHead", []) == block_hash,
+        "isolated RPC finalized head changed during inventory capture",
+    )
+
+    provisional = {
+        "schemaVersion": 1,
+        "kind": LEGACY_SOURCE_INVENTORY_KIND,
+        "releaseId": release_id,
+        "sourceCommit": source_commit,
+        "deployedSourceCommit": deployed_source_commit,
+        "observedAtUtc": observed_at,
+        "observedAtFinalizedBlock": {"number": block_number, "hash": block_hash},
+        "captureMode": "isolated-frozen-copy-read-only",
+        "finality": {
+            "finalizedHead": finalized,
+            "blockHashAtNumber": at_number,
+            "header": header,
+        },
+        "storage": {
+            "tcgStorageVersion": {
+                "pallet": "EterraTCG",
+                "storage": ":__STORAGE_VERSION__:",
+                "key": LEGACY_TCG_STORAGE_VERSION_KEY,
+                "query": version_query,
+            },
+            "nextCardId": {
+                "pallet": "EterraTCG",
+                "storage": "NextCardId",
+                "key": LEGACY_NEXT_CARD_ID_KEY,
+                "query": next_query,
+            },
+            "cards": {
+                "pallet": "EterraTCG",
+                "storage": "Cards",
+                "prefix": LEGACY_CARDS_PREFIX,
+                "method": "state_getKeysPaged",
+                "at": block_hash,
+                "pageSize": LEGACY_CARD_KEY_PAGE_SIZE,
+                "pages": pages,
+            },
+        },
+        "summary": {},
+        "safety": dict(LEGACY_SAFETY),
+    }
+    storage_cards = provisional["storage"]["cards"]
+    card_ids = [
+        decode_legacy_card_key(key)
+        for page in storage_cards["pages"]
+        for key in page["keys"]
+    ]
+    next_card_id = decode_scale_u32(next_query["result"], "legacy NextCardId result")
+    provisional["summary"] = {
+        "cardIdsSha256": sha256_bytes(
+            b"".join(card_id.to_bytes(4, "little") for card_id in sorted(card_ids))
+        ),
+        "cardsCount": len(card_ids),
+        "maxCardId": max(card_ids) if card_ids else None,
+        "minimumMigrationBlocks": minimum_v16_migration_blocks(next_card_id),
+        "nextCardId": next_card_id,
+        "tcgStorageVersion": 14,
+        "v16MigrationBatchSize": V16_MIGRATION_BATCH_SIZE,
+    }
+    validate_legacy_source_inventory_value(
+        provisional, release_id=release_id, source_commit=source_commit
+    )
+    return provisional
+
+
+def command_capture_legacy_source_inventory(args: argparse.Namespace) -> None:
+    inventory = collect_legacy_source_inventory(
+        FrozenInventoryRpc(args.rpc_url, args.rpc_timeout_seconds),
+        release_id=args.release_id,
+        source_commit=args.source_commit,
+        deployed_source_commit=args.deployed_source_commit,
+        block_number=args.block_number,
+        block_hash=args.block_hash,
+        observed_at=args.observed_at or utc_now(),
+    )
+    output = Path(args.output).resolve()
+    observation_output = Path(args.storage_version_observation_output).resolve()
+    require(output != observation_output, "inventory and storage-version outputs must differ")
+    write_new_json(output, inventory)
+    summary = validate_legacy_source_inventory(
+        output, inventory["releaseId"], inventory["sourceCommit"]
+    )
+    version_result = inventory["storage"]["tcgStorageVersion"]["query"]["result"]
+    observation = {
+        "schemaVersion": 1,
+        "kind": "frame-pallet-storage-version-observation",
+        "finalizedBlock": inventory["observedAtFinalizedBlock"],
+        "decoded": {"scaleType": "u16", "storageVersion": 14},
+        "derivation": {
+            "palletName": "EterraTCG",
+            "postfix": ":__STORAGE_VERSION__:",
+            "rustHelper": "alpha_v2_release.py",
+            "storageKeyFormula": "Twox128(palletName) ++ Twox128(postfix)",
+        },
+        "liveSource": {
+            "commit": inventory["deployedSourceCommit"],
+            "declaredStorageVersion": 14,
+        },
+        "readOnlyRpc": {
+            "method": "state_getStorage",
+            "storageKey": LEGACY_TCG_STORAGE_VERSION_KEY,
+            "result": version_result,
+        },
+    }
+    write_new_json(observation_output, observation)
+    print(
+        "frozen legacy source inventory captured: "
+        f"block={summary['blockNumber']} nextCardId={summary['nextCardId']} "
+        f"cards={summary['cardsCount']} minimumMigrationBlocks={summary['minimumMigrationBlocks']} "
+        f"sha256={summary['sha256']}"
+    )
 
 
 def require_path_value(root: Mapping[str, Any], path: Sequence[str], expected: Any) -> None:
@@ -1086,6 +1662,7 @@ def validate_pre_v16_fresh_reset_gates(
             "runtimeV14WasmSha256",
             "runtimeMetadataScaleSha256",
             "tcgStorageVersionObservationSha256",
+            "legacySourceInventorySha256",
         },
         "pre-V16 source runtime",
     )
@@ -1120,6 +1697,10 @@ def validate_pre_v16_fresh_reset_gates(
     observation_hash = ensure_sha256(
         source_runtime.get("tcgStorageVersionObservationSha256"),
         "pre-V16 TCG storage-version observation SHA-256",
+    )
+    source_inventory_hash = ensure_sha256(
+        source_runtime.get("legacySourceInventorySha256"),
+        "pre-V16 legacy source inventory SHA-256",
     )
 
     v2_absence = require_exact_keys(
@@ -1247,6 +1828,7 @@ def validate_pre_v16_fresh_reset_gates(
         "runtimeV14WasmSha256": runtime_v14_hash,
         "runtimeMetadataScaleSha256": metadata_hash,
         "tcgStorageVersionObservationSha256": observation_hash,
+        "legacySourceInventorySha256": source_inventory_hash,
         "writeBarrierEvidenceSha256": write_barrier_hash,
         "writeBarrierStoppedAtUtc": stopped_at.isoformat(),
         "sha256": sha256_file(path),
@@ -1341,6 +1923,7 @@ def validate_migration_evidence(
     release_id: str,
     source_commit: str,
     manifest_hash: str,
+    source_inventory: Mapping[str, Any],
 ) -> dict[str, Any]:
     evidence = read_json(path)
     require(evidence.get("schemaVersion") == 1, "migration evidence schema mismatch")
@@ -1349,6 +1932,39 @@ def validate_migration_evidence(
     require(evidence.get("sourceCommit") == source_commit, "migration evidence source commit mismatch")
     require(evidence.get("backupManifestSha256") == manifest_hash, "migration evidence manifest mismatch")
     require(evidence.get("fromStorageVersion") == 14 and evidence.get("toStorageVersion") == 16, "migration evidence version mismatch")
+    require(
+        evidence.get("legacySourceInventorySha256") == source_inventory["sha256"],
+        "migration evidence source-inventory hash mismatch",
+    )
+    require(
+        evidence.get("legacySourceInventoryFinalizedBlock")
+        == {
+            "number": source_inventory["blockNumber"],
+            "hash": source_inventory["blockHash"],
+        },
+        "migration evidence source-inventory block mismatch",
+    )
+    require(
+        evidence.get("legacyNextCardId") == source_inventory["nextCardId"]
+        and evidence.get("legacyCardsCount") == source_inventory["cardsCount"]
+        and evidence.get("legacyMaxCardId") == source_inventory["maxCardId"],
+        "migration evidence source-inventory summary mismatch",
+    )
+    require(
+        evidence.get("v16MigrationBatchSize") == V16_MIGRATION_BATCH_SIZE,
+        "migration evidence batch size mismatch",
+    )
+    require(
+        evidence.get("minimumMigrationBlocks") == source_inventory["minimumMigrationBlocks"],
+        "migration evidence minimum block calculation mismatch",
+    )
+    supplied_blocks = evidence.get("tryRuntimeFastForwardBlocks")
+    require(
+        isinstance(supplied_blocks, int)
+        and not isinstance(supplied_blocks, bool)
+        and supplied_blocks >= source_inventory["minimumMigrationBlocks"],
+        "migration evidence used insufficient fast-forward blocks",
+    )
     require(evidence.get("result") == "passed", "V14-to-V16 rehearsal did not pass")
     require(evidence.get("liveRpcUsed") is False, "migration evidence used live RPC")
     require(evidence.get("extrinsicSubmitted") is False, "migration evidence submitted an extrinsic")
@@ -1368,6 +1984,12 @@ def validate_pre_v16_fresh_reset_artifact_binding(
         "node",
         "tcg-storage-version-observation",
     )
+    source_inventory_path = find_artifact(
+        verified,
+        bundle_root,
+        "node",
+        "legacy-source-inventory",
+    )
     require(
         sha256_file(runtime_v14) == gates["runtimeV14WasmSha256"],
         "pre-V16 gate runtime hash does not match the pinned V14 Wasm",
@@ -1375,6 +1997,25 @@ def validate_pre_v16_fresh_reset_artifact_binding(
     require(
         sha256_file(observation_path) == gates["tcgStorageVersionObservationSha256"],
         "pre-V16 gate observation hash does not match the pinned TCG observation",
+    )
+    require(
+        sha256_file(source_inventory_path) == gates["legacySourceInventorySha256"],
+        "pre-V16 gate source-inventory hash does not match the pinned legacy inventory",
+    )
+
+    source_inventory = validate_legacy_source_inventory(
+        source_inventory_path,
+        verified["releaseId"],
+        verified["sourceCommit"],
+    )
+    require(
+        (source_inventory["blockNumber"], source_inventory["blockHash"])
+        == (gates["blockNumber"], gates["blockHash"]),
+        "pre-V16 gate block does not match the pinned legacy source inventory",
+    )
+    require(
+        source_inventory["deployedSourceCommit"] == gates["deployedSourceCommit"],
+        "pre-V16 deployed source commit does not match the pinned legacy inventory",
     )
 
     observation = read_json(observation_path)
@@ -1401,9 +2042,13 @@ def validate_pre_v16_fresh_reset_artifact_binding(
         and read_only_rpc.get("result") == "0x0e00",
         "pinned TCG observation does not prove SCALE storage version 14",
     )
-    ensure_hash256(
-        read_only_rpc.get("storageKey"),
-        "pinned TCG storage-version key",
+    require(
+        ensure_hash256(
+            read_only_rpc.get("storageKey"),
+            "pinned TCG storage-version key",
+        )
+        == LEGACY_TCG_STORAGE_VERSION_KEY,
+        "pinned TCG storage-version key is not the EterraTCG storage-version key",
     )
     live_source = observation.get("liveSource")
     require(
@@ -1427,6 +2072,11 @@ def command_prepare_reset(args: argparse.Namespace) -> None:
     gates_path = Path(args.economic_gates).resolve()
     inventory_path = Path(args.acceptance_inventory).resolve()
     pinned_gates_path = find_artifact(verified, bundle_root, "config", "economic-gates")
+    source_inventory = validate_legacy_source_inventory(
+        find_artifact(verified, bundle_root, "node", "legacy-source-inventory"),
+        verified["releaseId"],
+        verified["sourceCommit"],
+    )
     require(
         sha256_file(gates_path) == sha256_file(pinned_gates_path),
         "economic gates do not match the hash-pinned backup artifact",
@@ -1442,6 +2092,7 @@ def command_prepare_reset(args: argparse.Namespace) -> None:
         verified["releaseId"],
         verified["sourceCommit"],
         verified["sha256"],
+        source_inventory,
     )
     gates = validate_economic_gates(
         gates_path,
@@ -1706,13 +2357,33 @@ def build_parser() -> argparse.ArgumentParser:
     restore.add_argument("--evidence", required=True)
     restore.set_defaults(handler=command_rehearse_restore)
 
+    source_inventory = subparsers.add_parser(
+        "capture-legacy-source-inventory",
+        help="capture V14 legacy inventory from an isolated frozen loopback RPC",
+    )
+    source_inventory.add_argument("--rpc-url", required=True)
+    source_inventory.add_argument("--rpc-timeout-seconds", type=float, default=10.0)
+    source_inventory.add_argument("--release-id", required=True)
+    source_inventory.add_argument("--source-commit", required=True)
+    source_inventory.add_argument("--deployed-source-commit", required=True)
+    source_inventory.add_argument("--block-number", type=int, required=True)
+    source_inventory.add_argument("--block-hash", required=True)
+    source_inventory.add_argument("--observed-at")
+    source_inventory.add_argument("--storage-version-observation-output", required=True)
+    source_inventory.add_argument("--output", required=True)
+    source_inventory.set_defaults(handler=command_capture_legacy_source_inventory)
+
     migration = subparsers.add_parser("rehearse-migration", help="record V14-to-V16 copied-state evidence")
     migration.add_argument("--manifest", required=True)
     migration.add_argument("--bundle-root", required=True)
     migration.add_argument("--try-runtime-bin", required=True)
     migration.add_argument("--try-runtime-revision", required=True)
     migration.add_argument("--try-runtime-sha256", required=True)
-    migration.add_argument("--migration-blocks", required=True, type=int)
+    migration.add_argument(
+        "--migration-blocks",
+        type=int,
+        help="optional override; omitted uses the deterministic minimum from frozen NextCardId",
+    )
     migration.add_argument("--migration-verifier", required=True)
     migration.add_argument("--migration-verifier-sha256", required=True)
     migration.add_argument("--evidence", required=True)
@@ -1746,7 +2417,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         args.handler(args)
-    except SafetyError as exc:
+    except (SafetyError, ValueError) as exc:
         print(f"nexus-v2-private-alpha: {exc}", file=sys.stderr)
         return 2
     return 0

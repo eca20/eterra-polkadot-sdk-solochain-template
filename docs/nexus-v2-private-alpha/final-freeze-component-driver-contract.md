@@ -111,7 +111,12 @@ and superseded-macOS-not-copied proof. It
 never accepts a pre-existing try-runtime snapshot. After the node stops, the
 driver archives its exact base path, extracts that archive into a disposable
 isolated base path, and proves the copy's finalized head/number/hash equal the
-frozen marker. It invokes the pinned CLI with explicit `--at` and emits
+frozen marker. Through a loopback-only tunnel to that copy it emits
+`node:legacy-source-inventory` and a fresh
+`node:tcg-storage-version-observation` from the same finalized block. The
+inventory contains the raw paged `Cards` keys plus derived count/maximum ID,
+the SCALE `NextCardId`, and the deterministic V16 migration-block minimum. It
+then invokes the pinned CLI with explicit `--at` and emits
 `node:try-runtime-snapshot-proof`, binding the snapshot to the stopped archive,
 node, chain spec, frozen marker, RPC observations, CLI, and creation log. The
 coordinator independently verifies that proof before producing the backup

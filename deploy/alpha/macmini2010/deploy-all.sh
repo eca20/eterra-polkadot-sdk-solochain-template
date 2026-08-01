@@ -12,6 +12,7 @@ fresh=0
 fresh_reset_readiness=""
 dry_run=0
 phase1_closed=0
+build_media_candidate=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -47,6 +48,7 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--build-media-candidate)
 			[[ $# -ge 2 ]] || { echo "--build-media-candidate requires an output path" >&2; exit 2; }
+			build_media_candidate=1
 			media_args+=("--build-candidate" "$2")
 			shift
 			;;
@@ -95,6 +97,8 @@ Pass --authorize-arcade-authority to deploy and run the one-shot relay authoriza
 Pass --seed-nova-rail-config to run the explicit idempotent ArcadeCore seed after deploy.
 Normal deploys never mutate live chain configuration beyond a separately authorized runtime upgrade.
 Release media deployment requires a candidate build followed by a separate immutable promotion.
+The media candidate build is a standalone, non-mutating operation and cannot be
+combined with node, reset, authority, promotion, or evidence options.
 Pass --phase1-closed with --fresh to preclose every RPC, P2P, and authority
 firewall rule before restart and launch RPC plus the legacy authority on
 loopback only. It implies --with-arcade-authority and forbids authorization or
@@ -110,6 +114,23 @@ EOF
 	shift
 done
 
+if [[ "${build_media_candidate}" -eq 1 ]]; then
+	[[ "${fresh}" -eq 0 && "${dry_run}" -eq 0 && "${phase1_closed}" -eq 0 ]] || {
+		echo "--build-media-candidate cannot be combined with reset or Phase-1 options" >&2
+		exit 2
+	}
+	[[ -z "${fresh_reset_readiness}" && "${deploy_authority}" -eq 0 && "${seed_nova_rail_config}" -eq 0 ]] || {
+		echo "--build-media-candidate cannot be combined with authority, seed, or readiness options" >&2
+		exit 2
+	}
+	[[ "${#node_args[@]}" -eq 0 && "${#media_args[@]}" -eq 2 ]] || {
+		echo "--build-media-candidate must be the only candidate or deployment action" >&2
+		exit 2
+	}
+	"${SCRIPT_DIR}/deploy-media.sh" "${media_args[@]}"
+	exit 0
+fi
+
 if [[ "${phase1_closed}" -eq 1 ]]; then
 	[[ "${fresh}" -eq 1 ]] || { echo "--phase1-closed requires --fresh" >&2; exit 2; }
 	[[ "${seed_nova_rail_config}" -eq 0 && ${#authority_args[@]} -eq 0 ]] || {
@@ -117,6 +138,7 @@ if [[ "${phase1_closed}" -eq 1 ]]; then
 		exit 2
 	}
 	node_args+=("--phase1-closed")
+	media_args+=("--phase1-closed")
 	authority_args+=("--phase1-closed")
 fi
 

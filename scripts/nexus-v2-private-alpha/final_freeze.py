@@ -81,6 +81,7 @@ COMPONENT_ARTIFACTS: dict[str, set[tuple[str, str]]] = {
         ("node", "runtime-v14-metadata"),
         ("node", "runtime-v16-production-wasm"),
         ("node", "runtime-v16-try-runtime-wasm"),
+        ("node", "legacy-source-inventory"),
         ("node", "tcg-storage-version-observation"),
         ("node", "try-runtime-snapshot"),
         ("node", "try-runtime-snapshot-proof"),
@@ -653,6 +654,40 @@ def coordinator_artifacts(
     runtime_v14_hash = chain_artifacts[("node", "runtime-v14-wasm")]["sha256"]
     metadata_v14_hash = chain_artifacts[("node", "runtime-v14-metadata")]["sha256"]
     tcg_observation_hash = chain_artifacts[("node", "tcg-storage-version-observation")]["sha256"]
+    legacy_inventory_path = chain_artifact_path("legacy-source-inventory")
+    legacy_inventory = release.validate_legacy_source_inventory(
+        legacy_inventory_path,
+        plan["releaseId"],
+        plan["sourceCommit"],
+    )
+    require(
+        (legacy_inventory["blockNumber"], legacy_inventory["blockHash"])
+        == (frozen["number"], frozen["hash"]),
+        "legacy source inventory does not use the exact stopped finalized block",
+    )
+    require(
+        legacy_inventory["deployedSourceCommit"]
+        == plan["preV16SourceRuntime"]["deployedSourceCommit"],
+        "legacy source inventory deployed source mismatch",
+    )
+    tcg_observation = read_json(
+        chain_artifact_path("tcg-storage-version-observation"),
+        "frozen TCG storage-version observation",
+    )
+    require(
+        release.finalized_block(
+            tcg_observation.get("finalizedBlock"),
+            "frozen TCG storage-version observation",
+        )
+        == (frozen["number"], frozen["hash"]),
+        "TCG storage-version observation does not use the exact stopped finalized block",
+    )
+    require(
+        isinstance(tcg_observation.get("liveSource"), dict)
+        and tcg_observation["liveSource"].get("commit")
+        == legacy_inventory["deployedSourceCommit"],
+        "TCG storage-version observation and legacy inventory source differ",
+    )
     gates = {
         "schemaVersion": 1,
         "kind": release.PRE_V16_FRESH_RESET_GATE_KIND,
@@ -670,6 +705,7 @@ def coordinator_artifacts(
             "runtimeV14WasmSha256": runtime_v14_hash,
             "runtimeMetadataScaleSha256": metadata_v14_hash,
             "tcgStorageVersionObservationSha256": tcg_observation_hash,
+            "legacySourceInventorySha256": legacy_inventory["sha256"],
         },
         "v2StructuralAbsence": {
             "absentPallets": release.PRE_V16_ABSENT_V2_PALLETS,

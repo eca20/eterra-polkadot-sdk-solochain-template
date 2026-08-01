@@ -107,7 +107,7 @@ case "${role}" in
 		expected_roles=$'authority:authority-state\nconfig:authority-env\nservice:authority-service'
 		;;
 	chain)
-		expected_roles=$'config:chain-spec\nconfig:node-env\nnode:node-binary\nnode:node-data\nnode:runtime-v14-metadata\nnode:runtime-v14-wasm\nnode:runtime-v16-production-wasm\nnode:runtime-v16-try-runtime-wasm\nnode:tcg-storage-version-observation\nnode:try-runtime-snapshot\nnode:try-runtime-snapshot-proof\nservice:node-service'
+		expected_roles=$'config:chain-spec\nconfig:node-env\nnode:legacy-source-inventory\nnode:node-binary\nnode:node-data\nnode:runtime-v14-metadata\nnode:runtime-v14-wasm\nnode:runtime-v16-production-wasm\nnode:runtime-v16-try-runtime-wasm\nnode:tcg-storage-version-observation\nnode:try-runtime-snapshot\nnode:try-runtime-snapshot-proof\nservice:node-service'
 		[[ -d "${runtime_bundle}" && ! -L "${runtime_bundle}" ]] || die "chain snapshot requires a regular runtime bundle directory"
 		[[ "${runtime_bundle_manifest_sha256}" =~ ^[0-9a-f]{64}$ ]] || die "chain snapshot requires a runtime bundle manifest SHA-256"
 		[[ -f "${runtime_v14_metadata}" && ! -L "${runtime_v14_metadata}" ]] || die "chain snapshot requires regular runtime V14 metadata"
@@ -122,6 +122,8 @@ case "${role}" in
 			--runtime-bundle "${runtime_bundle}" \
 			--expected-manifest-sha256 "${runtime_bundle_manifest_sha256}" >/dev/null ||
 			die "runtime bundle is not the exact frozen Linux spec-106 private-alpha candidate"
+		deployed_source_commit="$(jq -er '.liveSource.commit | select(test("^[0-9a-f]{40}$"))' "${runtime_bundle}/tcg-storage-version-observation.json")" ||
+			die "runtime bundle TCG observation deployed source commit is invalid"
 		try_runtime_bin="${runtime_bundle}/try-runtime"
 		[[ -x "${try_runtime_bin}" && -f "${try_runtime_bin}" && ! -L "${try_runtime_bin}" ]] || die "runtime bundle try-runtime CLI is unavailable"
 		try_runtime_sha256="$(jq -er '.artifacts.tryRuntimeCliSha256 | select(test("^[0-9a-f]{64}$"))' "${runtime_bundle}/runtime-bundle-manifest.json")" || die "runtime bundle try-runtime hash is invalid"
@@ -616,6 +618,19 @@ PY
 			[[ "${tunnel_ready}" -eq 1 ]] || die "isolated snapshot SSH tunnel did not become ready"
 
 			mkdir -p "${local_capture_root}/node" "${local_capture_root}/config" "${local_capture_root}/service"
+			legacy_inventory_path="${local_capture_root}/node/legacy-source-inventory.json"
+			storage_observation_path="${local_capture_root}/node/tcg-storage-version-observation.json"
+			"${REPO_ROOT}/scripts/nexus-v2-private-alpha/alpha_v2_release.py" capture-legacy-source-inventory \
+				--rpc-url "http://127.0.0.1:${local_snapshot_rpc_port}" \
+				--release-id "${release_id}" \
+				--source-commit "${source_commit}" \
+				--deployed-source-commit "${deployed_source_commit}" \
+				--block-number "${frozen_block_number}" \
+				--block-hash "${frozen_block_hash}" \
+				--observed-at "${frozen_at}" \
+				--storage-version-observation-output "${storage_observation_path}" \
+				--output "${legacy_inventory_path}" >/dev/null ||
+				die "exact frozen-block legacy source inventory capture failed"
 			snapshot_path="${local_capture_root}/node/try-runtime-snapshot"
 			snapshot_log="$(dirname -- "${result_path}")/chain-frozen-try-runtime-snapshot.log"
 			[[ ! -e "${snapshot_path}" && ! -e "${snapshot_log}" ]] || die "refusing to overwrite frozen-state snapshot evidence"
@@ -644,7 +659,6 @@ EOF
 			install -m 0600 "${runtime_v14_metadata}" "${local_capture_root}/node/runtime-v14-metadata.scale"
 			install -m 0600 "${runtime_bundle}/runtime-spec-106.compact.compressed.wasm" "${local_capture_root}/node/runtime-v16-production.wasm"
 			install -m 0600 "${runtime_bundle}/runtime-spec-106.try-runtime.wasm" "${local_capture_root}/node/runtime-v16-try-runtime.wasm"
-			install -m 0600 "${runtime_bundle}/tcg-storage-version-observation.json" "${local_capture_root}/node/tcg-storage-version-observation.json"
 			created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 			"${REPO_ROOT}/scripts/nexus-v2-private-alpha/frozen_snapshot_proof.py" create \
 				--transaction-id "${transaction_id}" \
@@ -670,6 +684,7 @@ EOF
 			record_artifact node runtime-v14-metadata artifacts/node/runtime-v14-metadata.scale
 			record_artifact node runtime-v16-production-wasm artifacts/node/runtime-v16-production.wasm
 			record_artifact node runtime-v16-try-runtime-wasm artifacts/node/runtime-v16-try-runtime.wasm
+			record_artifact node legacy-source-inventory artifacts/node/legacy-source-inventory.json
 			record_artifact node tcg-storage-version-observation artifacts/node/tcg-storage-version-observation.json
 			record_artifact node try-runtime-snapshot artifacts/node/try-runtime-snapshot
 			record_artifact node try-runtime-snapshot-proof artifacts/node/try-runtime-snapshot-proof.json
@@ -736,6 +751,7 @@ case "${role}" in
 		record_artifact node runtime-v14-metadata artifacts/node/runtime-v14-metadata.scale
 		record_artifact node runtime-v16-production-wasm artifacts/node/runtime-v16-production.wasm
 		record_artifact node runtime-v16-try-runtime-wasm artifacts/node/runtime-v16-try-runtime.wasm
+		record_artifact node legacy-source-inventory artifacts/node/legacy-source-inventory.json
 		record_artifact node tcg-storage-version-observation artifacts/node/tcg-storage-version-observation.json
 		record_artifact node try-runtime-snapshot artifacts/node/try-runtime-snapshot
 		record_artifact node try-runtime-snapshot-proof artifacts/node/try-runtime-snapshot-proof.json

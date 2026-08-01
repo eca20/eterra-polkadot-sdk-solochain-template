@@ -12,6 +12,7 @@ evidence_output=""
 fresh_reset_readiness=""
 dry_run=false
 verify_restored_final_backup=""
+phase1_closed=false
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -41,6 +42,9 @@ while [[ $# -gt 0 ]]; do
 		--dry-run)
 			dry_run=true
 			;;
+		--phase1-closed)
+			phase1_closed=true
+			;;
 		--verify-restored-final-backup)
 			[[ $# -ge 2 ]] || die "--verify-restored-final-backup requires a staging path"
 			verify_restored_final_backup="$2"
@@ -48,7 +52,7 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--help|-h)
 			cat <<'EOF'
-Usage: deploy-media.sh [--fresh]
+Usage: deploy-media.sh [--fresh] [--phase1-closed]
        deploy-media.sh --build-candidate OUTPUT.json
        deploy-media.sh --promote-candidate CANDIDATE.json --evidence OUTPUT.json
        deploy-media.sh --fresh --fresh-reset-readiness READINESS.json \
@@ -62,6 +66,9 @@ resetting persistent IPFS volumes.
 The sole release reset exception requires the SHA-256-pinned frozen pre-V16
 readiness packet and immutable candidate promotion. --dry-run performs local
 validation and exits before SSH.
+--phase1-closed is valid only for the guarded fresh replacement. It validates
+media readiness and representative IPFS content over SSH loopback without
+using the externally closed Caddy ingress.
 The restore-verification mode is read-only. It verifies the exact restored
 compose definitions, image IDs, environment, service health, IPFS health, and
 blocked public-upload surface without building, pulling, restarting, or
@@ -174,6 +181,12 @@ fi
 if $fresh && [[ -n "$candidate_output" ]]; then
 	die "--fresh cannot build a candidate; build it in a separate non-mutating phase"
 fi
+if $phase1_closed && ! $fresh; then
+	die "--phase1-closed requires --fresh"
+fi
+if $phase1_closed && [[ -n "$candidate_output" ]]; then
+	die "--phase1-closed cannot be used while building a candidate"
+fi
 if [[ -n "$fresh_reset_readiness" ]] && ! $fresh; then
 	die "--fresh-reset-readiness requires --fresh"
 fi
@@ -188,6 +201,9 @@ if [[ "$ETERRA_RELEASE_VERSION" != "dev" && -n "$promotion_manifest" && -z "$evi
 fi
 if [[ -n "$evidence_output" && -e "$evidence_output" ]]; then
 	die "refusing to overwrite deployment evidence: $evidence_output"
+fi
+if [[ -n "$candidate_output" && -e "$candidate_output" ]]; then
+	die "refusing to overwrite media candidate: $candidate_output"
 fi
 if [[ -n "$fresh_reset_readiness" ]]; then
 	[[ "$ETERRA_RELEASE_VERSION" != "dev" ]] ||
@@ -238,6 +254,81 @@ fi
 if $dry_run; then
 	log "dry-run: guarded media/IPFS reset and immutable candidate promotion validated; no SSH or live mutation performed"
 	log "dry-run: release=${ETERRA_RELEASE_VERSION} chain_source=${CHAIN_SOURCE_COMMIT} media_source=${MEDIA_SOURCE_COMMIT} readiness_sha256=${FRESH_RESET_READINESS_SHA256:-none}"
+	exit 0
+fi
+
+if [[ -n "$candidate_output" ]]; then
+	candidate_nonce="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+	[[ "$candidate_nonce" =~ ^[0-9a-f]{32}$ ]] || die "candidate staging nonce is invalid"
+	candidate_stage="${DEPLOY_ROOT}/tmp/nexus-v2-media-candidate-${candidate_nonce}"
+	candidate_source="${candidate_stage}/source"
+	candidate_env="${candidate_stage}/media.env"
+	candidate_manifest="${candidate_stage}/media-image-candidate.json"
+	candidate_project="${REMOTE_MEDIA_PROJECT_NAME}-candidate-${candidate_nonce:0:12}"
+	remote_bash <<EOF
+set -euo pipefail
+case '${candidate_stage}' in
+	'${DEPLOY_ROOT}/tmp/nexus-v2-media-candidate-'[0-9a-f]*) ;;
+	*) echo 'unsafe media candidate staging path' >&2; exit 1 ;;
+esac
+[[ ! -e '${candidate_stage}' && ! -L '${candidate_stage}' ]]
+mkdir -m 0700 '${candidate_stage}'
+mkdir -m 0755 '${candidate_source}'
+EOF
+	log "syncing media candidate source into isolated staging root"
+	rsync_with_remote \
+		-az \
+		--delete \
+		-e "${RSYNC_RSH}" \
+		--exclude '.git/' \
+		--exclude 'node_modules/' \
+		--exclude 'dist/' \
+		--exclude '.env' \
+		--exclude '.env.local' \
+		--exclude '.DS_Store' \
+		--exclude 'coverage/' \
+		"${MEDIA_REPO_DIR}/" "${SSH_TARGET}:${candidate_source}/"
+	rsync_to_remote_no_delete "${bundle_dir}/media.env" "${candidate_env}"
+	log "building immutable media release candidate without touching the active deployment root"
+	remote_bash <<EOF
+set -euo pipefail
+test '${candidate_source}' != '${REMOTE_MEDIA_DIR}'
+test ! -L '${candidate_source}'
+docker image inspect '${KUBO_IMAGE}' >/dev/null || {
+	echo 'pinned Kubo image is absent; candidate build refuses to pull or mutate the host image set' >&2
+	exit 1
+}
+MEDIA_IMAGE_REF='${media_image_ref}' \
+  docker compose --project-name '${candidate_project}' \
+  -f '${candidate_source}/docker-compose.yaml' \
+  -f '${candidate_source}/docker-compose.macmini2010.yaml' \
+  --env-file '${candidate_env}' build media-service
+test -z "\$(docker compose --project-name '${candidate_project}' \
+  -f '${candidate_source}/docker-compose.yaml' \
+  -f '${candidate_source}/docker-compose.macmini2010.yaml' \
+  --env-file '${candidate_env}' ps -q)"
+media_image_id="\$(docker image inspect --format '{{.Id}}' '${media_image_ref}')"
+kubo_image_id="\$(docker image inspect --format '{{.Id}}' '${KUBO_IMAGE}')"
+[[ "\${media_image_id}" == sha256:* && "\${kubo_image_id}" == sha256:* ]] || {
+	echo 'candidate image IDs must be immutable SHA-256 identifiers' >&2
+	exit 1
+}
+printf '{\n  "schemaVersion": 1,\n  "releaseVersion": "%s",\n  "chainDeployCommit": "%s",\n  "mediaSourceCommit": "%s",\n  "mediaBuildHash": "%s",\n  "mediaImageRef": "%s",\n  "mediaImageId": "%s",\n  "kuboImageRef": "%s",\n  "kuboImageId": "%s"\n}\n' \
+  '${ETERRA_RELEASE_VERSION}' '${CHAIN_SOURCE_COMMIT}' '${MEDIA_SOURCE_COMMIT}' \
+  '${media_build_hash}' '${media_image_ref}' "\${media_image_id}" \
+  '${KUBO_IMAGE}' "\${kubo_image_id}" >'${candidate_manifest}'
+chmod 0400 '${candidate_manifest}'
+EOF
+	mkdir -p "$(dirname "$candidate_output")"
+	rsync_from_remote_no_delete "$candidate_manifest" "$candidate_output"
+	remote_bash <<EOF
+set -euo pipefail
+case '${candidate_stage}' in
+	'${DEPLOY_ROOT}/tmp/nexus-v2-media-candidate-'[0-9a-f]*) rm -rf -- '${candidate_stage}' ;;
+	*) echo 'unsafe media candidate cleanup path' >&2; exit 1 ;;
+esac
+EOF
+	log "candidate manifest written to $candidate_output; active media source, services, volumes, and environment were untouched"
 	exit 0
 fi
 
@@ -316,40 +407,6 @@ rsync_with_remote \
 	--exclude '.DS_Store' \
 	--exclude 'coverage/' \
 	"${MEDIA_REPO_DIR}/" "${SSH_TARGET}:${REMOTE_MEDIA_DIR}/"
-
-if [[ -n "$candidate_output" ]]; then
-	remote_manifest="${remote_tmp_dir}/media-image-candidate.json"
-	rsync_to_remote_no_delete "${bundle_dir}/media.env" "${remote_tmp_dir}/media.env"
-	log "building immutable media release candidate without changing running services"
-	remote_bash <<EOF
-set -euo pipefail
-cd "${REMOTE_MEDIA_DIR}"
-docker pull '${KUBO_IMAGE}' >/dev/null
-MEDIA_IMAGE_REF='${media_image_ref}' \
-  docker compose --project-name '${REMOTE_MEDIA_PROJECT_NAME}' \
-  -f '${REMOTE_MEDIA_COMPOSE_BASE}' -f '${REMOTE_MEDIA_COMPOSE_OVERRIDE}' \
-  --env-file '${remote_tmp_dir}/media.env' build media-service
-media_image_id="\$(docker image inspect --format '{{.Id}}' '${media_image_ref}')"
-kubo_image_id="\$(docker image inspect --format '{{.Id}}' '${KUBO_IMAGE}')"
-[[ "\${media_image_id}" == sha256:* && "\${kubo_image_id}" == sha256:* ]] || {
-	echo "candidate image IDs must be immutable SHA-256 identifiers" >&2
-	exit 1
-}
-printf '{\n  "schemaVersion": 1,\n  "releaseVersion": "%s",\n  "chainDeployCommit": "%s",\n  "mediaSourceCommit": "%s",\n  "mediaBuildHash": "%s",\n  "mediaImageRef": "%s",\n  "mediaImageId": "%s",\n  "kuboImageRef": "%s",\n  "kuboImageId": "%s"\n}\n' \
-  '${ETERRA_RELEASE_VERSION}' '${CHAIN_SOURCE_COMMIT}' '${MEDIA_SOURCE_COMMIT}' \
-  '${media_build_hash}' '${media_image_ref}' "\${media_image_id}" \
-  '${KUBO_IMAGE}' "\${kubo_image_id}" >'${remote_manifest}'
-rm -f '${remote_tmp_dir}/media.env'
-EOF
-	mkdir -p "$(dirname "$candidate_output")"
-	rsync_from_remote_no_delete "$remote_manifest" "$candidate_output"
-	remote_bash <<EOF
-rm -f '${remote_manifest}'
-rmdir '${remote_tmp_dir}' >/dev/null 2>&1 || true
-EOF
-	log "candidate manifest written to $candidate_output; no media service was deployed"
-	exit 0
-fi
 
 rsync_to_remote_no_delete "${bundle_dir}/media.env" "${remote_tmp_dir}/media.env"
 
@@ -441,10 +498,81 @@ EOF
 
 remote_media_image_digest="$(ssh_to_remote "cat $(shell_escape "${REMOTE_MEDIA_IMAGE_DIGEST_FILE}")")"
 if [[ "$ETERRA_RELEASE_VERSION" != "dev" || -n "$evidence_output" ]]; then
-	health_url="${SITE_PUBLIC_ORIGIN}/media-api/health/ready"
 	health_file="${bundle_dir}/media-health.json"
 	content_file="${bundle_dir}/media-content.bin"
-	curl --fail --silent --show-error --max-time 15 "$health_url" >"$health_file"
+	validation_transport="public_https"
+	if $phase1_closed; then
+		validation_transport="ssh_loopback"
+		health_url="http://127.0.0.1:${MEDIA_PORT}/health/ready"
+		read -r content_port content_path < <(
+			python3 - "$MEDIA_RELEASE_CONTENT_SMOKE_URL" "$SITE_PUBLIC_ORIGIN" "$MEDIA_PORT" "$IPFS_GATEWAY_PORT" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+raw, origin, media_port, gateway_port = sys.argv[1:]
+url = urlsplit(raw)
+expected = urlsplit(origin)
+if (
+    url.scheme != "https"
+    or url.netloc != expected.netloc
+    or url.username is not None
+    or url.password is not None
+    or url.fragment
+):
+    raise SystemExit("Phase-1 media smoke URL must use the sealed public origin")
+path = url.path
+if url.query:
+    path += "?" + url.query
+if url.path.startswith("/ipfs/"):
+    port = gateway_port
+elif url.path.startswith("/media-api/"):
+    port = media_port
+    path = url.path[len("/media-api") :]
+    if url.query:
+        path += "?" + url.query
+else:
+    raise SystemExit("Phase-1 media smoke path must target /ipfs/ or /media-api/")
+if "'" in path or any(
+    character.isspace() or ord(character) < 0x20 for character in path
+):
+    raise SystemExit("Phase-1 media smoke path is unsafe")
+print(port, path)
+PY
+		) || die "failed to derive Phase-1 loopback content smoke target"
+		[[ "$content_port" =~ ^[0-9]+$ && "$content_path" == /* ]] ||
+			die "Phase-1 loopback content smoke target is invalid"
+		content_url="http://127.0.0.1:${content_port}${content_path}"
+		validation_nonce="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+		remote_validation_dir="${DEPLOY_ROOT}/tmp/nexus-v2-media-validation-${validation_nonce}"
+		remote_health_file="${remote_validation_dir}/media-health.json"
+		remote_content_file="${remote_validation_dir}/media-content.bin"
+		remote_bash <<EOF
+set -euo pipefail
+case '${remote_validation_dir}' in
+	'${DEPLOY_ROOT}/tmp/nexus-v2-media-validation-'[0-9a-f]*) ;;
+	*) echo 'unsafe media validation staging path' >&2; exit 1 ;;
+esac
+[[ ! -e '${remote_validation_dir}' && ! -L '${remote_validation_dir}' ]]
+mkdir -m 0700 '${remote_validation_dir}'
+curl --fail --silent --show-error --max-time 15 '${health_url}' >'${remote_health_file}'
+curl --fail --silent --show-error --max-time 30 '${content_url}' >'${remote_content_file}'
+test -s '${remote_content_file}'
+EOF
+		rsync_from_remote_no_delete "$remote_health_file" "$health_file"
+		rsync_from_remote_no_delete "$remote_content_file" "$content_file"
+		remote_bash <<EOF
+set -euo pipefail
+case '${remote_validation_dir}' in
+	'${DEPLOY_ROOT}/tmp/nexus-v2-media-validation-'[0-9a-f]*) rm -rf -- '${remote_validation_dir}' ;;
+	*) echo 'unsafe media validation cleanup path' >&2; exit 1 ;;
+esac
+EOF
+	else
+		health_url="${SITE_PUBLIC_ORIGIN}/media-api/health/ready"
+		content_url="$MEDIA_RELEASE_CONTENT_SMOKE_URL"
+		curl --fail --silent --show-error --max-time 15 "$health_url" >"$health_file"
+		curl --fail --silent --show-error --max-time 30 "$content_url" >"$content_file"
+	fi
 	jq -e \
 		--arg release "$ETERRA_RELEASE_VERSION" \
 		--arg source "$MEDIA_SOURCE_COMMIT" \
@@ -454,11 +582,10 @@ if [[ "$ETERRA_RELEASE_VERSION" != "dev" || -n "$evidence_output" ]]; then
 		 .runtime.specVersion == $specVersion and .runtime.codeHash == $codeHash and
 		 .dependencies.chain.connected == true and .dependencies.ipfs == true and .dependencies.ffmpeg == true' \
 		"$health_file" >/dev/null || die "media readiness/provenance validation failed"
-	curl --fail --silent --show-error --max-time 30 "$MEDIA_RELEASE_CONTENT_SMOKE_URL" >"$content_file"
 	[[ -s "$content_file" ]] || die "representative media content response is empty"
 
 	mkdir -p "$(dirname "$evidence_output")"
-	python3 - "$evidence_output" "$ETERRA_RELEASE_VERSION" "$CHAIN_SOURCE_COMMIT" "$MEDIA_SOURCE_COMMIT" "$media_build_hash" "$media_runtime_hash" "$remote_media_image_digest" "$KUBO_IMAGE" "$health_url" "$MEDIA_RELEASE_CONTENT_SMOKE_URL" "$health_file" "$content_file" "${promotion_manifest:-}" <<'PY'
+	python3 - "$evidence_output" "$ETERRA_RELEASE_VERSION" "$CHAIN_SOURCE_COMMIT" "$MEDIA_SOURCE_COMMIT" "$media_build_hash" "$media_runtime_hash" "$remote_media_image_digest" "$KUBO_IMAGE" "$health_url" "$content_url" "$health_file" "$content_file" "${promotion_manifest:-}" "$validation_transport" "$phase1_closed" <<'PY'
 import datetime
 import hashlib
 import json
@@ -467,7 +594,7 @@ import sys
 
 (output, release, chain_commit, media_commit, build_hash, runtime_hash,
  image_id, kubo_ref, health_url, content_url, health_file, content_file,
- candidate_file) = sys.argv[1:]
+ candidate_file, validation_transport, phase1_closed) = sys.argv[1:]
 
 def digest(path):
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
@@ -486,6 +613,8 @@ evidence = {
     "healthResponseSha256": digest(health_file),
     "contentSmokeUrl": content_url,
     "contentResponseSha256": digest(content_file),
+    "validationTransport": validation_transport,
+    "phase1Closed": phase1_closed == "true",
     "verifiedAtUtc": datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat(),
 }
 pathlib.Path(output).write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")

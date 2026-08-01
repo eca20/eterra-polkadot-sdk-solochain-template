@@ -30,6 +30,7 @@ ARTIFACTS = {
         "runtime-v14-wasm",
         "runtime-v16-production-wasm",
         "runtime-v16-try-runtime-wasm",
+        "legacy-source-inventory",
         "tcg-storage-version-observation",
         "try-runtime-snapshot",
         "try-runtime-snapshot-proof",

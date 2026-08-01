@@ -241,11 +241,14 @@ The existing `scripts/release/rehearse-runtime-upgrade.sh` remains the
 spec-103-to-104 current release procedure. It is hash-pinned in the packet but
 does not replace V2 migration evidence.
 
-The V2 command never accepts a live RPC URI. It uses the
-`node:try-runtime-snapshot`, `node:try-runtime-snapshot-proof`, and
-`node:runtime-v16-try-runtime-wasm` files already pinned in the backup
-manifest. The proof must bind the snapshot to the exact frozen block and
-stopped node-data archive. The separate
+The rehearsal command never accepts a live RPC URI. It uses the
+`node:legacy-source-inventory`, `node:try-runtime-snapshot`,
+`node:try-runtime-snapshot-proof`, and `node:runtime-v16-try-runtime-wasm`
+files already pinned in the backup manifest. The final-freeze driver creates
+the source inventory through its loopback tunnel to the isolated stopped-state
+copy; the inventory proves V14 storage, `NextCardId`, and the complete legacy
+`Cards` key set/count/maximum ID at the snapshot's exact finalized block. The
+proof must bind the snapshot to that block and stopped node-data archive. The separate
 `node:runtime-v16-production-wasm` role pins the deployable Wasm and must not
 be substituted for the migration-test build:
 
@@ -256,15 +259,17 @@ be substituted for the migration-test build:
   --try-runtime-bin /reviewed/path/try-runtime \
   --try-runtime-revision PINNED_GIT_REVISION \
   --try-runtime-sha256 64_HEX_SHA256 \
-  --migration-blocks BOUNDED_BLOCK_COUNT_FROM_NEXT_CARD_ID \
   --migration-verifier /reviewed/path/v16-completion-verifier \
   --migration-verifier-sha256 64_HEX_SHA256 \
   --evidence /private/path/to/evidence/v14-v16.json
 ```
 
 The first phase uses try-runtime `fast-forward --run-migrations` to execute
-`on_runtime_upgrade` and the bounded number of empty blocks derived from copied
-`NextCardId`; the runtime completion marker is mandatory. Because the TCG repair is bounded and
+`on_runtime_upgrade`. By default the tool supplies
+`max(1, ceil(NextCardId / 100))` empty blocks, derived from the hash-pinned
+source inventory and runtime batch limit. `--migration-blocks` may add margin,
+but a value below that deterministic minimum hard-stops before try-runtime is
+invoked. The runtime completion marker is mandatory. Because the TCG repair is bounded and
 multi-block, the second verifier independently drives `on_idle` through
 completion, interrupts and resumes one run, and emits the exact structured
 result in `migration-result.example.json`.

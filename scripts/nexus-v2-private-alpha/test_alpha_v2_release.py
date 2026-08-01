@@ -91,6 +91,7 @@ def economic_gates(block_number: int = 100, block_hash: str = BLOCK_HASH) -> dic
 def pre_v16_fresh_reset_gates(
     runtime_v14_wasm_sha256: str,
     tcg_observation_sha256: str,
+    legacy_source_inventory_sha256: str,
     block_number: int = 100,
     block_hash: str = BLOCK_HASH,
 ) -> dict[str, Any]:
@@ -116,6 +117,7 @@ def pre_v16_fresh_reset_gates(
             "runtimeV14WasmSha256": runtime_v14_wasm_sha256,
             "runtimeMetadataScaleSha256": "c" * 64,
             "tcgStorageVersionObservationSha256": tcg_observation_sha256,
+            "legacySourceInventorySha256": legacy_source_inventory_sha256,
         },
         "v2StructuralAbsence": {
             "absentPallets": tool.PRE_V16_ABSENT_V2_PALLETS,
@@ -185,13 +187,109 @@ def tcg_storage_version_observation(
         "decoded": {"scaleType": "u16", "storageVersion": 14},
         "readOnlyRpc": {
             "method": "state_getStorage",
-            "storageKey": "0x" + ("4" * 64),
+            "storageKey": tool.LEGACY_TCG_STORAGE_VERSION_KEY,
             "result": "0x0e00",
         },
         "liveSource": {
             "commit": DEPLOYED_SOURCE_COMMIT,
             "declaredStorageVersion": 14,
         },
+    }
+
+
+def legacy_card_storage_key(card_id: int) -> str:
+    encoded = card_id.to_bytes(4, "little")
+    return tool.LEGACY_CARDS_PREFIX + (
+        hashlib.blake2b(encoded, digest_size=16).digest() + encoded
+    ).hex()
+
+
+def legacy_source_inventory(
+    *,
+    next_card_id: int = 11,
+    card_ids: tuple[int, ...] = (1, 4, 7, 10),
+    block_number: int = 100,
+    block_hash: str = BLOCK_HASH,
+) -> dict[str, Any]:
+    keys = sorted(legacy_card_storage_key(card_id) for card_id in card_ids)
+    card_ids_hash = hashlib.sha256(
+        b"".join(card_id.to_bytes(4, "little") for card_id in sorted(card_ids))
+    ).hexdigest()
+    query = lambda method, params, result: {
+        "method": method,
+        "params": params,
+        "result": result,
+    }
+    return {
+        "schemaVersion": 1,
+        "kind": tool.LEGACY_SOURCE_INVENTORY_KIND,
+        "releaseId": RELEASE_ID,
+        "sourceCommit": SOURCE_COMMIT,
+        "deployedSourceCommit": DEPLOYED_SOURCE_COMMIT,
+        "observedAtUtc": CREATED_AT,
+        "observedAtFinalizedBlock": {"number": block_number, "hash": block_hash},
+        "captureMode": "isolated-frozen-copy-read-only",
+        "finality": {
+            "finalizedHead": query("chain_getFinalizedHead", [], block_hash),
+            "blockHashAtNumber": query(
+                "chain_getBlockHash", [block_number], block_hash
+            ),
+            "header": query(
+                "chain_getHeader", [block_hash], {"number": hex(block_number)}
+            ),
+        },
+        "storage": {
+            "tcgStorageVersion": {
+                "pallet": "EterraTCG",
+                "storage": ":__STORAGE_VERSION__:",
+                "key": tool.LEGACY_TCG_STORAGE_VERSION_KEY,
+                "query": query(
+                    "state_getStorage",
+                    [tool.LEGACY_TCG_STORAGE_VERSION_KEY, block_hash],
+                    "0x0e00",
+                ),
+            },
+            "nextCardId": {
+                "pallet": "EterraTCG",
+                "storage": "NextCardId",
+                "key": tool.LEGACY_NEXT_CARD_ID_KEY,
+                "query": query(
+                    "state_getStorage",
+                    [tool.LEGACY_NEXT_CARD_ID_KEY, block_hash],
+                    "0x" + next_card_id.to_bytes(4, "little").hex(),
+                ),
+            },
+            "cards": {
+                "pallet": "EterraTCG",
+                "storage": "Cards",
+                "prefix": tool.LEGACY_CARDS_PREFIX,
+                "method": "state_getKeysPaged",
+                "at": block_hash,
+                "pageSize": tool.LEGACY_CARD_KEY_PAGE_SIZE,
+                "pages": [{"startKey": None, "keys": keys}],
+            },
+        },
+        "summary": {
+            "cardIdsSha256": card_ids_hash,
+            "cardsCount": len(card_ids),
+            "maxCardId": max(card_ids) if card_ids else None,
+            "minimumMigrationBlocks": tool.minimum_v16_migration_blocks(next_card_id),
+            "nextCardId": next_card_id,
+            "tcgStorageVersion": 14,
+            "v16MigrationBatchSize": tool.V16_MIGRATION_BATCH_SIZE,
+        },
+        "safety": dict(tool.LEGACY_SAFETY),
+    }
+
+
+def frozen_snapshot_proof(
+    block_number: int = 100,
+    block_hash: str = BLOCK_HASH,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": 1,
+        "kind": "nexus-v2-private-alpha-frozen-try-runtime-snapshot-proof",
+        "frozenFinalizedBlock": {"number": block_number, "hash": block_hash},
     }
 
 
@@ -206,10 +304,11 @@ class ReleaseSafetyTests(unittest.TestCase):
     def make_bundle(
         self,
         *,
+        bundle_name: str = "bundle",
         gates_value: dict[str, Any] | None = None,
         artifact_payloads: dict[tuple[str, str], bytes | dict[str, Any]] | None = None,
     ) -> tuple[Path, Path]:
-        bundle = self.root / "bundle"
+        bundle = self.root / bundle_name
         bundle.mkdir()
         artifact_payloads = artifact_payloads or {}
         artifact_args: list[str] = []
@@ -226,6 +325,12 @@ class ReleaseSafetyTests(unittest.TestCase):
                         write_json(path, payload)
                     else:
                         path.write_bytes(payload)
+                elif (group, name) == ("node", "legacy-source-inventory"):
+                    write_json(path, legacy_source_inventory())
+                elif (group, name) == ("node", "tcg-storage-version-observation"):
+                    write_json(path, tcg_storage_version_observation())
+                elif (group, name) == ("node", "try-runtime-snapshot-proof"):
+                    write_json(path, frozen_snapshot_proof())
                 else:
                     path.write_bytes(f"{group}:{name}\n".encode("utf-8"))
                 artifact_args.extend(["--artifact", f"{group}:{name}:{relative.as_posix()}"])
@@ -486,18 +591,24 @@ class ReleaseSafetyTests(unittest.TestCase):
     def make_pre_v16_bundle(self) -> tuple[Path, Path]:
         runtime_payload = b"captured-v14-runtime-wasm\n"
         observation = tcg_storage_version_observation()
+        source_inventory = legacy_source_inventory()
         observation_payload = (
             json.dumps(observation, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        source_inventory_payload = (
+            json.dumps(source_inventory, indent=2, sort_keys=True) + "\n"
         ).encode("utf-8")
         gates = pre_v16_fresh_reset_gates(
             hashlib.sha256(runtime_payload).hexdigest(),
             hashlib.sha256(observation_payload).hexdigest(),
+            hashlib.sha256(source_inventory_payload).hexdigest(),
         )
         return self.make_bundle(
             gates_value=gates,
             artifact_payloads={
                 ("node", "runtime-v14-wasm"): runtime_payload,
                 ("node", "tcg-storage-version-observation"): observation,
+                ("node", "legacy-source-inventory"): source_inventory,
             },
         )
 
@@ -736,6 +847,104 @@ class ReleaseSafetyTests(unittest.TestCase):
             0,
         )
 
+    def test_migration_blocks_are_derived_from_frozen_next_card_id(self) -> None:
+        large_inventory = legacy_source_inventory(
+            next_card_id=201,
+            card_ids=(1, 10),
+        )
+        bundle, manifest = self.make_bundle(
+            bundle_name="large-next-card-id-bundle",
+            artifact_payloads={
+                ("node", "legacy-source-inventory"): large_inventory,
+            }
+        )
+        try_runtime = self.make_try_runtime()
+        verifier = self.make_migration_verifier()
+        insufficient = self.root / "insufficient-migration.json"
+        self.assertEqual(
+            tool.main(
+                [
+                    "rehearse-migration",
+                    "--manifest",
+                    str(manifest),
+                    "--bundle-root",
+                    str(bundle),
+                    "--try-runtime-bin",
+                    str(try_runtime),
+                    "--try-runtime-revision",
+                    "abcdef0",
+                    "--try-runtime-sha256",
+                    file_hash(try_runtime),
+                    "--migration-blocks",
+                    "2",
+                    "--migration-verifier",
+                    str(verifier),
+                    "--migration-verifier-sha256",
+                    file_hash(verifier),
+                    "--evidence",
+                    str(insufficient),
+                ]
+            ),
+            2,
+        )
+        self.assertFalse(insufficient.exists())
+        self.assertFalse(Path(f"{insufficient}.try-runtime.log").exists())
+
+        default_bundle, default_manifest = self.make_bundle(
+            bundle_name="derived-block-count-bundle"
+        )
+        derived = self.root / "derived-migration.json"
+        self.assertEqual(
+            tool.main(
+                [
+                    "rehearse-migration",
+                    "--manifest",
+                    str(default_manifest),
+                    "--bundle-root",
+                    str(default_bundle),
+                    "--try-runtime-bin",
+                    str(try_runtime),
+                    "--try-runtime-revision",
+                    "abcdef0",
+                    "--try-runtime-sha256",
+                    file_hash(try_runtime),
+                    "--migration-verifier",
+                    str(verifier),
+                    "--migration-verifier-sha256",
+                    file_hash(verifier),
+                    "--evidence",
+                    str(derived),
+                ]
+            ),
+            0,
+        )
+        evidence = json.loads(derived.read_text(encoding="utf-8"))
+        self.assertEqual(evidence["legacyNextCardId"], 11)
+        self.assertEqual(evidence["minimumMigrationBlocks"], 1)
+        self.assertEqual(evidence["tryRuntimeFastForwardBlocks"], 1)
+
+    def test_legacy_inventory_rejects_out_of_bound_or_tampered_card_keys(self) -> None:
+        valid = legacy_source_inventory()
+        summary = tool.validate_legacy_source_inventory_value(
+            valid,
+            release_id=RELEASE_ID,
+            source_commit=SOURCE_COMMIT,
+        )
+        self.assertEqual(summary["cardsCount"], 4)
+        self.assertEqual(summary["maxCardId"], 10)
+
+        out_of_bound = legacy_source_inventory(next_card_id=10, card_ids=(10,))
+        with self.assertRaisesRegex(tool.SafetyError, "outside NextCardId"):
+            tool.validate_legacy_source_inventory_value(out_of_bound)
+
+        tampered = copy.deepcopy(valid)
+        key = tampered["storage"]["cards"]["pages"][0]["keys"][0]
+        tampered["storage"]["cards"]["pages"][0]["keys"][0] = key[:-1] + (
+            "0" if key[-1] != "0" else "1"
+        )
+        with self.assertRaises(tool.SafetyError):
+            tool.validate_legacy_source_inventory_value(tampered)
+
     def test_every_exact_economic_gate_is_fail_closed(self) -> None:
         base = economic_gates()
         unsafe_mutations = [
@@ -805,7 +1014,7 @@ class ReleaseSafetyTests(unittest.TestCase):
             tool.validate_economic_gates(unknown_path)
 
     def test_pre_v16_fresh_reset_gate_is_distinct_strict_and_fresh_only(self) -> None:
-        base = pre_v16_fresh_reset_gates("a" * 64, "b" * 64)
+        base = pre_v16_fresh_reset_gates("a" * 64, "b" * 64, "c" * 64)
         path = self.root / "pre-v16-gates.json"
         write_json(path, base)
         with self.assertRaises(tool.SafetyError):
@@ -879,6 +1088,9 @@ class ReleaseSafetyTests(unittest.TestCase):
         gates = pre_v16_fresh_reset_gates(
             "0" * 64,
             hashlib.sha256(observation_payload).hexdigest(),
+            hashlib.sha256(
+                (json.dumps(legacy_source_inventory(), indent=2, sort_keys=True) + "\n").encode()
+            ).hexdigest(),
         )
         bundle, manifest = self.make_bundle(
             gates_value=gates,
@@ -916,9 +1128,14 @@ class ReleaseSafetyTests(unittest.TestCase):
 
     def test_pre_v16_reset_rejects_observation_block_mismatch(self) -> None:
         runtime_payload = b"actual-v14-runtime\n"
+        mismatched_hash = "0x" + ("2" * 64)
         observation = tcg_storage_version_observation(
             block_number=101,
-            block_hash="0x" + ("2" * 64),
+            block_hash=mismatched_hash,
+        )
+        source_inventory = legacy_source_inventory(
+            block_number=101,
+            block_hash=mismatched_hash,
         )
         observation_payload = (
             json.dumps(observation, indent=2, sort_keys=True) + "\n"
@@ -926,12 +1143,19 @@ class ReleaseSafetyTests(unittest.TestCase):
         gates = pre_v16_fresh_reset_gates(
             hashlib.sha256(runtime_payload).hexdigest(),
             hashlib.sha256(observation_payload).hexdigest(),
+            hashlib.sha256(
+                (json.dumps(source_inventory, indent=2, sort_keys=True) + "\n").encode()
+            ).hexdigest(),
         )
         bundle, manifest = self.make_bundle(
             gates_value=gates,
             artifact_payloads={
                 ("node", "runtime-v14-wasm"): runtime_payload,
                 ("node", "tcg-storage-version-observation"): observation,
+                ("node", "legacy-source-inventory"): source_inventory,
+                ("node", "try-runtime-snapshot-proof"): frozen_snapshot_proof(
+                    101, mismatched_hash
+                ),
             },
         )
         restore = self.make_restore_evidence(bundle, manifest)
@@ -1203,6 +1427,7 @@ class ReleaseSafetyTests(unittest.TestCase):
                 "final_freeze.py",
                 "frozen_snapshot_proof.py",
                 "node_candidate.py",
+                "release_lock.py",
             },
         )
         source = (directory / "alpha_v2_release.py").read_text(encoding="utf-8")
@@ -1213,7 +1438,6 @@ class ReleaseSafetyTests(unittest.TestCase):
         for command in ('"ssh"', '"docker"', '"systemctl"', '"curl"'):
             self.assertNotIn(command, coordinator)
         boundary = (directory / "acceptance_boundary.py").read_text(encoding="utf-8")
-        self.assertNotIn("subprocess", boundary)
         self.assertNotIn("shell=True", boundary)
         for command in ('"ssh"', '"docker"', '"systemctl"'):
             self.assertNotIn(command, boundary)

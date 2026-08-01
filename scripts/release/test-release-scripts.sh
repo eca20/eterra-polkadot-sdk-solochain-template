@@ -122,6 +122,39 @@ rg -q 'readiness packet was already consumed for the media reset' "$MEDIA_DEPLOY
 rg -q 'archive/nexus-v2-fresh-reset' "$MEDIA_DEPLOY"
 rg -q 'dry-run: guarded media/IPFS reset' "$MEDIA_DEPLOY"
 rg -q 'MEDIA_RELEASE_CONTENT_SMOKE_URL' "$MEDIA_DEPLOY"
+rg -q -- '--phase1-closed' "$MEDIA_DEPLOY"
+rg -q 'validation_transport="ssh_loopback"' "$MEDIA_DEPLOY"
+rg -F -q 'http://127.0.0.1:${MEDIA_PORT}/health/ready' "$MEDIA_DEPLOY"
+rg -q 'nexus-v2-media-candidate-' "$MEDIA_DEPLOY"
+rg -q 'candidate build refuses to pull or mutate the host image set' "$MEDIA_DEPLOY"
+if rg -q 'docker pull' "$MEDIA_DEPLOY"; then
+	echo "media candidate build must not pull into the shared host image set" >&2
+	exit 1
+fi
+python3 - "$MEDIA_DEPLOY" <<'PY'
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+isolated = source.index('if [[ -n "$candidate_output" ]]; then', source.index('if $dry_run; then'))
+active_root = source.index('mkdir -p "${REMOTE_MEDIA_DIR}"', isolated)
+active_sync = source.index('"${MEDIA_REPO_DIR}/" "${SSH_TARGET}:${REMOTE_MEDIA_DIR}/"', isolated)
+assert isolated < active_root < active_sync
+assert '"${MEDIA_REPO_DIR}/" "${SSH_TARGET}:${candidate_source}/"' in source[isolated:active_root]
+PY
+rg -Fq 'media_args+=("--phase1-closed")' "$DEPLOY_ALL"
+rg -q -- '--build-media-candidate must be the only candidate or deployment action' "$DEPLOY_ALL"
+python3 - "$DEPLOY_ALL" <<'PY'
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+guard = source.index('if [[ "${build_media_candidate}" -eq 1 ]]')
+media_dispatch = source.index('"${SCRIPT_DIR}/deploy-media.sh" "${media_args[@]}"', guard)
+standalone_exit = source.index("\texit 0", media_dispatch)
+node_dispatch = source.rindex('"${SCRIPT_DIR}/deploy-node.sh"')
+assert guard < media_dispatch < standalone_exit < node_dispatch
+PY
 if rg -q '\.runtime\.specVersion == 104' "$MEDIA_DEPLOY"; then
 	echo "media health validation must use the pinned spec-106 environment value" >&2
 	exit 1

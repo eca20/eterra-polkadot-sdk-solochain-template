@@ -2,6 +2,8 @@
 
 `alpha_v2_release.py` builds evidence for a future private-alpha V2 reset. It
 does not reset, deploy, connect to live RPC, or ship a live-operation driver.
+Its legacy-inventory collector accepts only an explicit loopback HTTP endpoint
+for the disposable stopped-state copy created by the final-freeze driver.
 `verify_reset_readiness.py` is the dependency-free closed-schema verifier used
 by the separately guarded deployment scripts; it accepts only the exact
 SHA-256-pinned pre-V16 frozen/fresh-genesis packet.
@@ -18,8 +20,9 @@ service.
 Copy its output into a private bundle and supplement it with:
 
 - node binary, exact stopped node-data archive, live V14 Wasm/metadata, V16
-  runtime Wasm, finalized TCG storage-version observation, and the newly
-  created exact-block try-runtime snapshot plus its provenance proof;
+  runtime Wasm, same-block frozen legacy source inventory and TCG
+  storage-version observation, and the newly created exact-block try-runtime
+  snapshot plus its provenance proof;
 - media state and immutable image lock/digest;
 - site/indexer/Mongo state and finalized checkpoint;
 - authority state and Caddy state/configuration;
@@ -54,10 +57,15 @@ The post-cutover boundary tool has six closed commands:
 ./scripts/nexus-v2-private-alpha/acceptance_boundary.py verify-receipt --help
 ```
 
-The late-bound offline release lock is captured only after all component lanes
-have committed their final worktrees:
+The pre-cutover replacement lock is the only lock valid during final-freeze
+offline preflight. It intentionally contains neither a read-model manifest nor
+an acceptance receipt. The final release lock is created later, after the
+acceptance receipt exists, and requires the read-model manifest to bind that
+exact receipt:
 
 ```bash
+./scripts/nexus-v2-private-alpha/release_lock.py capture-replacement --help
+./scripts/nexus-v2-private-alpha/release_lock.py verify-replacement --help
 ./scripts/nexus-v2-private-alpha/release_lock.py capture --help
 ./scripts/nexus-v2-private-alpha/release_lock.py verify --help
 ```
@@ -75,9 +83,15 @@ the production Wasm file SHA-256 used by this receipt.
   `nexus-v2-isolated-restore-`.
 - `rehearse-restore` invokes a separately reviewed restore driver on loopback
   ports disjoint from all declared live ports.
+- `capture-legacy-source-inventory` is called by final freeze against only the
+  isolated stopped-state loopback RPC. It enumerates every legacy `Cards` key,
+  decodes and hashes its `Blake2_128Concat<u32>` ID, and captures V14
+  `StorageVersion` plus `NextCardId` at the exact frozen finalized block.
 - `rehearse-migration` invokes a pinned try-runtime binary against the copied
   V14 snapshot, then a pinned verifier that drives the bounded migration to
-  completion and emits the structured V14-to-V16 result. The V16 runtime also
+  completion and emits the structured V14-to-V16 result. Its default block
+  count is `max(1, ceil(NextCardId / 100))`; any supplied lower count is
+  rejected before try-runtime executes. The V16 runtime also
   accepts an undeployed V15 source for compatibility, but evidence for the
   current Alpha must record its observed V14 source truth.
 - `prepare-reset` requires passing restore/migration evidence, exact disabled
@@ -148,11 +162,13 @@ the production Wasm file SHA-256 used by this receipt.
   action script into the exact schema consumed by the post-cutover
   coordinator. Neither command contacts a host.
 - `release_lock.py` pins the clean HEAD and tree of chain, web, SDKGen, Unity,
-  media, IP, AI, Blockchainia Flow, and the Blockchainia site. It also binds
-  the node/media candidates, target identity, runtime/snapshot/read-model
-  manifests, full EditMode/PlayMode XML, and exactly selected chain and site
-  environment hashes without copying secrets. Verification rejects a stale or
-  differently selected deployment environment on either host.
+  media, IP, AI, Blockchainia Flow, and the Blockchainia site. The distinct
+  pre-cutover replacement kind binds node/media candidates, target identity,
+  runtime/snapshot manifests, full EditMode/PlayMode XML, and exactly selected
+  chain/site environments without claiming post-cutover state. The final kind
+  additionally validates the canonical acceptance receipt against release,
+  chain commit, genesis, production Wasm, and metadata, then requires an exact
+  receipt/read-model binding. Neither verifier accepts the other lock kind.
 - Post-reset validation is two-phase with access closed. First, perform only
   base-stack read-only smoke with fresh post-V16 disabled gates and zero
   current/lifetime acceptance inventory. Issue the acceptance-boundary receipt
@@ -182,6 +198,7 @@ node:runtime-v14-wasm
 node:runtime-v14-metadata
 node:runtime-v16-production-wasm
 node:runtime-v16-try-runtime-wasm
+node:legacy-source-inventory
 node:tcg-storage-version-observation
 node:try-runtime-snapshot
 node:try-runtime-snapshot-proof
