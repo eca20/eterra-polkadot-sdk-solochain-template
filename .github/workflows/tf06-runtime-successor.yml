@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: ./.github/actions/free-disk-space
 
@@ -26,8 +28,9 @@ jobs:
 
       - name: Verify isolated successor source
         run: |
-          test "$(git rev-parse HEAD^)" = "0f6c4d2d251af88fb9019fd61860fa8941de6451"
-          test "$(git diff --name-only HEAD^ HEAD | sort)" = ".github/workflows/tf06-runtime-successor.yml
+          baseline=0f6c4d2d251af88fb9019fd61860fa8941de6451
+          git merge-base --is-ancestor "$baseline" HEAD
+          test "$(git diff --name-only "$baseline" HEAD | sort)" = ".github/workflows/tf06-runtime-successor.yml
           runtime/src/configs/mod.rs
           runtime/src/lib.rs
           runtime/src/tests.rs"
