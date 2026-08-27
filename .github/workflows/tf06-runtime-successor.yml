@@ -30,7 +30,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends protobuf-compiler
+          rustup target add wasm32-unknown-unknown
           protoc --version
+          rustup target list --installed | grep -Fx wasm32-unknown-unknown
 
       - name: Verify isolated successor source
         run: |
