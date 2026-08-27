@@ -806,23 +806,16 @@ impl Contains<RuntimeCall> for EterraRuntimeCallFilter {
             );
         }
 
-        // Public native faucets and all public paid/transfer marketplace
-        // surfaces remain disabled for the economically valueless alpha.
+        // The iPhone vertical slice admits only bounded, economically
+        // valueless training calls. A production runtime continues to reject
+        // them at the outermost dispatch boundary even if a caller or remote
+        // flag attempts to enable them.
+        #[cfg(feature = "runtime-production")]
         if matches!(
             call,
             RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim { .. })
-                | RuntimeCall::EterraTCG(
-                    pallet_eterra_tcg::Call::set_price { .. }
-                        | pallet_eterra_tcg::Call::buy_card { .. }
-                        | pallet_eterra_tcg::Call::buy_card_capacity { .. }
-                )
                 | RuntimeCall::EterraEconomy(
-                    pallet_eterra_economy::Call::consume_credit { .. }
-                        | pallet_eterra_economy::Call::fulfill_product { .. }
-                        | pallet_eterra_economy::Call::claim_arcade_credit { .. }
-                        | pallet_eterra_economy::Call::transfer_tickets { .. }
-                        | pallet_eterra_economy::Call::redeem_prize_with_tickets { .. }
-                        | pallet_eterra_economy::Call::purchase_prize_with_native { .. }
+                    pallet_eterra_economy::Call::claim_arcade_credit { .. }
                 )
                 | RuntimeCall::EterraArcadeCore(
                     pallet_eterra_arcade_core::Call::start_run { .. }
@@ -831,6 +824,26 @@ impl Contains<RuntimeCall> for EterraRuntimeCallFilter {
                 | RuntimeCall::EterraArcadeNovaRail(
                     pallet_eterra_arcade_nova_rail::Call::pay_continue { .. }
                 )
+                | RuntimeCall::EterraDailySlots(pallet_eterra_daily_slots::Call::roll { .. })
+        ) {
+            return false;
+        }
+
+        // Paid, transferable, prize-redemption, and marketplace surfaces stay
+        // disabled in both training and production runtimes.
+        if matches!(
+            call,
+            RuntimeCall::EterraTCG(
+                pallet_eterra_tcg::Call::set_price { .. }
+                    | pallet_eterra_tcg::Call::buy_card { .. }
+                    | pallet_eterra_tcg::Call::buy_card_capacity { .. }
+            ) | RuntimeCall::EterraEconomy(
+                pallet_eterra_economy::Call::consume_credit { .. }
+                    | pallet_eterra_economy::Call::fulfill_product { .. }
+                    | pallet_eterra_economy::Call::transfer_tickets { .. }
+                    | pallet_eterra_economy::Call::redeem_prize_with_tickets { .. }
+                    | pallet_eterra_economy::Call::purchase_prize_with_native { .. }
+            )
         ) {
             return false;
         }
@@ -857,15 +870,6 @@ impl Contains<RuntimeCall> for EterraRuntimeCallFilter {
                 pallet_eterra_game_authority::Call::create_game_with_round_id { .. }
                     | pallet_eterra_game_authority::Call::record_eliminations_with_event_id { .. }
             )
-        ) {
-            return false;
-        }
-
-        // DailySlots remains legacy presentation code; its public positive-EV
-        // native faucet is disabled for the economically valueless alpha.
-        if matches!(
-            call,
-            RuntimeCall::EterraDailySlots(pallet_eterra_daily_slots::Call::roll { .. })
         ) {
             return false;
         }

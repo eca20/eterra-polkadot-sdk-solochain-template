@@ -683,12 +683,15 @@ fn unsafe_legacy_economy_and_raw_tcg_nft_mutations_are_hard_disabled() {
             &revoke_allowance
         ));
         assert!(!configs::EterraRuntimeCallFilter::contains(&legacy_reward));
+        #[cfg(not(feature = "runtime-production"))]
+        assert!(configs::EterraRuntimeCallFilter::contains(&lottery));
+        #[cfg(feature = "runtime-production")]
         assert!(!configs::EterraRuntimeCallFilter::contains(&lottery));
     });
 }
 
 #[test]
-fn paid_public_flow_and_zero_deposit_nft_surfaces_are_hard_disabled() {
+fn training_calls_are_admitted_only_outside_production_while_paid_surfaces_stay_filtered() {
     new_test_ext_with_faucet(&AccountId::from([1; 32]), 1u128 << 60).execute_with(|| {
         let account = AccountId::from([2; 32]);
         let faucet = RuntimeCall::EterraFaucet(pallet_eterra_faucet::Call::claim {
@@ -747,15 +750,23 @@ fn paid_public_flow_and_zero_deposit_nft_surfaces_are_hard_disabled() {
 
         for call in [
             faucet,
-            list,
-            buy,
-            buy_capacity,
             economy_faucet,
-            economy_consume,
-            legacy_ticket_prize,
             direct_core_start,
             core_continue,
             wrapper_continue,
+        ] {
+            #[cfg(not(feature = "runtime-production"))]
+            assert!(configs::EterraRuntimeCallFilter::contains(&call));
+            #[cfg(feature = "runtime-production")]
+            assert!(!configs::EterraRuntimeCallFilter::contains(&call));
+        }
+
+        for call in [
+            list,
+            buy,
+            buy_capacity,
+            economy_consume,
+            legacy_ticket_prize,
             flow_create,
             media_create,
             legacy_matchmaking,

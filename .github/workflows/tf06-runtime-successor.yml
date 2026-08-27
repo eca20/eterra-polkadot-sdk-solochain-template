@@ -1,0 +1,68 @@
+name: TF-06 training runtime successor
+
+on:
+  push:
+    branches:
+      - autonomy/nexus-v2-tf06-chain-20260827
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tf06-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qualify-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/free-disk-space
+
+      - uses: ./.github/actions/ubuntu-dependencies
+
+      - name: Verify isolated successor source
+        run: |
+          test "$(git rev-parse HEAD^)" = "0f6c4d2d251af88fb9019fd61860fa8941de6451"
+          test "$(git diff --name-only HEAD^ HEAD | sort)" = ".github/workflows/tf06-runtime-successor.yml
+          runtime/src/configs/mod.rs
+          runtime/src/lib.rs
+          runtime/src/tests.rs"
+          test "$(grep -c 'spec_version: 107' runtime/src/lib.rs)" = 1
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test training filter and runtime
+        env:
+          SKIP_WASM_BUILD: "1"
+        run: cargo test --locked --package solochain-eterra-runtime --lib
+
+      - name: Test production filter remains closed
+        env:
+          SKIP_WASM_BUILD: "1"
+        run: >-
+          cargo test --locked --package solochain-eterra-runtime --lib
+          --features runtime-production
+          training_calls_are_admitted_only_outside_production_while_paid_surfaces_stay_filtered
+
+      - name: Build release node and compact runtime
+        run: cargo build --locked --release --package solochain-eterra-node
+
+      - name: Hash successor artifacts
+        run: |
+          mkdir -p tf06-artifacts
+          cp target/release/solochain-eterra-node tf06-artifacts/
+          cp target/release/wbuild/solochain-eterra-runtime/solochain_eterra_runtime.compact.compressed.wasm tf06-artifacts/
+          sha256sum tf06-artifacts/solochain-eterra-node tf06-artifacts/solochain_eterra_runtime.compact.compressed.wasm > tf06-artifacts/SHA256SUMS
+          git rev-parse HEAD > tf06-artifacts/SOURCE_COMMIT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tf06-training-runtime-spec-107-${{ github.sha }}
+          path: tf06-artifacts/
+          if-no-files-found: error
+          retention-days: 7
