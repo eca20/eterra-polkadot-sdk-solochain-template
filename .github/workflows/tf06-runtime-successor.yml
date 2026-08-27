@@ -26,6 +26,12 @@ jobs:
 
       - uses: ./.github/actions/ubuntu-dependencies
 
+      - name: Install release-build protobuf compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends protobuf-compiler
+          protoc --version
+
       - name: Verify isolated successor source
         run: |
           baseline=0f6c4d2d251af88fb9019fd61860fa8941de6451
