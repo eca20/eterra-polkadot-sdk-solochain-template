@@ -865,9 +865,6 @@ pub mod pallet {
                         || (record.score == best.score && record.run_id < best.run_id)
                 })
                 .unwrap_or(true);
-            if !should_update {
-                return Ok(());
-            }
 
             let entry = LeaderboardEntry::<T> {
                 player: record.player.clone(),
@@ -876,22 +873,24 @@ pub mod pallet {
                 submitted_at: record.submitted_at,
                 progress_label: record.progress_label.clone(),
             };
-            PlayerBest::<T>::insert(
-                (
-                    record.game_id,
-                    record.ruleset_version,
-                    record.continues_used,
-                    record.player.clone(),
-                ),
-                &entry,
-            );
-            Self::deposit_event(Event::PlayerBestUpdated {
-                game_id: record.game_id,
-                ruleset_version: record.ruleset_version,
-                paid_continues_used: record.continues_used,
-                player: record.player.clone(),
-                score: record.score,
-            });
+            if should_update {
+                PlayerBest::<T>::insert(
+                    (
+                        record.game_id,
+                        record.ruleset_version,
+                        record.continues_used,
+                        record.player.clone(),
+                    ),
+                    &entry,
+                );
+                Self::deposit_event(Event::PlayerBestUpdated {
+                    game_id: record.game_id,
+                    ruleset_version: record.ruleset_version,
+                    paid_continues_used: record.continues_used,
+                    player: record.player.clone(),
+                    score: record.score,
+                });
+            }
 
             Leaderboards::<T>::try_mutate(
                 (
@@ -901,7 +900,7 @@ pub mod pallet {
                 ),
                 |entries| -> DispatchResult {
                     let mut raw: Vec<LeaderboardEntry<T>> = entries.clone().into_inner();
-                    raw.retain(|existing| existing.player != record.player);
+                    raw.retain(|existing| existing.run_id != record.run_id);
                     raw.push(entry.clone());
                     raw.sort_by(|a, b| b.score.cmp(&a.score).then(a.run_id.cmp(&b.run_id)));
                     raw.truncate(config.leaderboard_size as usize);
@@ -1533,6 +1532,48 @@ mod tests {
             assert_eq!(board[0].player, 11);
             assert_eq!(board[1].player, 13);
             assert_eq!(board[2].player, 12);
+        });
+    }
+
+    #[test]
+    fn ranked_results_keep_multiple_high_score_runs_from_same_player() {
+        new_test_ext().execute_with(|| {
+            configure_game(1001);
+            authorize(9, 1001, 1);
+            grant_credit(42, 4);
+
+            for (index, score) in [500, 900, 700, 600].into_iter().enumerate() {
+                let run_number = index + 1;
+                let run_id = ArcadeCore::start_run_for_game(
+                    &42,
+                    1001,
+                    1,
+                    client_run_id(&format!("client-{run_number}")),
+                    H256::repeat_byte(run_number as u8),
+                )
+                .expect("run starts");
+                assert_ok!(ArcadeCore::submit_result_for_authority(
+                    &9,
+                    ranked_result(run_id, 1001, &format!("result-{run_number}"), score,)
+                ));
+            }
+
+            let board = Leaderboards::<Test>::get((1001, 1, 0));
+            assert_eq!(board.len(), 3);
+            assert_eq!(
+                board.iter().map(|entry| entry.player).collect::<Vec<_>>(),
+                vec![42, 42, 42]
+            );
+            assert_eq!(
+                board.iter().map(|entry| entry.score).collect::<Vec<_>>(),
+                vec![900, 700, 600]
+            );
+            assert_eq!(
+                PlayerBest::<Test>::get((1001, 1, 0, 42))
+                    .expect("personal best remains available")
+                    .score,
+                900
+            );
         });
     }
 
